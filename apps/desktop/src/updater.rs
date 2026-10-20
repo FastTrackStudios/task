@@ -61,7 +61,10 @@ mod imp {
 
     /// The running bundle's `CFBundleShortVersionString`.
     pub fn current_version() -> Option<String> {
-        plist_value(&bundle()?.join("Contents/Info.plist"), "CFBundleShortVersionString")
+        plist_value(
+            &bundle()?.join("Contents/Info.plist"),
+            "CFBundleShortVersionString",
+        )
     }
 
     /// `1.2.3` as numbers; anything unparsable is lowest.
@@ -85,7 +88,13 @@ mod imp {
 
     fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
         let out = Command::new("/usr/bin/curl")
-            .args(["-fsSL", "--max-time", "600", "-H", "User-Agent: task-desktop-updater"])
+            .args([
+                "-fsSL",
+                "--max-time",
+                "600",
+                "-H",
+                "User-Agent: task-desktop-updater",
+            ])
             .args(args)
             .output()
             .map_err(|e| format!("curl: {e}"))?;
@@ -239,7 +248,10 @@ mod imp {
         let got = sha256(&zip)?;
         if !got.eq_ignore_ascii_case(manifest.sha256.trim()) {
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(format!("the download's sha256 is {got}, not {}", manifest.sha256));
+            return Err(format!(
+                "the download's sha256 is {got}, not {}",
+                manifest.sha256
+            ));
         }
         let unpack = Command::new("/usr/bin/ditto")
             .args(["-x", "-k"])
@@ -330,13 +342,15 @@ mod imp {
             tracing::info!("updater: not running from an app bundle — off");
             return;
         }
-        std::thread::spawn(|| loop {
-            match check() {
-                Ok(Some(v)) => tracing::info!(version = %v, "updater: update ready"),
-                Ok(None) => tracing::debug!("updater: up to date"),
-                Err(e) => tracing::warn!(%e, "updater: check failed"),
+        std::thread::spawn(|| {
+            loop {
+                match check() {
+                    Ok(Some(v)) => tracing::info!(version = %v, "updater: update ready"),
+                    Ok(None) => tracing::debug!("updater: up to date"),
+                    Err(e) => tracing::warn!(%e, "updater: check failed"),
+                }
+                std::thread::sleep(EVERY);
             }
-            std::thread::sleep(EVERY);
         });
     }
 

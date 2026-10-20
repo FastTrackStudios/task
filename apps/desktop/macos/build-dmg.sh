@@ -109,6 +109,18 @@ echo "=== building the sync agent ==="
 "
 cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
 
+# ── The CLI, inside the app ─────────────────────────────────────────────────
+# `task` ships with the app and is linked onto PATH at launch
+# (apps/desktop/src/cli_link.rs), so it updates with the app and talks to
+# the app's own node as the person signed in to it.
+echo "=== building the task CLI ==="
+"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
+    set -euo pipefail
+    cd '$ROOT'
+    cargo build --release -p task-cli --bin task
+"
+cp "$ROOT/target/release/task" "$APP/Contents/MacOS/task"
+
 # ── The cloud folder ────────────────────────────────────────────────────────
 # The File Provider extension is what makes a synced root show up in Finder
 # with everything listed and only some of it held — Linux gets the same
@@ -128,7 +140,8 @@ if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
     REAL_XCODE="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p)"
     env -u SDKROOT -u NIX_APPLE_SDK_VERSION DEVELOPER_DIR="$REAL_XCODE" \
         PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH" \
-        TEAM_ID="${TEAM_ID:-}" SIGN_ID="$SIGN_ID" \
+        TEAM_ID="${TEAM_ID:-$(sed -n 's/.*(\([A-Z0-9]*\))$/\1/p' <<<"$SIGN_ID")}" SIGN_ID="$SIGN_ID" \
+        OUT_DIR="$ROOT/target/fileprovider" \
         bash "$SCRIPT_DIR/build-fileprovider.sh"
     mkdir -p "$APP/Contents/PlugIns"
     rm -rf "$APP/Contents/PlugIns/TaskFileProvider.appex"
@@ -189,6 +202,9 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
 # not through the app, so it is verified on its own terms.
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
     --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/fts-files-daemon"
+# The CLI too: a program of its own, run from a shell.
+codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
+    --sign "$SIGN_ID" "$APP/Contents/MacOS/task"
 # The extension carries its own entitlements, not the app's: it must be
 # sandboxed (the system will not load one that is not) where the app must not
 # be, since an App-Sandboxed app cannot register the agent as a LaunchAgent.

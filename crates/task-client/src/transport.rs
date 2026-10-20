@@ -142,6 +142,13 @@ pub fn authority(u: &str) -> &str {
 /// this function is the reason it had to.
 #[must_use]
 pub fn session_bearer_for(url: &str) -> Option<String> {
+    // The desktop app's own node: the desktop's sign-in, so one sign-in
+    // serves both (`crate::desktop`).
+    if crate::desktop::is_node_url(url) {
+        if let Some((_, token)) = crate::desktop::active_signin() {
+            return Some(token);
+        }
+    }
     let session = session::load().ok().flatten()?;
     // Authority only: a session saved as `https://host` must sign a dial
     // to `wss://host/org/x/vox` — same server, different scheme — or the

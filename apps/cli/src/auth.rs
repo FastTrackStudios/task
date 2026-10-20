@@ -747,6 +747,14 @@ pub(crate) async fn run_auth(cmd: AuthCmd, org_override: Option<&str>) -> eyre::
             let (slug, base) = resolve_auth_target(org_override).await?;
             let bundle = device_sign_in(&base).await?;
             let email = bundle.user.email.clone().unwrap_or_default();
+            // The desktop app's own node: the sign-in is the desktop's
+            // too (one for both), and no CLI session pins its loopback
+            // port, which changes every launch.
+            if task_client::desktop::is_node_url(&base) {
+                task_client::desktop::save_signin(&email, &bundle.token)?;
+                println!("Signed in as {email} — the Task app and the CLI share this sign-in");
+                return Ok(());
+            }
             let mut sess = crate::session_store::load()?
                 .unwrap_or_else(crate::session_store::CliSession::empty);
             let key = sess.record_login(

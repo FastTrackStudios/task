@@ -43,7 +43,8 @@ fn agent_binary() -> Option<PathBuf> {
     candidate.exists().then_some(candidate)
 }
 
-/// Install the sync agent if it is not already installed.
+/// Install the sync agent if it is not already installed, and reinstall
+/// it (keeping its settings) when this bundle carries a different build.
 ///
 /// Returns what happened, for the log line. Never panics and never
 /// blocks the UI thread's start-up path — the caller spawns it.
@@ -57,9 +58,15 @@ pub fn ensure_installed() -> String {
 
     // Ask the agent, not the filesystem: where the unit belongs is its
     // decision, and duplicating that here is how the two drift.
+    let stamp = build_stamp(&agent);
     match Command::new(&agent).arg("service-status").output() {
         Ok(out) if String::from_utf8_lossy(&out.stdout).starts_with("installed") => {
-            return "sync agent: already installed".into();
+            // Installed — but by this build? After an update the unit
+            // still runs the agent the old bundle started; re-running
+            // `install` keeps its settings and restarts it on this one.
+            if stamp.is_none() || read_stamp() == stamp {
+                return "sync agent: already installed".into();
+            }
         }
         Ok(_) => {}
         Err(e) => return format!("sync agent: could not ask {} ({e})", agent.display()),
@@ -77,12 +84,58 @@ pub fn ensure_installed() -> String {
         }
     }
     match install.output() {
-        Ok(out) if out.status.success() => "sync agent: installed and started".into(),
+        Ok(out) if out.status.success() => {
+            if let Some(stamp) = &stamp {
+                write_stamp(stamp);
+            }
+            "sync agent: installed and started on this build".into()
+        }
         Ok(out) => format!(
             "sync agent: install failed — {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ),
         Err(e) => format!("sync agent: could not run the installer ({e})"),
+    }
+}
+
+/// Which build of the agent this bundle carries: its size and mtime,
+/// which every build (and so every update) changes.
+fn build_stamp(agent: &std::path::Path) -> Option<String> {
+    let meta = std::fs::metadata(agent).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(format!("{} {mtime}", meta.len()))
+}
+
+fn stamp_file() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(target_vendor = "apple") {
+                home.join("Library/Application Support")
+            } else {
+                home.join(".local/share")
+            }
+        });
+    Some(base.join("task").join("agent-build"))
+}
+
+fn read_stamp() -> Option<String> {
+    std::fs::read_to_string(stamp_file()?)
+        .ok()
+        .map(|s| s.trim().to_owned())
+}
+
+fn write_stamp(stamp: &str) {
+    if let Some(file) = stamp_file() {
+        let _ = file.parent().map(std::fs::create_dir_all);
+        let _ = std::fs::write(file, stamp);
     }
 }
 

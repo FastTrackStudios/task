@@ -72,6 +72,10 @@ pub const OWNER_FILE: &str = "local-owner.json";
 /// The node's own session-signing secret, beside `orgs/` (0600).
 pub const SECRET_FILE: &str = "auth-secret";
 
+/// Where a node serving on loopback says its `ws://` base, beside `orgs/`
+/// (owner-only) — what the `task` CLI dials ([`LocalNode::serve_loopback`]).
+pub const LOCAL_ENDPOINT_FILE: &str = "local-endpoint";
+
 /// Present while a first run provisions, removed once [`OWNER_FILE`] is
 /// written: found on a later boot, it says the first run was cut short.
 pub const PROVISIONING_FILE: &str = ".provisioning";
@@ -279,6 +283,52 @@ impl LocalNode {
             .org(slug)
             .manifest()
             .map_err(|e| eyre::eyre!("read `{slug}` manifest: {e}"))
+    }
+
+    /// Serve this node on loopback — the same HTTP + vox surface a hosted
+    /// server has (`crate::router`), bound to `127.0.0.1` on a free port —
+    /// and say where in `<root>/local-endpoint` (owner-only). This is how
+    /// the `task` CLI reaches the desktop's own node instead of opening
+    /// its data root a second time (two `AppState`s over one root race).
+    /// Every call is gated by its bearer exactly as on a hosted server, so
+    /// the port is no back door: a process with no token is anonymous.
+    ///
+    /// Returns the `ws://` base. The listener runs for the life of the
+    /// process; a stale file left by a killed process names a port
+    /// nothing answers, which a client reads as "the app is not running".
+    pub async fn serve_loopback(&self) -> eyre::Result<String> {
+        self.serve_loopback_inner().await
+    }
+
+    /// Serve this node at `bind` until the listener fails — what a node
+    /// that is a server (`task-server peer`) answers its clients and
+    /// bots on. Same surface, same gate, as [`Self::serve_loopback`].
+    pub async fn serve_at(&self, bind: std::net::SocketAddr) -> eyre::Result<()> {
+        let listener = tokio::net::TcpListener::bind(bind)
+            .await
+            .wrap_err_with(|| format!("bind the node at {bind}"))?;
+        info!(%bind, "node: serving");
+        axum::serve(listener, crate::router(self.state.clone()))
+            .await
+            .wrap_err("the node's listener stopped")
+    }
+
+    async fn serve_loopback_inner(&self) -> eyre::Result<String> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .wrap_err("bind the node on loopback")?;
+        let addr = listener.local_addr().wrap_err("loopback address")?;
+        let base = format!("ws://{addr}");
+        let app = crate::router(self.state.clone());
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                warn!(%e, "node: the loopback endpoint stopped");
+            }
+        });
+        let file = self.state.data_root.path().join(LOCAL_ENDPOINT_FILE);
+        write_private(&file, format!("{base}\n").as_bytes())?;
+        info!(%base, "node: serving on loopback for the CLI");
+        Ok(base)
     }
 
     /// Let the account `user_id` (a FastTrackStudio account's subject, as

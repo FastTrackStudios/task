@@ -134,7 +134,7 @@ fn menu() -> DioxusTrayMenu {
     // on its own, which would read as "stop syncing".
     let _ = tray.append(&MenuItem::with_id(
         MenuId::new(item::QUIT),
-        "Close window (sync keeps running)",
+        "Quit Task (sync keeps running)",
         true,
         None,
     ));
@@ -174,9 +174,11 @@ pub fn use_tray() {
             item::SHOW => {
                 let window = dioxus::desktop::window();
                 window.set_visible(true);
+                crate::menu_bar::dock_icon(true);
                 window.set_focus();
             }
-            item::QUIT => dioxus::desktop::window().close(),
+            // The app, not the agent: the agent is a service and keeps syncing.
+            item::QUIT => std::process::exit(0),
             // Off the event loop: a check downloads the update.
             item::UPDATE => {
                 std::thread::spawn(update_now);
@@ -203,6 +205,7 @@ async fn act(id: String) {
     match id.as_str() {
         item::SIGN_IN => {
             tracing::info!("tray: {}", crate::sync_service::sign_agent_in().await);
+            crate::finder::sync_domain_soon();
             return;
         }
         item::SIGN_OUT => {
@@ -255,6 +258,9 @@ async fn act(id: String) {
         other => Err(format!("no such menu item: {other}")),
     };
 
+    if matches!(id.as_str(), item::BY_ORG | item::FLAT | item::UNMOUNT) {
+        crate::finder::sync_domain_soon();
+    }
     match outcome {
         Ok(said) => tracing::info!("tray: {said}"),
         Err(e) => tracing::warn!("tray: {e}"),

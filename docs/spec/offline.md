@@ -280,6 +280,33 @@ example studio is never offered.
 
 ---
 
+### A server is one more device
+
+t[offline.server-peer]
+A personal server is a node like the apps hold, bound to a public address
+and always on. `task-server peer sign-in` signs it in as the person's
+FastTrackStudio account with a code approved on a phone (a server has no
+browser), and keeps that session owner-only in its data root; `task-server
+peer` then serves the node and runs the account pass (`offline.account`)
+every five minutes, so it joins the account's shared org from a device that
+holds it, admits every other device and is admitted by them. It accepts the
+account's sessions on every org it holds, and its bots' keys (`mcp.bots`).
+
+---
+
+### The CLI works on the desktop's node
+
+t[offline.cli]
+While the desktop app runs, its node also serves on loopback and says where
+in its data root (`local-endpoint`, owner-only). With no server named and no
+CLI session of its own, the `task` CLI dials that node and presents the
+desktop's sign-in, so both read and write one copy of the data as one person.
+A sign-in made from the CLI against that node is saved to the desktop's token
+store, not a separate one. The app links the CLI it carries onto `PATH`
+(`~/.local/bin/task`) unless something else already sits there.
+
+---
+
 ### Access is checked per document
 
 t[offline.doc.access]
@@ -331,6 +358,8 @@ app never claims a change synced that has not.
 | `offline.local` | e2e (`apps/server/tests/it/local_node_e2e.rs`): a fresh node on a temp root with no listener provisions its person, who signs in and drives task create/update, inbox capture + process, the Suggested pick and the activity feed; a reboot keeps both. `a_watch_reaches_the_phones_node_through_the_phone` — the watch API answered in-process (the phone's relay), an unsigned call refused. Unit: `task_ui_core::node` routing table (local vs remote, unreachable fallback only for a held org) |
 | `offline.peers` | e2e: two embedded nodes with no host converge a note edited on both, then a third (the host) catches up from either. Today: `peer_docs_e2e` — two device nodes, no host, dialling each other over iroh: a note written on one arrives on the other as a file, a task made on the other shows in the first's task list, and a note edited on both while apart converges to one text holding both edits on both (the `DocPeer` lane + `doc_peer::pull_peer` in the device sweep); `local_node_e2e` — the join handshake; `vault-doc` unit — the same file seeds the same document on every node. Not yet: the third-node catch-up, per-person access (a peer is an org device, trusted with the org's documents) |
 | `offline.account` | e2e (`apps/server/tests/it/account_devices_e2e.rs`): an in-process issuer (architect's `DeviceService`) and two device nodes with one account — the phone's personal org becomes the account's, the laptop joins it under its own slug and keeps its own, each admits the other, a note on the phone reaches the laptop and a task on the laptop reaches the phone. Issuer side: architect `auth-native-tests::devices_tests` (scoping, first offer wins, a device id held by another account refused, input checked). Unit: `account_devices` (device id per install and account). Not yet: forgetting a device here, the access token's refresh before a pass |
+| `offline.cli` | e2e (`apps/server/tests/it/desktop_cli_e2e.rs`): a node served on loopback with its person's sign-in in the desktop token store; an unconfigured `TaskClient` finds it, writes a task as that person and both sides list it. Not yet: the `PATH` link, a CLI sign-in landing in the desktop store |
+| `offline.server-peer` | Unit: `peer_cli` (the issuer's vox lane, the account kept owner-only). The pass itself is `offline.account`'s e2e. Not yet: an e2e of `task-server peer` against an in-process issuer, the session's refresh |
 | `offline.doc.access` | e2e: a document for a path the person can't write is refused and kept local. Today: `offline_doc_e2e::refused_documents_stay_on_the_device` (foreign lineage, unadmitted path); the per-person write refusal itself is `wiki_edits` (`open_collab` refused for a non-Editor) |
 | `offline.outbox` | unit tests over a fake transport; e2e: timer started offline lands on reconnect |
 | `offline.boot`, `offline.visible` | iOS simulator check with the demo server stopped (manual until a UI harness exists) |

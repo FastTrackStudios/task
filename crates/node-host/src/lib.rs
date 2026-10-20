@@ -166,6 +166,14 @@ impl Host {
                     ms = started.elapsed().as_millis() as u64,
                     "node: up"
                 );
+                // On a computer, the `task` CLI reaches this node over
+                // loopback (and the desktop's sign-in) rather than opening
+                // the data root a second time. A phone has no CLI.
+                if !cfg!(target_os = "ios") {
+                    if let Err(e) = node.serve_loopback().await {
+                        tracing::warn!(%e, "node: no loopback endpoint — the CLI cannot reach this node");
+                    }
+                }
                 Ok::<_, String>(Arc::new(node))
             })
             .await

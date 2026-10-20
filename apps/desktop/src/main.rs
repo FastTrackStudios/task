@@ -3,7 +3,10 @@ use dioxus::desktop::{Config, tao};
 use dioxus::prelude::*;
 use ui::App;
 
+mod cli_link;
+mod finder;
 mod mac_auth;
+mod menu_bar;
 mod sync_service;
 mod tray;
 mod updater;
@@ -38,11 +41,20 @@ fn main() {
     }
     // Then look for the next one, in the background (GitHub Releases).
     updater::start();
+    // `task` on PATH, from this bundle, so the CLI updates with the app.
+    cli_link::link();
 
     // The sync agent is a separate process precisely so it outlives this
     // window; the app's part is making sure it exists. Off the main
     // thread — it runs a subprocess, and nothing on screen waits for it.
-    std::thread::spawn(|| tracing::info!("{}", sync_service::ensure_installed()));
+    // Then Finder's "Task", which asks the agent what it holds — and
+    // which, after an update, is this bundle's extension.
+    std::thread::spawn(|| {
+        tracing::info!("{}", sync_service::ensure_installed());
+        tracing::info!("{}", finder::sync_domain());
+    });
+    // Started at login, in the menu bar (`menu_bar`).
+    menu_bar::ensure_login_item();
 
     // Register the apps this build ships. The list itself lives in
     // `task-plugins`, so desktop, web and mobile cannot drift into
@@ -101,7 +113,15 @@ fn main() {
     if fullscreen {
         window = window.with_fullscreen(Some(tao::window::Fullscreen::Borderless(None)));
     }
-    let cfg = Config::new().with_window(window).with_menu(None);
+    // A login launch stays in the menu bar until "Open Task".
+    let background = menu_bar::background_launch();
+    if background {
+        window = window.with_visible(false);
+    }
+    let cfg = Config::new()
+        .with_window(window)
+        .with_menu(None)
+        .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides);
     LaunchBuilder::desktop().with_cfg(cfg).launch(Root);
 }
 
@@ -148,6 +168,26 @@ fn Root() -> Element {
     // Task in the taskbar, for the hours the window is closed and the
     // agent is still working.
     tray::use_tray();
+    // No Dock icon for a login launch, whose window starts hidden.
+    use_hook(|| {
+        if menu_bar::background_launch() {
+            menu_bar::dock_icon(false);
+        }
+    });
+    // Opening Task again (Finder, Spotlight, the Dock) while its window
+    // is hidden brings the window back, as it would for any Mac app.
+    dioxus::desktop::use_wry_event_handler(|event, _| {
+        if let tao::event::Event::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            let window = dioxus::desktop::window();
+            window.set_visible(true);
+            menu_bar::dock_icon(true);
+            window.set_focus();
+        }
+    });
 
     // Sign the sync agent in as whoever this app is signed in as, once
     // the app is up. With no session yet this says so and does nothing;
@@ -156,6 +196,8 @@ fn Root() -> Element {
         spawn(async {
             let said = sync_service::sign_agent_in().await;
             tracing::info!("{said}");
+            // Signed in, the agent holds the account's orgs: show them.
+            finder::sync_domain_soon();
         });
     });
 
@@ -163,7 +205,11 @@ fn Root() -> Element {
         drag: Callback::new(|()| dioxus::desktop::window().drag()),
         toggle_maximize: Callback::new(|()| dioxus::desktop::window().toggle_maximized()),
         minimize: Callback::new(|()| dioxus::desktop::window().set_minimized(true)),
-        close: Callback::new(|()| dioxus::desktop::window().close()),
+        // Closing hides: Task stays in the menu bar (`menu_bar`).
+        close: Callback::new(|()| {
+            dioxus::desktop::window().set_visible(false);
+            menu_bar::dock_icon(false);
+        }),
     });
     rsx! {
         document::Stylesheet { href: TAILWIND_CSS }
