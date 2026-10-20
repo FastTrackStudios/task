@@ -70,12 +70,27 @@ async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
     panic!("timed out waiting for: {what}");
 }
 
-fn device(name: &str, platform: &str) -> ThisDevice {
+fn device(name: &str, platform: &str, account: uuid::Uuid) -> ThisDevice {
     ThisDevice {
         device_id: uuid::Uuid::new_v4(),
         name: name.into(),
         platform: platform.into(),
+        account,
     }
+}
+
+/// The role `account` holds in `slug` on `node` (its home org's
+/// memberships store — the fence a FastTrackStudio account passes).
+async fn role_on(node: &LocalNode, account: uuid::Uuid, slug: &str) -> Option<String> {
+    let home = node.state().data_root.org(PERSONAL_SLUG);
+    let store = task_server::memberships::Memberships::open(&home.memberships_db())
+        .await
+        .expect("memberships");
+    store
+        .role_for(account, slug)
+        .await
+        .expect("role")
+        .and_then(|m| m.role)
 }
 
 // t[verify offline.account] — two devices of one account, introduced by
@@ -106,7 +121,7 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
     let local = LocalServer::serve(router, Scope::new());
     let accounts: AuthServiceClient = local.establish().await.expect("issuer auth client");
     let devices: DeviceServiceClient = local.establish().await.expect("issuer device client");
-    let token = accounts
+    let signed_up = accounts
         .sign_up_email_password(SignUpEmailPassword {
             email: "cody@example.com".into(),
             password: "correct horse battery staple".into(),
@@ -118,8 +133,8 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
             user_agent: Some("account-devices-e2e".into()),
         })
         .await
-        .expect("an account")
-        .token;
+        .expect("an account");
+    let (token, account) = (signed_up.token, signed_up.user.id);
 
     // ── two devices, each its own node with its own personal org ──
     let (phone_root, mac_root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -130,8 +145,8 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
         .await
         .expect("mac");
     let (phone_me, mac_me) = (
-        device("Cody's iPhone", "ios"),
-        device("Studio Mac", "macos"),
+        device("Cody's iPhone", "ios", account),
+        device("Studio Mac", "macos", account),
     );
 
     // The phone signs in first: its personal org becomes the account's.
@@ -165,6 +180,12 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
         .expect("phone again");
     assert!(!p2.joined);
     assert_eq!(p2.admitted, vec![mac.endpoint_id(&mac_slug).unwrap()]);
+    // The signed-in account is let in where it should be: on the phone,
+    // its org (the shared one); on the laptop, the shared org and the
+    // laptop's own — so its FTS sign-in sees them, not an empty list.
+    assert_eq!(role_on(&phone, account, PERSONAL_SLUG).await.as_deref(), Some("admin"));
+    assert_eq!(role_on(&mac, account, &mac_slug).await.as_deref(), Some("admin"));
+    assert_eq!(role_on(&mac, account, PERSONAL_SLUG).await.as_deref(), Some("admin"));
     // And a pass is idempotent.
     let m2 = sync_account(&mac, &devices, &token, &mac_me)
         .await

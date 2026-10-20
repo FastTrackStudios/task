@@ -121,11 +121,15 @@ cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon
 # nothing in Finder. Worth having as a knob, not as a default.
 if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
     echo "=== building the file provider extension ==="
-    "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
-        set -euo pipefail
-        TEAM_ID='${TEAM_ID:-}' SIGN_ID='$SIGN_ID' \
-            bash '$SCRIPT_DIR/build-fileprovider.sh'
-    "
+    # Swift wants Xcode's own SDK: the nix shell's apple-sdk is built for an
+    # older Swift and the compiler refuses it ("this SDK is not supported
+    # by the compiler"). So this step runs outside the shell's SDK env, on
+    # the real Xcode — the same fix deploy-testflight.sh carries.
+    REAL_XCODE="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p)"
+    env -u SDKROOT -u NIX_APPLE_SDK_VERSION DEVELOPER_DIR="$REAL_XCODE" \
+        PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH" \
+        TEAM_ID="${TEAM_ID:-}" SIGN_ID="$SIGN_ID" \
+        bash "$SCRIPT_DIR/build-fileprovider.sh"
     mkdir -p "$APP/Contents/PlugIns"
     rm -rf "$APP/Contents/PlugIns/TaskFileProvider.appex"
     cp -R "$ROOT/target/fileprovider/TaskFileProvider.appex" \

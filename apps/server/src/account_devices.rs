@@ -69,6 +69,10 @@ pub struct ThisDevice {
     pub device_id: Uuid,
     pub name: String,
     pub platform: String,
+    /// The account (the issuer's subject) signed in here — let into this
+    /// device's own personal org and the shared one, since a device
+    /// signed in as somebody is that person's device.
+    pub account: Uuid,
 }
 
 /// What a pass did.
@@ -138,6 +142,13 @@ pub async fn sync_account(
         .register_device(token.to_owned(), register(None, offer(node)))
         .await
         .map_err(|e| eyre::eyre!("register with the issuer: {e:?}"))?;
+    // This device's own personal org is the signed-in person's, whatever
+    // the account shares (never the demo: its owner is not `personal`).
+    if node.owner().org == PERSONAL_SLUG {
+        node.admit_account(me.account, &[PERSONAL_SLUG.to_owned()], "admin")
+            .await
+            .wrap_err("let the account into this device's org")?;
+    }
     let Some(org) = first.account_org.clone() else {
         // Nothing to share yet: this node offered nothing (an example
         // studio) and no other device has.
@@ -197,7 +208,12 @@ pub async fn sync_account(
             .map_err(|e| eyre::eyre!("tell the issuer this device's endpoint: {e:?}"))?
     };
 
-    // 4. Let the others in.
+    // 4. The signed-in account is let into the shared org here.
+    node.admit_account(me.account, std::slice::from_ref(&slug), "admin")
+        .await
+        .wrap_err("let the account into its orgs here")?;
+
+    // 5. Let the others in.
     let others = others(&dir.devices, me.device_id);
     let mut admitted = Vec::new();
     for peer in others.iter().filter_map(|d| d.endpoint_id.as_deref()) {

@@ -22,6 +22,11 @@ use task_ui_core::node::AccountReport;
 #[derive(Clone, Copy)]
 pub struct AccountDevices(pub Signal<Option<AccountReport>>);
 
+/// Bumped when a pass changes what this device holds or lets the account
+/// into — the org list re-discovers on it (`app.rs`).
+#[derive(Clone, Copy)]
+pub struct OrgsEpoch(pub Signal<u32>);
+
 /// How often a signed-in device refreshes its place in the address book
 /// and learns of new devices.
 #[cfg(not(target_arch = "wasm32"))]
@@ -91,6 +96,7 @@ pub fn platform() -> &'static str {
 pub fn use_account_devices() {
     let report = use_context_provider(|| AccountDevices(Signal::new(None)));
     let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
+    let epoch = try_use_context::<OrgsEpoch>();
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut report = report.0;
@@ -113,6 +119,11 @@ pub fn use_account_devices() {
                                 others = r.others.len(),
                                 "account: device address book refreshed"
                             );
+                            if report.peek().as_ref() != Some(&r) {
+                                if let Some(OrgsEpoch(mut e)) = epoch {
+                                    e += 1;
+                                }
+                            }
                             report.set(Some(r));
                         }
                         Err(e) => tracing::warn!(%e, "account: device address book not reached"),
@@ -128,7 +139,7 @@ pub fn use_account_devices() {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (report, account);
+        let _ = (report, account, epoch);
     }
 }
 

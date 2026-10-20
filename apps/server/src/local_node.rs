@@ -281,6 +281,34 @@ impl LocalNode {
             .map_err(|e| eyre::eyre!("read `{slug}` manifest: {e}"))
     }
 
+    /// Let the account `user_id` (a FastTrackStudio account's subject, as
+    /// the issuer resolves its token) into `slugs` with `role`: rows in the
+    /// home org's memberships store, the fence a central principal passes
+    /// (`central_auth`). A device signed in with that account is that
+    /// person's device, so its own orgs are theirs. Idempotent.
+    pub async fn admit_account(
+        &self,
+        user_id: Uuid,
+        slugs: &[String],
+        role: &str,
+    ) -> eyre::Result<()> {
+        let data_root = &self.state.data_root;
+        let home = data_root
+            .scan_orgs()
+            .map_err(|e| eyre::eyre!("scan orgs: {e}"))?
+            .into_iter()
+            .find(|(_, m)| m.is_home)
+            .map(|(r, _)| r)
+            .ok_or_else(|| eyre::eyre!("this node has no home org"))?;
+        let store = crate::memberships::Memberships::open(&home.memberships_db()).await?;
+        for slug in slugs {
+            if self.hosts(slug) {
+                store.upsert(user_id, slug, Some(role)).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Admit `peer` to `slug` now: written to `admitted-devices` (so it
     /// survives a restart) and applied, rather than waiting for the next
     /// sweep. Idempotent.

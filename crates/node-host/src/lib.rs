@@ -83,6 +83,20 @@ pub fn options_from_env() -> Option<Options> {
 /// Install the node behind the UI's seam. Call once from `main`, before
 /// launch. Nothing boots until something asks.
 pub fn install(opts: Options) {
+    // The device's node trusts FastTrackStudio's issuer, so a person
+    // signed in with their FTS account is recognised by their own node
+    // (`task_server::central_auth`: the token is introspected; the
+    // memberships account sync grants are the fence). Set before the node
+    // boots, which reads it once; an explicit setting wins.
+    if std::env::var_os(task_server::central_auth::CENTRAL_AUTH_URL).is_none() {
+        // SAFETY: at install, from `main`, before any thread reads the env.
+        unsafe {
+            std::env::set_var(
+                task_server::central_auth::CENTRAL_AUTH_URL,
+                task_ui_core::central_auth::DEFAULT_ISSUER,
+            );
+        }
+    }
     tracing::info!(root = %opts.data_root.display(), "node: installed (boots on first use)");
     task_ui_core::node::install(Arc::new(Host::new(opts)));
 }
@@ -242,6 +256,10 @@ impl NodeHost for Host {
             let install = install_id(&data_root).map_err(|e| format!("install id: {e:#}"))?;
             let me = ThisDevice {
                 device_id: device_id(install, &request.account),
+                account: request
+                    .account
+                    .parse()
+                    .map_err(|_| format!("the account id is not a uuid: {}", request.account))?,
                 name: request.device_name,
                 platform: request.platform,
             };

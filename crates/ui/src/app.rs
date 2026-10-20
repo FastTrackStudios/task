@@ -125,9 +125,14 @@ pub fn App() -> Element {
     // Re-discover orgs whenever the active server OR the session changes
     // (reading both inside the resource closure registers them as
     // dependencies).
+    // Bumped by the account's device sync when it lets the signed-in
+    // account into orgs on this device's node (`account_devices`).
+    let orgs_epoch =
+        use_context_provider(|| crate::account_devices::OrgsEpoch(Signal::new(0)));
     let orgs_res = use_resource(move || {
         let _active = server_registry.active_id();
         let _session = session_token();
+        let _epoch = (orgs_epoch.0)();
         async move { fetch_orgs().await }
     });
     // Pull the identity locker's per-org tokens once the session
