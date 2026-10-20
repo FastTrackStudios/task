@@ -54,6 +54,25 @@ card branch ──squash──▶ dev ──(release PR, merge commit)──▶ 
    Do not push again after recording the evidence. If you must, re-run
    `just ci` and record the new head.
 
+### A branch cut before `dev` existed (from main or capture-process)
+
+`dev` was created from main `b0750f0` on 2026-10-20, and `capture-process` was
+deleted. Its content reached main as a squash, so its history is not an ancestor
+of dev. A card branch cut from either base must be rebased so that only its own
+commits move:
+
+```bash
+git fetch origin
+git log --oneline origin/dev..HEAD           # more commits than yours? then:
+git rebase --onto origin/dev <old-base>       # <old-base>: the last commit that is NOT yours
+git range-diff <old-base>..@{1} origin/dev..HEAD  # the same patches, nothing else
+just ci                                      # re-run on the rebased tree; record the new head
+gh pr edit <N> --base dev                    # if the PR still targets main
+```
+
+Never force-push, not even your own branch. Push the rebased tree as
+a new branch (`<branch>-dev`), open the PR into dev from it, and close the old PR.
+
 ## For the reviewer: merging a card into dev
 
 Merge only when **all** hold; otherwise request changes naming the missing one:
