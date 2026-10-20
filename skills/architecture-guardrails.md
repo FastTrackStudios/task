@@ -1,13 +1,13 @@
 ---
 name: architecture-guardrails
-description: Check a design, spec, ticket, or diff against Task's two hard goals before building it — every node is a full peer (servers are just always-on peers), and storage is one pooled system across disks, NAS boxes and S3. Use before writing a spec or ADR, before implementing any feature that touches sync, sharing, review, auth, Files or storage, and when reviewing a PR.
+description: Check a design, spec, ticket, or diff against Task's hard goals before building it — every node is a full peer (servers are just always-on peers), storage is one pooled system across disks, NAS boxes and S3, and Task is the synced backend for Session, Signal and Keyflow. Use before writing a spec or ADR, before implementing any feature that touches sync, sharing, review, auth, Files or storage, and when reviewing a PR.
 runs_as: any agent working in this repo
 trigger: on-demand (design, implementation, review)
 ---
 
 # Architecture guardrails
 
-Task has two non-negotiable goals. The full statement is
+Task has three non-negotiable goals. The full statement is
 [`docs/adr/0006-pure-peer-to-peer-and-agnostic-storage.md`](../docs/adr/0006-pure-peer-to-peer-and-agnostic-storage.md).
 Read it once. This skill is the working checklist.
 
@@ -18,6 +18,10 @@ Read it once. This skill is the working checklist.
 2. **Agnostic storage.** Local disks, external SSDs, any number of NAS
    boxes, and S3-compatible buckets are one cohesive store. Code above the
    storage-agent protocol never knows or cares which one holds the bytes.
+3. **Task is the apps' backend.** Session, Signal, Keyflow (and Ignition)
+   keep their work in Task and sync through it. They dial the nearest
+   node (the local desktop node first), never one hard-coded host. How to
+   wire an app: `docs/app-integration.md`.
 
 ## Before you design or build
 
@@ -32,7 +36,8 @@ redesign, or stop and ask the Captain for an explicit, written exception.
 | 4 | Does code branch on storage backend type (disk / NAS / S3) above the storage-agent protocol? | Branch on declared `CapabilityClass` and `LocationHealth` instead. |
 | 5 | Does a host name, mount path, or location id end up in a path, link, ContentRef, or manifest? | Resolve path → content → location at read time (`files.scale.capacity`). |
 | 6 | Does it assume one location or one machine holds everything? | Use placement policy plus selective sync. Hold a complete copy only where durability asks for it. |
-| 7 | Does an offline or unplugged location surface as an error or block writes elsewhere? | Treat it as `ExpectedOffline` health and degrade only the affected bytes. |
+| 7 | Does an app (Session, Signal, Keyflow, Ignition) need a specific public host, or break when only the local node or another peer is reachable? | Resolve a node, local first, then the account's other nodes, then a public host. Keep data in Task (manifest in resources/vault, bytes in a File Root; `docs/app-integration.md`), never in an app-private store. |
+| 8 | Does an offline or unplugged location surface as an error or block writes elsewhere? | Treat it as `ExpectedOffline` health and degrade only the affected bytes. |
 
 ## Proving it
 

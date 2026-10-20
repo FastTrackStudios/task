@@ -89,6 +89,29 @@ adds its own special path.
   missing location degrades availability of the bytes placed only there;
   it never corrupts state and never blocks writes elsewhere.
 
+### 3. Task is the apps' backend, and any node can serve them
+
+Session, Signal and Keyflow (and Ignition) keep their work in Task, as
+ADR 0003 (decision 4) and ADR 0005 already say. Each app is a client of
+Task, not a store of its own: manifests and documents go in the
+resources lane or the vault, and bytes go in File Roots (see
+`docs/app-integration.md`). This ADR adds one more rule: **an app talks
+to a node, not to "the server."**
+
+- **Local node first.** On a machine with a Task node (the desktop app's
+  in-process node, `offline.local` / `offline.cli`), an app dials that
+  node. It falls back to another of the account's nodes, and only then to
+  a public host. An app works offline exactly as far as the local node
+  does, and its edits sync through the same peer mesh as everything else.
+- **No hard-coded host.** A fixed URL such as
+  `wss://task.fasttrackstudio.app` is only a default for discovery. It is
+  never required for the app to work.
+- **Same permits everywhere.** An app's OIDC client and its scopes are
+  checked by whichever node it reaches, through the same permit table.
+- **The DAW working copy is a node concern.** The Files daemon or node on
+  the machine puts session files and their media on local disk (selective
+  sync). The app never streams a session from a remote host to open it.
+
 ## Rules for every change (the guardrail checklist)
 
 A change conflicts with this ADR, and must be redesigned or explicitly
@@ -106,6 +129,9 @@ excepted by the Captain, if any answer is "yes":
    identifier (path, link, ContentRef, manifest)?
 6. Does it assume one location holds everything, or that capacity is
    bounded by one machine?
+7. Does an app (Session, Signal, Keyflow, Ignition) need a specific
+   public host, or fail when only the local node or another peer is
+   reachable?
 
 Every such feature also gets an integration scenario that proves parity:
 the same behavior with the always-on host **absent** (two device nodes
@@ -133,6 +159,9 @@ ticket or an explicit, recorded exception:
 - `offline.doc.access` says the *server* checks access per document on
   every sync. Under this ADR, every node checks. The wording and tests
   should match.
+- `docs/app-integration.md` step 4 tells apps to dial
+  `wss://task.fasttrackstudio.app/org/<slug>/vox` directly. Under this ADR
+  the app resolves a node (local first) and dials that instead.
 - Some features may still exist only on the host (for example, public
   share or review serving, the transcoder, and webhooks). These need an
   inventory before they can be counted as parity gaps.
