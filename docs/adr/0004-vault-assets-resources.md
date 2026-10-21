@@ -7,6 +7,7 @@ Date: 2026-09-10
 Accepted. Supersedes parts of
 [ADR 0003](0003-task-as-the-shared-backend.md) — decisions 2 and 3, and
 the storage half of decision 4. The rest of 0003 stands.
+Amended 2026-10-21: cross-org reach for Assets (see the end).
 
 ## Context
 
@@ -248,3 +249,70 @@ the direction a store drifts when its first consumers are all in the
 same building. The rule that falls out — *the primitive does not name
 its consumers* — is the useful part, and it is cheap to check against
 any future addition.
+
+## Amendment — 2026-10-21: cross-org reach for Assets is closed
+
+The Consequences above say cross-organisation reach "has to be
+re-established for Assets", and that until it is, a cross-org asset
+library is a regression against what 0003 shipped. That path now exists.
+Another org's song library is subscribed to, kept, and referenced on the
+same terms as a wiki:
+
+- **Subscribe.** `SourceKind::Assets` names one shelf, `<org>/assets/<kind>/`,
+  by its kind (`acme.test/songs`). Over MCP, `subscribe_wiki` takes
+  `kind: "assets"` (`docs/mcp-tools.md`). `resource: true` stays an alias
+  for `kind: "resource"`. Tests: `apps/server/src/mcp.rs` —
+  `subscribe_kind_defaults_to_wiki`, `subscribe_kind_takes_every_advertised_name`,
+  `the_resource_flag_is_an_alias_for_the_resource_kind`,
+  `the_resource_flag_contradicting_kind_is_refused`,
+  `an_unknown_kind_is_refused_naming_the_valid_ones`,
+  `the_qualified_id_shape_follows_the_kind`; and the MCP lane end to end in
+  `apps/server/tests/it/mcp_wiki_e2e.rs`.
+- **Admission.** A shelf is private to its org unless it is unlisted or
+  public, or the owner granted the subscribing org. A refusal reads the same
+  whether or not the shelf exists. Tests:
+  `features/wiki/wiki-live/src/subscriptions_backend.rs` —
+  `a_private_shelf_or_project_is_refused_to_an_outsider_without_saying_it_exists`,
+  `an_unlisted_shelf_is_admitted_by_reference_and_listed_only_when_public`,
+  `a_grant_admits_on_the_same_disk_and_a_revoke_binds_on_the_next_refresh`,
+  `a_grant_secret_admits_on_the_remote_path_and_a_read_secret_alone_does_not`.
+- **Keep.** A refresh materialises the shelf into
+  `subscribed/<domain>/<kind>/`, and the copy outlives a revoked grant
+  (the same `a_grant_admits_on_the_same_disk…` test).
+- **Reference.** A reference carries no kind, so the held subscription
+  supplies one. `[[acme.test/songs::hallelujah]]` resolves to the song on
+  the shelf for an org holding `acme.test/songs` as `assets`, and to a wiki
+  named `songs` when nothing of that name is held, which is what a reference
+  meant before shelves. Admission still decides: a held subscription whose
+  grant was revoked resolves nowhere, and it does not fall back to the wiki.
+  Tests, same file:
+  `a_held_asset_subscription_resolves_a_reference_to_the_shelf_page`,
+  `with_nothing_held_a_reference_defaults_to_the_wiki`,
+  `the_held_kind_picks_between_a_wiki_and_a_shelf_of_one_name`,
+  `a_declined_asset_subscription_does_not_steer_resolution`,
+  `a_revoked_grant_stops_resolution_into_the_shelf`.
+
+Three edges are still open, and this amendment names them so they are not
+mistaken for closed:
+
+1. **One subscriber cannot hold a wiki and a shelf of the same name from
+   one domain.** Subscription identity is `domain/slug` without the kind,
+   and both kinds would materialise into the same `subscribed/<domain>/<slug>/`
+   directory. The second subscription is refused as a duplicate, so nothing
+   is overwritten, but the pair cannot be held. Test:
+   `a_wiki_and_a_shelf_of_one_name_collide_in_one_subscriber`. Fixing it
+   means identity that includes the kind, plus a copy-directory migration.
+2. **`ResolvedReference` does not say which tier it resolved into.** A
+   client following the answer gets `org`, `wiki` (the source slug) and
+   `path`, and has to know from elsewhere that `songs` is a shelf before it
+   can open it. Adding the kind to the answer is a wire change to the
+   `wiki/subscriptions` service.
+3. **`resolve_reference` reads the publisher's tree only when it is on the
+   same data root.** For a source on another server it answers `None`, even
+   when it is held, because it does not read the subscriber's copy in
+   `subscribed/<domain>/<slug>/`. The `song:` node resolver
+   (`node_homes::LocalHomes`, ADR 0003) already answers from that copy. A
+   `::` reference across servers needs the same fallback.
+
+The link form for another org's songs, in notes, setlists and the gig recipe
+(`docs/app-integration.md`), is `[[<domain>/songs::<slug>]]`.

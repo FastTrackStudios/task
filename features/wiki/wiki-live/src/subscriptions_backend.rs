@@ -660,6 +660,39 @@ impl SubscriptionsBackend {
         }
     }
 
+    /// The kind this org holds `domain/slug` as, for resolving a
+    /// reference that names it — [`SourceKind::Wiki`] when nothing is
+    /// held under that name.
+    ///
+    /// A reference carries no kind (`[[acme.test/songs::Title]]`), so the
+    /// subscription is what supplies one. `resolve_reference` is asked
+    /// for the org as a whole rather than for one subscriber, so every
+    /// subscriber's *active* holdings are consulted: the vault's first,
+    /// because the vault is where a reader's own writing lives, then each
+    /// wiki, shelf and project in key order, so the answer is the same on
+    /// every call. A declined subscription is not held and does not
+    /// count.
+    ///
+    /// The store keys a subscription by `domain/slug` alone, so one
+    /// subscriber cannot hold the same name as two kinds; two
+    /// subscribers can, and the order above is then what decides.
+    fn held_kind(&self, domain: &str, slug: &str) -> Result<SourceKind, WikiError> {
+        let mut subscribers = self.store.subscribers().map_err(store_err)?;
+        subscribers.sort_by_key(|s| (*s != Subscriber::Vault, s.key()));
+        for subscriber in &subscribers {
+            if let Some(held) = self
+                .store
+                .active(subscriber)
+                .map_err(store_err)?
+                .into_iter()
+                .find(|s| s.domain == domain && s.slug == slug)
+            {
+                return Ok(held.kind);
+            }
+        }
+        Ok(SourceKind::Wiki)
+    }
+
     /// Ask the source whether it admits this org; `Unknown` passes.
     fn admitted(&self, subscription: &Subscription) -> Result<(), WikiError> {
         match self.upstream.admits(&self.org_slug, subscription) {
@@ -1100,10 +1133,17 @@ impl Subscriptions for SubscriptionsBackend {
         let Some(org) = self.upstream.org_of(&domain) else {
             return Ok(None);
         };
+        // t[impl wiki.ref.format] — `[[acme.test/songs::Hallelujah]]`
+        // names a *source*, and the source's tier is whatever this org
+        // subscribed to under that name: a held asset subscription makes
+        // `songs` the song shelf, and nothing held leaves it a wiki,
+        // which is what every reference written before shelves existed
+        // meant.
+        let kind = self.held_kind(&domain, &slug)?;
         let subscription = Subscription {
             domain,
             slug: slug.clone(),
-            kind: SourceKind::Wiki,
+            kind,
             title: String::new(),
             core: false,
             declined: false,
@@ -1619,5 +1659,218 @@ mod tests {
         let secret = acme.grant_source_read(SourceKind::Assets, "songs").unwrap();
         acme.source_manifest(SourceKind::Assets, "songs", &secret)
             .unwrap();
+    }
+
+    // ── B2: a reference resolves into the kind its source is held as ──
+
+    /// `shelves()` plus a public *wiki* also named `songs`, holding a
+    /// page of the same name — so a resolution that lands in the wrong
+    /// tier lands on a real page and the test can tell which one.
+    fn songs_twice() -> (tempfile::TempDir, Arc<LocalOrgs>) {
+        let (dir, upstream) = shelves();
+        let wiki = dir.path().join("orgs/acme/wikis/songs");
+        std::fs::create_dir_all(wiki.join("Wiki")).unwrap();
+        std::fs::write(wiki.join("Wiki/Hallelujah.md"), "# Hallelujah, the essay\n").unwrap();
+        let mut c = WikiConfig::implicit("songs");
+        c.visibility = Visibility::Public;
+        crate::config::save(&wiki, &c).unwrap();
+        (dir, upstream)
+    }
+
+    fn alice_of(dir: &tempfile::TempDir, upstream: Arc<LocalOrgs>) -> SubscriptionsBackend {
+        SubscriptionsBackend::new(dir.path().join("orgs/alice"), vec![], upstream)
+    }
+
+    /// Make acme's song shelf unlisted, so whoever names it is admitted.
+    fn open_songs(dir: &tempfile::TempDir) {
+        crate::source_access::set_visibility(
+            &dir.path().join("orgs/acme/assets/songs"),
+            Visibility::Unlisted,
+        )
+        .unwrap();
+    }
+
+    fn resolved_path(backend: &SubscriptionsBackend, reference: &str) -> Option<String> {
+        backend
+            .resolve_reference(reference)
+            .unwrap_or_else(|e| panic!("resolve {reference}: {e}"))
+            .map(|r| r.path)
+    }
+
+    /// t[verify wiki.ref.format] — B2: holding an assets subscription to
+    /// `acme.test/songs` makes `[[acme.test/songs::Title]]` the song on
+    /// the shelf, whatever stamp, anchor or display text rides along.
+    #[test]
+    fn a_held_asset_subscription_resolves_a_reference_to_the_shelf_page() {
+        let (dir, upstream) = shelves();
+        open_songs(&dir);
+        let alice = alice_of(&dir, upstream);
+        alice.subscribe(Subscriber::Vault, shelf("songs")).unwrap();
+        for reference in [
+            "[[acme.test/songs::Hallelujah]]",
+            "acme.test/songs::hallelujah",
+            "[[acme.test/songs::Hallelujah@2026-10-01#^chorus|the song]]",
+        ] {
+            let hit = alice
+                .resolve_reference(reference)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{reference} must resolve to the shelf"));
+            assert_eq!(hit.org, "acme");
+            assert_eq!(hit.wiki, "songs");
+            assert_eq!(hit.path, "hallelujah.md", "{reference}");
+        }
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::No Such Song]]"),
+            None
+        );
+    }
+
+    /// B2: with nothing held under the name a reference still means a
+    /// wiki, as it did before shelves — so a song shelf nobody
+    /// subscribed to stays unresolved, and a wiki named like a shelf
+    /// still resolves to the wiki.
+    #[test]
+    fn with_nothing_held_a_reference_defaults_to_the_wiki() {
+        let (dir, upstream) = shelves();
+        open_songs(&dir);
+        let alice = alice_of(&dir, upstream);
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]"),
+            None,
+            "no wiki `songs`, and no assets subscription to make it the shelf"
+        );
+
+        let (dir, upstream) = songs_twice();
+        open_songs(&dir);
+        let alice = alice_of(&dir, upstream);
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]").as_deref(),
+            Some("Wiki/Hallelujah.md"),
+            "the public wiki `songs` resolves without a subscription"
+        );
+        // A held *wiki* subscription is the same answer, not a new one.
+        alice.subscribe(Subscriber::Vault, sub("songs")).unwrap();
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]").as_deref(),
+            Some("Wiki/Hallelujah.md")
+        );
+    }
+
+    /// B2: a wiki and a shelf may share a name across tiers on the
+    /// publisher, and the subscription is what picks between them — the
+    /// same reference text lands on the shelf for a reader holding the
+    /// shelf, whether the vault or one of the org's wikis holds it.
+    #[test]
+    fn the_held_kind_picks_between_a_wiki_and_a_shelf_of_one_name() {
+        let (dir, upstream) = songs_twice();
+        open_songs(&dir);
+        let alice = alice_of(&dir, upstream.clone());
+        alice.subscribe(Subscriber::Vault, shelf("songs")).unwrap();
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]").as_deref(),
+            Some("hallelujah.md"),
+            "the shelf page, not the essay"
+        );
+
+        // Held by a wiki of alice's rather than her vault: still held.
+        let alice_root = dir.path().join("orgs/alice");
+        std::fs::remove_dir_all(&alice_root).unwrap();
+        std::fs::create_dir_all(alice_root.join("wikis")).unwrap();
+        let alice = alice_of(&dir, upstream);
+        alice
+            .subscribe(Subscriber::Wiki("setlists".into()), shelf("songs"))
+            .unwrap();
+        assert_eq!(
+            resolved_path(&alice, "acme.test/songs::Hallelujah").as_deref(),
+            Some("hallelujah.md")
+        );
+    }
+
+    /// B2: a declined subscription is not held, so it does not make a
+    /// reference into its kind.
+    #[test]
+    fn a_declined_asset_subscription_does_not_steer_resolution() {
+        let (dir, upstream) = songs_twice();
+        open_songs(&dir);
+        let alice = alice_of(&dir, upstream);
+        alice
+            .store
+            .subscribe(
+                &Subscriber::Vault,
+                Subscription {
+                    core: true,
+                    declined: true,
+                    ..shelf("songs")
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]").as_deref(),
+            Some("Wiki/Hallelujah.md")
+        );
+    }
+
+    /// t[verify wiki.access.shelf-visibility] — B2: the kind only says
+    /// *which* tree; admission still decides whether. A held asset
+    /// subscription whose grant is revoked resolves nowhere: it does not
+    /// fall back to the same-named wiki, and it does not read the
+    /// private shelf. An org that wrote the subscription into its own
+    /// store without ever being granted resolves nothing either.
+    #[test]
+    fn a_revoked_grant_stops_resolution_into_the_shelf() {
+        let (dir, upstream) = songs_twice();
+        let grants = crate::source_access::AccessGrants::open(&dir.path().join("orgs/acme"));
+        let minted = grants
+            .grant(SourceKind::Assets, "songs", "alice", "owner", 1)
+            .unwrap();
+        let alice = alice_of(&dir, upstream.clone());
+        alice.subscribe(Subscriber::Vault, shelf("songs")).unwrap();
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]").as_deref(),
+            Some("hallelujah.md")
+        );
+        grants.revoke(minted.grant.id, "owner", 2).unwrap();
+        assert_eq!(
+            resolved_path(&alice, "[[acme.test/songs::Hallelujah]]"),
+            None
+        );
+
+        let mallory_root = dir.path().join("orgs/mallory");
+        std::fs::create_dir_all(&mallory_root).unwrap();
+        let mallory = SubscriptionsBackend::new(mallory_root, vec![], upstream);
+        mallory
+            .store
+            .subscribe(&Subscriber::Vault, shelf("songs"))
+            .unwrap();
+        assert_eq!(
+            resolved_path(&mallory, "[[acme.test/songs::Hallelujah]]"),
+            None
+        );
+    }
+
+    /// B3 probe, not B3: one subscriber cannot hold a wiki and a shelf of
+    /// the same `domain/slug`, because the store and the local copy are
+    /// both keyed by `domain/slug` without the kind
+    /// (`Subscription::qualified`, `materialize::local_copy_dir`). The
+    /// second subscription is refused as a duplicate rather than
+    /// silently sharing the first one's copy directory. B3 (identity
+    /// including kind, plus the copy-dir migration) changes this
+    /// assertion on purpose.
+    #[test]
+    fn a_wiki_and_a_shelf_of_one_name_collide_in_one_subscriber() {
+        let (dir, upstream) = songs_twice();
+        open_songs(&dir);
+        let alice = alice_of(&dir, upstream);
+        alice.subscribe(Subscriber::Vault, sub("songs")).unwrap();
+        let err = alice
+            .subscribe(Subscriber::Vault, shelf("songs"))
+            .expect_err("same domain/slug, other kind");
+        assert!(err.to_string().contains("already subscribed"), "{err}");
+        let alice_root = dir.path().join("orgs/alice");
+        assert_eq!(
+            materialize::local_copy_dir(&alice_root, "acme.test", "songs"),
+            materialize::assets_copy_dir(&alice_root, "acme.test", "songs"),
+            "the two kinds would also share one copy directory"
+        );
     }
 }

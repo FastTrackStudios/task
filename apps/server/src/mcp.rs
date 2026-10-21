@@ -1609,16 +1609,30 @@ fn wiki_tool_catalog() -> Vec<ToolDef> {
             name: "subscribe_wiki",
             plugin: "wiki",
             description: "Subscribe the org's vault (or one of its wikis) to a source by its \
-                          qualified id `domain/slug`, e.g. 'fasttrackstudio.app/bible'. Only \
-                          public or referenced-unlisted sources admit outsiders; a private \
-                          one is refused. Subscribing twice is an error — check \
+                          qualified id `domain/slug`, e.g. 'fasttrackstudio.app/bible'. \
+                          `kind` says which tier the source is on: a wiki (default), a \
+                          read-only resource such as scripture, an asset shelf such as \
+                          another org's song library ('acme.test/songs', kind 'assets'), \
+                          or a project (its slug may be a path, 'acme.test/album/track-two'). \
+                          Once held, `[[domain/slug::Page]]` references resolve into that \
+                          kind. Public and referenced-unlisted sources admit outsiders; \
+                          shelves and projects are private unless the owner granted this \
+                          org, and a private source is refused. Subscribing twice is an error — check \
                           list_wiki_subscriptions first.",
             schema: || {
                 obj(
                     json!({
                         "qualified_id": s_("`domain/slug` of the source."),
-                        "resource": b_("Subscribe as a read-only resource rather than an \
-                                        editable wiki copy (default false)."),
+                        "kind": {
+                            "type": "string",
+                            "enum": SUBSCRIBE_KINDS,
+                            "description": "The source's tier: `wiki` (default), \
+                                            `resource`, `assets` (an asset shelf, its slug \
+                                            is the shelf kind such as `songs`) or \
+                                            `projects`.",
+                        },
+                        "resource": b_("Legacy alias for `kind: \"resource\"` (default \
+                                        false). Prefer `kind`."),
                         "wiki": s_("Optional wiki slug: subscribe that wiki instead of the \
                                     org vault."),
                     }),
@@ -4741,6 +4755,93 @@ const WIKI_TOOLS: &[&str] = &[
     "subscribe_wiki",
 ];
 
+/// The values `subscribe_wiki`'s `kind` takes, in the wire spelling
+/// `SourceKind` serializes to.
+#[cfg(feature = "plugin-wiki")]
+const SUBSCRIBE_KINDS: [&str; 4] = ["wiki", "resource", "assets", "projects"];
+
+/// The wire name of a kind — what `subscribe_wiki` takes and answers.
+#[cfg(feature = "plugin-wiki")]
+const fn subscribe_kind_name(kind: wiki_proto::SourceKind) -> &'static str {
+    match kind {
+        wiki_proto::SourceKind::Wiki => "wiki",
+        wiki_proto::SourceKind::Resource => "resource",
+        wiki_proto::SourceKind::Assets => "assets",
+        wiki_proto::SourceKind::Projects => "projects",
+    }
+}
+
+/// `subscribe_wiki`'s source kind: `kind` when given, `wiki` when not.
+///
+/// The older `resource: true` flag stays as an alias for
+/// `kind: "resource"`, so a client written against the boolean keeps
+/// working. Both at once must agree: `resource: true` beside
+/// `kind: "assets"` is a caller that meant two different things, and
+/// picking either would subscribe to something it did not ask for.
+#[cfg(feature = "plugin-wiki")]
+fn subscribe_kind(args: &Value) -> Result<wiki_proto::SourceKind, ToolFailure> {
+    use wiki_proto::SourceKind;
+    let named = match arg_str(args, "kind") {
+        None => None,
+        Some(k) => Some(match k.to_ascii_lowercase().as_str() {
+            "wiki" => SourceKind::Wiki,
+            "resource" => SourceKind::Resource,
+            "assets" => SourceKind::Assets,
+            "projects" => SourceKind::Projects,
+            _ => {
+                return Err(ToolFailure::Message(format!(
+                    "`kind` must be one of {} (got `{k}`)",
+                    SUBSCRIBE_KINDS.join(", ")
+                )));
+            }
+        }),
+    };
+    match (named, arg_bool(args, "resource")) {
+        (None, false) => Ok(SourceKind::Wiki),
+        (None, true) | (Some(SourceKind::Resource), true) => Ok(SourceKind::Resource),
+        (Some(kind), false) => Ok(kind),
+        (Some(kind), true) => Err(ToolFailure::Message(format!(
+            "`resource: true` means `kind: \"resource\"`, which contradicts `kind: \"{}\"`; \
+             pass `kind` alone",
+            subscribe_kind_name(kind)
+        ))),
+    }
+}
+
+/// Split `domain/slug` for a source of `kind`.
+///
+/// A project's slug is a tier-relative **path** (`album/track-two`),
+/// because projects nest; every other tier is flat and a slash in its
+/// slug is refused here, before any backend work. The backend confines
+/// each segment again (`LocalOrgs::source_root`) — this is the early,
+/// legible refusal, not the safety.
+#[cfg(feature = "plugin-wiki")]
+fn split_qualified(
+    qualified: &str,
+    kind: wiki_proto::SourceKind,
+) -> Result<(String, String), ToolFailure> {
+    let malformed = || {
+        let shape = if kind == wiki_proto::SourceKind::Projects {
+            "`domain/slug` (a project's slug may be a path, `domain/album/track`)"
+        } else {
+            "`domain/slug`"
+        };
+        ToolFailure::Message(format!(
+            "`qualified_id` must be {shape} (got `{qualified}`)"
+        ))
+    };
+    let (domain, slug) = qualified.split_once('/').ok_or_else(malformed)?;
+    let segments_ok = if kind == wiki_proto::SourceKind::Projects {
+        slug.split('/').all(|s| !s.is_empty())
+    } else {
+        !slug.is_empty() && !slug.contains('/')
+    };
+    if domain.is_empty() || !segments_ok {
+        return Err(malformed());
+    }
+    Ok((domain.to_owned(), slug.to_owned()))
+}
+
 /// The account an MCP call carries, handed to the wiki backend in
 /// place of the gate's task-local (see [`mcp_principal`]).
 #[cfg(feature = "plugin-wiki")]
@@ -5075,25 +5176,12 @@ fn wiki_tool(
 
         "subscribe_wiki" => {
             let qualified = required_str(args, "qualified_id")?;
-            let Some((domain, source_slug)) = qualified.split_once('/') else {
-                return Err(ToolFailure::Message(format!(
-                    "`qualified_id` must be `domain/slug` (got `{qualified}`)"
-                )));
-            };
-            if domain.is_empty() || source_slug.is_empty() || source_slug.contains('/') {
-                return Err(ToolFailure::Message(format!(
-                    "`qualified_id` must be `domain/slug` (got `{qualified}`)"
-                )));
-            }
+            let kind = subscribe_kind(args)?;
+            let (domain, source_slug) = split_qualified(&qualified, kind)?;
             let who = subscriber(args);
-            let kind = if arg_bool(args, "resource") {
-                wiki_proto::SourceKind::Resource
-            } else {
-                wiki_proto::SourceKind::Wiki
-            };
             let subscription = wiki_proto::Subscription {
-                domain: domain.to_owned(),
-                slug: source_slug.to_owned(),
+                domain,
+                slug: source_slug.clone(),
                 kind,
                 title: source_slug.replace('-', " "),
                 core: false,
@@ -5106,6 +5194,7 @@ fn wiki_tool(
             Ok(json!({
                 "subscriber": who.key(),
                 "qualified_id": qualified,
+                "kind": subscribe_kind_name(kind),
                 "subscribed": true,
             }))
         }
@@ -5532,6 +5621,138 @@ mod tests {
         let text = server_instructions("acme", chrono::Local::now());
         assert!(text.contains("list_wikis"));
         assert!(text.contains("read_wiki_page"));
+    }
+
+    /// The message a refused `subscribe_wiki` argument carries.
+    #[cfg(feature = "plugin-wiki")]
+    fn refusal<T>(r: Result<T, ToolFailure>) -> String {
+        match r {
+            Err(ToolFailure::Message(m)) => m,
+            Err(ToolFailure::Unknown) => panic!("expected a refusal, got method-not-found"),
+            Ok(_) => panic!("expected a refusal, got a kind"),
+        }
+    }
+
+    /// B1 (1/6): no `kind` and no `resource` is a wiki, which is what
+    /// every caller written before `kind` existed meant.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn subscribe_kind_defaults_to_wiki() {
+        use wiki_proto::SourceKind;
+        assert_eq!(subscribe_kind(&json!({})).ok(), Some(SourceKind::Wiki));
+        assert_eq!(
+            subscribe_kind(&json!({ "resource": false })).ok(),
+            Some(SourceKind::Wiki)
+        );
+        // A blank kind is an absent one (`arg_str` trims and drops it).
+        assert_eq!(
+            subscribe_kind(&json!({ "kind": "  " })).ok(),
+            Some(SourceKind::Wiki)
+        );
+    }
+
+    /// B1 (2/6): each of the four wire names picks its kind, and the
+    /// name the tool answers with round-trips to the same kind — the
+    /// list the schema advertises is the list the parser accepts.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn subscribe_kind_takes_every_advertised_name() {
+        use wiki_proto::SourceKind;
+        for (name, kind) in [
+            ("wiki", SourceKind::Wiki),
+            ("resource", SourceKind::Resource),
+            ("assets", SourceKind::Assets),
+            ("projects", SourceKind::Projects),
+        ] {
+            assert_eq!(subscribe_kind(&json!({ "kind": name })).ok(), Some(kind));
+            assert_eq!(subscribe_kind_name(kind), name);
+            // And the spelling `SourceKind` itself serializes to.
+            assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
+        }
+        assert_eq!(
+            subscribe_kind(&json!({ "kind": "Assets" })).ok(),
+            Some(SourceKind::Assets),
+            "case is not a different kind"
+        );
+        let schema = wiki_tool_catalog()
+            .into_iter()
+            .find(|t| t.name == "subscribe_wiki")
+            .map(|t| (t.schema)())
+            .expect("subscribe_wiki is in the catalog");
+        assert_eq!(schema["properties"]["kind"]["enum"], json!(SUBSCRIBE_KINDS));
+    }
+
+    /// B1 (3/6): `resource: true` is still `kind: "resource"`, alone or
+    /// beside the same kind spelled out.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn the_resource_flag_is_an_alias_for_the_resource_kind() {
+        use wiki_proto::SourceKind;
+        assert_eq!(
+            subscribe_kind(&json!({ "resource": true })).ok(),
+            Some(SourceKind::Resource)
+        );
+        assert_eq!(
+            subscribe_kind(&json!({ "resource": true, "kind": "resource" })).ok(),
+            Some(SourceKind::Resource)
+        );
+    }
+
+    /// B1 (4/6): `resource: true` beside a different kind is refused
+    /// rather than resolved either way, and the refusal names both.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn the_resource_flag_contradicting_kind_is_refused() {
+        for kind in ["wiki", "assets", "projects"] {
+            let m = refusal(subscribe_kind(&json!({ "resource": true, "kind": kind })));
+            assert!(m.contains("resource") && m.contains(kind), "{m}");
+        }
+    }
+
+    /// B1 (5/6): an unknown kind is refused with the four it could have
+    /// been, so the model can correct itself from the message alone.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn an_unknown_kind_is_refused_naming_the_valid_ones() {
+        for bad in ["shelf", "vault", "song", "asset"] {
+            let m = refusal(subscribe_kind(&json!({ "kind": bad })));
+            assert!(m.contains(bad), "{m}");
+            for valid in SUBSCRIBE_KINDS {
+                assert!(m.contains(valid), "{m} must name `{valid}`");
+            }
+        }
+    }
+
+    /// B1 (6/6): the qualified id follows the kind. Flat tiers take one
+    /// slug segment; a project's slug may be a path; a malformed id is
+    /// refused for every kind before any backend work.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn the_qualified_id_shape_follows_the_kind() {
+        use wiki_proto::SourceKind;
+        assert_eq!(
+            split_qualified("acme.test/songs", SourceKind::Assets).ok(),
+            Some(("acme.test".to_owned(), "songs".to_owned()))
+        );
+        assert_eq!(
+            split_qualified("acme.test/album/track-two", SourceKind::Projects).ok(),
+            Some(("acme.test".to_owned(), "album/track-two".to_owned()))
+        );
+        for flat in [SourceKind::Wiki, SourceKind::Resource, SourceKind::Assets] {
+            let m = refusal(split_qualified("acme.test/songs/extra", flat));
+            assert!(m.contains("domain/slug"), "{m}");
+        }
+        for kind in [
+            SourceKind::Wiki,
+            SourceKind::Resource,
+            SourceKind::Assets,
+            SourceKind::Projects,
+        ] {
+            for bad in ["no-domain", "/songs", "acme.test/", "acme.test/album//x"] {
+                let m = refusal(split_qualified(bad, kind));
+                assert!(m.contains("domain/slug"), "{bad} as {kind:?}: {m}");
+            }
+        }
     }
 
     #[test]

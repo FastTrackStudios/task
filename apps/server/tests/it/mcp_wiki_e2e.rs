@@ -419,4 +419,39 @@ async fn mcp_wiki_tools_end_to_end() {
         bad.as_str().is_some_and(|m| m.contains("domain/slug")),
         "{bad}"
     );
+    // So is a kind that is not one of the four, and the message lists them.
+    let (err, bad) = call_tool(
+        &client,
+        &url,
+        "subscribe_wiki",
+        json!({ "qualified_id": "acme.test/songs", "kind": "shelf" }),
+    )
+    .await;
+    assert!(err, "{bad}");
+    assert!(
+        bad.as_str()
+            .is_some_and(|m| m.contains("assets") && m.contains("projects")),
+        "{bad}"
+    );
+    // A shelf on a domain this server does not know reaches the backend
+    // as an asset subscription and comes back as one.
+    let (err, held) = call_tool(
+        &client,
+        &url,
+        "subscribe_wiki",
+        json!({ "qualified_id": "elsewhere.test/songs", "kind": "assets" }),
+    )
+    .await;
+    assert!(!err, "subscribe_wiki(kind assets) failed: {held}");
+    assert_eq!(held["kind"], "assets");
+    let (err, subs) = call_tool(&client, &url, "list_wiki_subscriptions", json!({})).await;
+    assert!(!err, "{subs}");
+    assert!(
+        subs["subscriptions"]
+            .as_array()
+            .expect("subscriptions")
+            .iter()
+            .any(|s| s["qualified_id"] == "elsewhere.test/songs" && s["kind"] == "asset shelf"),
+        "the held subscription keeps its kind: {subs}"
+    );
 }
