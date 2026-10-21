@@ -32,6 +32,14 @@
 //! entry on the page's frontmatter, and a warning is surfaced.
 //! This mirrors Obsidian's behavior: don't reject the write,
 //! just flag it.
+//!
+//! That is the *read* side — a file someone wrote by hand is never
+//! refused for what it says. A write made through the API (the MCP
+//! `update_properties` / `write_note` tools) goes through
+//! [`PropertySchemaRegistry::validate`] instead, which refuses a value
+//! the schema can't coerce with a [`PropertyViolation`] saying why.
+//! A page's schema is picked by its `kind:` frontmatter
+//! ([`KIND_KEY`]); a page without one answers to [`FALLBACK_KIND`].
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -97,15 +105,18 @@ pub struct EnumOption {
     /// On-disk value — e.g. `"todo"`, `"in_progress"`, `"done"`.
     pub value: String,
     /// Display label — e.g. `"To do"`, `"In progress"`.
+    #[serde(default)]
     pub label: String,
     /// Tailwind / architect-ui color token. None = theme default.
     pub color: Option<String>,
     /// Lucide icon name. Optional.
     pub icon: Option<String>,
     /// Display order (and kanban column order).
+    #[serde(default)]
     pub order: u32,
     /// Semantic flag: drops a `completedDate` write + enables the
     /// auto-archive flow when set.
+    #[serde(default)]
     pub is_completed: bool,
     /// Auto-archive delay in days. `None` = never auto-archive.
     pub auto_archive_delay_days: Option<u32>,
@@ -227,6 +238,14 @@ impl PropertySchemaRegistry {
     #[must_use]
     pub fn kinds(&self) -> Vec<String> {
         self.schemas.keys().cloned().collect()
+    }
+
+    /// The schema exactly as inserted — its own properties and its
+    /// `extends:` link, inheritance *not* folded in. [`Self::get`] is
+    /// the resolved view.
+    #[must_use]
+    pub fn declared(&self, kind: &str) -> Option<&KindSchema> {
+        self.schemas.get(kind)
     }
 
     #[must_use]
@@ -408,6 +427,165 @@ fn looks_like_datetime(s: &str) -> bool {
     s.len() >= 10
         && looks_like_date(&s[..10])
         && (s.len() == 10 || matches!(s.as_bytes().get(10), Some(b'T' | b' ')))
+}
+
+// ── Validation on write ──────────────────────────────────────────────
+
+/// The frontmatter key that names which [`KindSchema`] governs a page.
+pub const KIND_KEY: &str = "kind";
+
+/// The schema a page answers to when it declares no `kind:` (or one
+/// nothing is registered for). Every built-in kind extends it, so its
+/// properties are the ones every page shares.
+pub const FALLBACK_KIND: &str = "node";
+
+/// The `kind:` of a page that *declares* a schema rather than obeying
+/// one. See [`schema_from_frontmatter`].
+pub const SCHEMA_PAGE_KIND: &str = "schema";
+
+/// A value a write was refused for. `Display` is the sentence a person
+/// (or a model) reads: which key, under which kind, and what is wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyViolation {
+    pub key: String,
+    /// The kind whose schema refused it.
+    pub kind: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for PropertyViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}` (kind `{}`): {}", self.key, self.kind, self.reason)
+    }
+}
+
+impl PropertySchemaRegistry {
+    /// The resolved schema that governs a page whose `kind:` is
+    /// `kind`: that kind's schema when one is registered, otherwise
+    /// [`FALLBACK_KIND`]'s. `None` only when neither is registered.
+    #[must_use]
+    pub fn schema_for_page(&self, kind: Option<&str>) -> Option<KindSchema> {
+        kind.and_then(|k| self.get(k))
+            .or_else(|| self.get(FALLBACK_KIND))
+    }
+
+    /// Check one value about to be written to `key` on a page of
+    /// `kind`, and return the value to write — normalized the way
+    /// [`coerce_value`] normalizes it (`"42"` → `42` for a number, a
+    /// datetime truncated for a date, a lone tag wrapped in a list).
+    ///
+    /// Keys the governing schema doesn't declare pass through
+    /// untouched: frontmatter is open, the schema only constrains what
+    /// it names. A declared key whose value can't be coerced — an enum
+    /// value that isn't one of the options, a date that isn't a date —
+    /// is refused, as is any write to a computed property.
+    ///
+    /// # Errors
+    ///
+    /// A [`PropertyViolation`] saying which key, under which kind, and
+    /// what would have been accepted.
+    pub fn validate(
+        &self,
+        kind: Option<&str>,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<serde_json::Value, PropertyViolation> {
+        let Some(schema) = self.schema_for_page(kind) else {
+            return Ok(value);
+        };
+        let canonical = self.renames.resolve(key);
+        let Some(def) = schema
+            .properties
+            .iter()
+            .find(|p| p.key == canonical || p.key == key)
+        else {
+            return Ok(value);
+        };
+        let violation = |reason: String| PropertyViolation {
+            key: key.to_string(),
+            kind: schema.kind.clone(),
+            reason,
+        };
+        if let PropertyType::Computed { .. } = def.ty {
+            return Err(violation(
+                "is computed when the page is read; it can't be written".into(),
+            ));
+        }
+        match coerce_value(&def.ty, value) {
+            CoerceOutcome::Ok(v) => Ok(v),
+            CoerceOutcome::Shadow { original, reason } => {
+                let reason = match &def.ty {
+                    PropertyType::EnumWithMetadata { options } => format!(
+                        "{original} is not one of: {}",
+                        options
+                            .iter()
+                            .map(|o| o.value.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    _ => reason,
+                };
+                Err(violation(reason))
+            }
+        }
+    }
+}
+
+/// Read a schema declared by a page — a page whose frontmatter has
+/// `kind: schema`. The page names the kind it declares with `for:`,
+/// may inherit with `extends:`, and lists its properties in the shape
+/// [`PropertyDef`] serializes in:
+///
+/// ```yaml
+/// kind: schema
+/// for: recipe
+/// extends: node
+/// properties:
+///   - key: servings
+///     ty: { type: number }
+///   - key: course
+///     ty:
+///       type: enum_with_metadata
+///       options: [{ value: main }, { value: side }]
+/// ```
+///
+/// # Errors
+///
+/// A sentence naming what is missing or malformed, so the page's
+/// author can fix it.
+pub fn schema_from_frontmatter(
+    fm: &serde_json::Map<String, serde_json::Value>,
+) -> Result<KindSchema, String> {
+    if fm.get(KIND_KEY).and_then(serde_json::Value::as_str) != Some(SCHEMA_PAGE_KIND) {
+        return Err(format!(
+            "not a schema page (`{KIND_KEY}: {SCHEMA_PAGE_KIND}` missing)"
+        ));
+    }
+    let kind = fm
+        .get("for")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "`for:` must name the kind this schema declares".to_string())?
+        .trim()
+        .to_string();
+    if kind == SCHEMA_PAGE_KIND {
+        return Err(format!("`for: {SCHEMA_PAGE_KIND}` is reserved"));
+    }
+    let extends = match fm.get("extends") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.trim().to_string()),
+        Some(other) => return Err(format!("`extends:` must be a kind name, got {other}")),
+    };
+    let properties: Vec<PropertyDef> = match fm.get("properties") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| format!("`properties:` doesn't parse: {e}"))?,
+    };
+    Ok(KindSchema {
+        kind,
+        extends,
+        properties,
+    })
 }
 
 // ── Built-in schemas ─────────────────────────────────────────────────
@@ -1026,5 +1204,148 @@ mod tests {
         renames.map.insert("status".into(), "task-status".into());
         r.set_renames(renames);
         assert_eq!(r.renames().resolve("status"), "task-status");
+    }
+
+    #[test]
+    fn validate_refuses_an_unknown_enum_value_and_names_the_options() {
+        let r = PropertySchemaRegistry::with_builtins();
+        let err = r
+            .validate(Some("task"), "status", serde_json::json!("nonsense"))
+            .expect_err("not a task status");
+        assert_eq!(err.key, "status");
+        assert_eq!(err.kind, "task");
+        let msg = err.to_string();
+        for option in ["todo", "in_progress", "blocked", "done"] {
+            assert!(msg.contains(option), "{msg}");
+        }
+        assert_eq!(
+            r.validate(Some("task"), "status", serde_json::json!("done")),
+            Ok(serde_json::json!("done"))
+        );
+    }
+
+    #[test]
+    fn validate_normalizes_what_it_accepts() {
+        let r = PropertySchemaRegistry::with_builtins();
+        assert_eq!(
+            r.validate(
+                Some("task"),
+                "due",
+                serde_json::json!("2026-05-14T10:30:00Z")
+            ),
+            Ok(serde_json::json!("2026-05-14"))
+        );
+        assert_eq!(
+            r.validate(Some("task"), "tags", serde_json::json!("solo")),
+            Ok(serde_json::json!(["solo"]))
+        );
+        assert!(
+            r.validate(Some("task"), "due", serde_json::json!("next tuesday"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_passes_keys_the_schema_does_not_declare() {
+        let r = PropertySchemaRegistry::with_builtins();
+        let v = serde_json::json!({ "anything": [1, 2] });
+        assert_eq!(r.validate(Some("task"), "custom", v.clone()), Ok(v));
+    }
+
+    /// No `kind:` (or an unregistered one) means the `node` schema,
+    /// so the epistemic properties are checked on every page.
+    #[test]
+    fn validate_falls_back_to_node_for_pages_without_a_kind() {
+        let r = PropertySchemaRegistry::with_builtins();
+        for kind in [None, Some("no-such-kind")] {
+            let err = r
+                .validate(kind, "visibility", serde_json::json!("everyone"))
+                .expect_err("not a visibility");
+            assert_eq!(err.kind, FALLBACK_KIND);
+        }
+        assert!(
+            r.validate(None, "visibility", serde_json::json!("public"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_refuses_writes_to_computed_properties() {
+        let mut r = PropertySchemaRegistry::with_builtins();
+        r.insert(KindSchema {
+            kind: "metric".into(),
+            extends: None,
+            properties: vec![PropertyDef {
+                key: "total".into(),
+                ty: PropertyType::Computed {
+                    formula: "a + b".into(),
+                },
+                required: false,
+                default: None,
+                display_name: None,
+                icon: None,
+            }],
+        });
+        assert!(
+            r.validate(Some("metric"), "total", serde_json::json!(3))
+                .is_err()
+        );
+    }
+
+    fn fm(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        v.as_object().expect("object").clone()
+    }
+
+    #[test]
+    fn schema_pages_declare_a_kind_that_validates() {
+        let page = fm(serde_json::json!({
+            "kind": "schema",
+            "for": "recipe",
+            "extends": "node",
+            "properties": [
+                { "key": "servings", "ty": { "type": "number" } },
+                { "key": "course", "ty": {
+                    "type": "enum_with_metadata",
+                    "options": [{ "value": "main" }, { "value": "side" }],
+                } },
+            ],
+        }));
+        let schema = schema_from_frontmatter(&page).expect("parses");
+        assert_eq!(schema.kind, "recipe");
+        let mut r = PropertySchemaRegistry::with_builtins();
+        r.insert(schema);
+        assert_eq!(
+            r.validate(Some("recipe"), "servings", serde_json::json!("4")),
+            Ok(serde_json::json!(4.0))
+        );
+        assert!(
+            r.validate(Some("recipe"), "course", serde_json::json!("dessert"))
+                .is_err()
+        );
+        // Inherited from `node`.
+        assert!(
+            r.validate(Some("recipe"), "maturity", serde_json::json!("ancient"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_schema_pages_say_what_is_wrong() {
+        let no_for = fm(serde_json::json!({ "kind": "schema" }));
+        assert!(
+            schema_from_frontmatter(&no_for)
+                .unwrap_err()
+                .contains("for:")
+        );
+        let bad_props = fm(serde_json::json!({
+            "kind": "schema", "for": "x", "properties": [{ "key": "a", "ty": { "type": "nope" } }],
+        }));
+        assert!(
+            schema_from_frontmatter(&bad_props)
+                .unwrap_err()
+                .contains("properties:")
+        );
+        let not_schema = fm(serde_json::json!({ "kind": "task" }));
+        assert!(schema_from_frontmatter(&not_schema).is_err());
     }
 }
