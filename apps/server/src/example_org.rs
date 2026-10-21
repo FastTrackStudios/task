@@ -3117,6 +3117,42 @@ mod declared_tests {
         );
     }
 
+    /// The seed declares an org kind the property tools can show and
+    /// hold writes to: `Schemas/session.md` parses, the seeded session
+    /// note satisfies it, and `Sessions.base` is there to list it.
+    #[test]
+    fn the_seed_declares_a_session_schema_its_notes_satisfy() {
+        use vault::property_schema::{PropertySchemaRegistry, schema_from_frontmatter};
+        let fm = |path: &str| -> serde_json::Map<String, serde_json::Value> {
+            let text = STUDIO
+                .get_file(format!("acme-audio/Vault/{path}"))
+                .and_then(include_dir::File::contents_utf8)
+                .unwrap_or_else(|| panic!("{path} is not committed"));
+            vault::obsidian::obsidian_parse::parse_frontmatter(text)
+                .0
+                .into_iter()
+                .map(|e| (e.key, e.value))
+                .collect()
+        };
+        let schema = schema_from_frontmatter(&fm("Schemas/session.md")).expect("schema parses");
+        assert_eq!(schema.kind, "session");
+        let mut registry = PropertySchemaRegistry::with_builtins();
+        registry.insert(schema);
+        let note = fm("Records/sessions/tracking-day-washed.md");
+        assert_eq!(note["kind"], "session");
+        for (key, value) in note {
+            registry
+                .validate(Some("session"), &key, value)
+                .unwrap_or_else(|v| panic!("the seeded session breaks its schema: {v}"));
+        }
+        assert!(
+            registry
+                .validate(Some("session"), "room", serde_json::json!("c-room"))
+                .is_err()
+        );
+        assert!(STUDIO.get_file("acme-audio/Vault/Sessions.base").is_some());
+    }
+
     // t[verify process.due]
     /// What the plant leaves in Alice's inbox, read back through the
     /// inbox backend the server mounts: captures due for processing

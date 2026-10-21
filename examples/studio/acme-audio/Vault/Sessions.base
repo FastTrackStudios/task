@@ -1,0 +1,7 @@
+filters:
+  and:
+    - 'kind == "session"'
+views:
+  - name: Sessions
+    type: table
+    order: [title, room, engineer, date, booked_hours]

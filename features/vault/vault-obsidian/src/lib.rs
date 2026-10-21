@@ -64,8 +64,8 @@ pub use base_query::{
 
 pub mod mutate;
 pub use mutate::{
-    MutateError, append_to_page, create_page, delete_page, move_page, prepend_to_page,
-    remove_property, set_property,
+    MutateError, append_to_page, create_page, delete_page, edit_frontmatter, move_page,
+    prepend_to_page, remove_property, set_property,
 };
 
 /// "Open an Obsidian vault as a Task vault" translation tool —

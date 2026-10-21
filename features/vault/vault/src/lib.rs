@@ -58,6 +58,10 @@ pub use vault_proto::{
 pub use vault_obsidian::GraphBackend;
 
 // ── Live filesystem implementation ────────────────────────────────
+/// Typed frontmatter schemas: the built-in kinds, schema pages, and
+/// the validation a write goes through.
+#[cfg(feature = "live")]
+pub use vault_live::property_schema;
 /// Sub-module access into the live backend implementation, when
 /// callers need `vault::sync::WatcherHandle` or the like.
 #[cfg(feature = "live")]

@@ -44,6 +44,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
+use vault::property_schema::{
+    FALLBACK_KIND, KIND_KEY, PropertySchemaRegistry, SCHEMA_PAGE_KIND, schema_from_frontmatter,
+};
 
 use crate::AppState;
 
@@ -507,7 +510,9 @@ pub fn tool_catalog() -> Vec<ToolDef> {
         ToolDef {
             name: "read_note",
             plugin: "core",
-            description: "Read one note's markdown by vault-relative path (from search_vault).",
+            description: "Read one note's markdown by vault-relative path (from search_vault). \
+                          Also returns its `revision`, which update_properties takes as \
+                          `expected_revision`.",
             schema: || {
                 obj(
                     json!({ "path": s_("Vault-relative path, e.g. 'Records/notes/standup.md'.") }),
@@ -563,6 +568,53 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "content": s_("The note's full markdown content."),
                     }),
                     &["path", "content"],
+                )
+            },
+        },
+        ToolDef {
+            name: "update_properties",
+            plugin: "core",
+            description: "Set and/or remove a note's frontmatter properties without touching its \
+                          body. Prefer this over write_note for changing status, dates, tags or \
+                          any other property. Values are checked against the property schema \
+                          for the note's `kind:` (see read_property_schema) and normalized; an \
+                          invalid value refuses the whole call and nothing is written. Pass \
+                          `expected_revision` (from read_note) to refuse the write if the note \
+                          changed since you read it.",
+            schema: || {
+                obj(
+                    json!({
+                        "path": s_("Vault-relative path of an existing note."),
+                        "set": {
+                            "type": "object",
+                            "description": "Properties to set: key → value (string, number, \
+                                            boolean, list or object). Existing keys keep their \
+                                            position; new keys are appended.",
+                        },
+                        "remove": a_("Property keys to delete. An absent key is not an error."),
+                        "expected_revision": s_("The `revision` read_note returned. If the note \
+                                                 has changed since, nothing is written and the \
+                                                 call fails as stale."),
+                    }),
+                    &["path"],
+                )
+            },
+        },
+        ToolDef {
+            name: "read_property_schema",
+            plugin: "core",
+            description: "The typed property schemas notes are validated against: the built-in \
+                          kinds (task, project, area, person, daily, and `node`, which every \
+                          page shares) plus the org's own, declared by `kind: schema` pages in \
+                          `Schemas/`. A note's `kind:` frontmatter picks its schema. Read this \
+                          before update_properties to know which values a property accepts.",
+            schema: || {
+                obj(
+                    json!({
+                        "kind": s_("One kind to return in full, inherited properties included. \
+                                    Omit to list every kind with its own properties."),
+                    }),
+                    &[],
                 )
             },
         },
@@ -2984,6 +3036,121 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
     ToolFailure::Message(msg)
 }
 
+// ── Notes: revisions, frontmatter and the property schema ───────
+
+/// Where an org declares its own kinds: `kind: schema` pages in this
+/// vault folder. A fixed folder keeps schema loading to a manifest
+/// filter instead of a parse of every note on every write.
+const SCHEMA_FOLDER: &str = "Schemas/";
+
+/// A note's revision: the lowercase hex sha256 of its bytes — the same
+/// value the vault manifest and `IfMatch::Sha` use.
+fn note_revision(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+fn stale_note(path: &str, expected: &str, actual: &str) -> ToolFailure {
+    ToolFailure::Message(format!(
+        "Stale: `{path}` changed since revision {expected} (it is now {actual}). Nothing was \
+         written. Call read_note again, re-apply your change to what it says now, and pass \
+         the new revision."
+    ))
+}
+
+/// A note's frontmatter as a JSON object. Empty when it has none (or
+/// one that isn't a YAML mapping).
+fn frontmatter_map(text: &str) -> serde_json::Map<String, Value> {
+    vault::obsidian::obsidian_parse::parse_frontmatter(text)
+        .0
+        .into_iter()
+        .map(|e| (e.key, e.value))
+        .collect()
+}
+
+/// The `kind:` a note declares, if any.
+fn page_kind(fm: &serde_json::Map<String, Value>) -> Option<&str> {
+    fm.get(KIND_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+}
+
+/// The registry a write is validated against: the built-in kinds plus
+/// the org's schema pages, with what each page declared (or why it
+/// couldn't be read).
+struct PropertySchemas {
+    registry: PropertySchemaRegistry,
+    /// (path, kind) per schema page that loaded.
+    org: Vec<(String, String)>,
+    /// (path, reason) per `kind: schema` page that didn't.
+    errors: Vec<(String, String)>,
+}
+
+fn load_property_schemas(org: &crate::OrgAppState) -> Result<PropertySchemas, ToolFailure> {
+    use vault_proto::VaultSync as _;
+    let mut schemas = PropertySchemas {
+        registry: PropertySchemaRegistry::with_builtins(),
+        org: Vec::new(),
+        errors: Vec::new(),
+    };
+    let manifest = org
+        .vault_sync
+        .manifest(VAULT_ID)
+        .map_err(|e| ToolFailure::Message(format!("couldn't list the vault: {e:?}")))?;
+    let mut paths: Vec<&str> = manifest
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .filter(|p| p.starts_with(SCHEMA_FOLDER) && p.ends_with(".md"))
+        .collect();
+    paths.sort_unstable();
+    for path in paths {
+        let Ok(bytes) = org.vault_sync.get_file(VAULT_ID, path) else {
+            continue;
+        };
+        let fm = frontmatter_map(&String::from_utf8_lossy(&bytes.0));
+        if page_kind(&fm) != Some(SCHEMA_PAGE_KIND) {
+            continue;
+        }
+        match schema_from_frontmatter(&fm) {
+            Ok(schema) => {
+                schemas.org.push((path.to_string(), schema.kind.clone()));
+                schemas.registry.insert(schema);
+            }
+            Err(e) => schemas.errors.push((path.to_string(), e)),
+        }
+    }
+    Ok(schemas)
+}
+
+/// Validate (and normalize) every value against the schema for
+/// `kind`. All violations are reported together, so one round trip
+/// fixes them all.
+fn validate_properties(
+    registry: &PropertySchemaRegistry,
+    kind: Option<&str>,
+    values: Vec<(String, Value)>,
+) -> Result<Vec<(String, Value)>, ToolFailure> {
+    let mut ok = Vec::with_capacity(values.len());
+    let mut refused = Vec::new();
+    for (key, value) in values {
+        match registry.validate(kind, &key, value) {
+            Ok(v) => ok.push((key, v)),
+            Err(violation) => refused.push(violation.to_string()),
+        }
+    }
+    if refused.is_empty() {
+        Ok(ok)
+    } else {
+        Err(ToolFailure::Message(format!(
+            "refused by the property schema, nothing was written: {}. Call \
+             read_property_schema to see what each property accepts.",
+            refused.join("; ")
+        )))
+    }
+}
+
 // ── Tool implementations ─────────────────────────────────────────
 
 /// Who a tool call is from: the principal's account id (the wiki lane
@@ -3650,8 +3817,9 @@ fn call_tool(
                 .vault_sync
                 .get_file(VAULT_ID, &path)
                 .map_err(|e| backend_err("note", &path, &e))?;
+            let revision = note_revision(&bytes.0);
             let text = String::from_utf8_lossy(&bytes.0).to_string();
-            Ok(json!({ "path": path, "content": text }))
+            Ok(json!({ "path": path, "content": text, "revision": revision }))
         }
 
         // t[impl vault.bases.query]
@@ -3796,7 +3964,24 @@ fn call_tool(
         "write_note" => {
             let path = required_str(args, "path")?;
             let content = required_str(args, "content")?;
-            let existed = org.vault_sync.get_file(VAULT_ID, &path).is_ok();
+            let previous = org.vault_sync.get_file(VAULT_ID, &path).ok();
+            let existed = previous.is_some();
+            // Validate what this write changes in the frontmatter — a
+            // note that already carried an off-schema value can still be
+            // rewritten, but a write can't introduce one.
+            let before = previous
+                .map(|b| frontmatter_map(&String::from_utf8_lossy(&b.0)))
+                .unwrap_or_default();
+            let after = frontmatter_map(&content);
+            let changed: Vec<(String, Value)> = after
+                .iter()
+                .filter(|(k, v)| before.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !changed.is_empty() {
+                let schemas = load_property_schemas(org)?;
+                validate_properties(&schemas.registry, page_kind(&after), changed)?;
+            }
             org.vault_sync
                 .put_file(
                     VAULT_ID,
@@ -3809,6 +3994,149 @@ fn call_tool(
                 "path": path,
                 "written": true,
                 "replaced_existing": existed,
+            }))
+        }
+
+        "update_properties" => {
+            let path = required_str(args, "path")?;
+            let set: Vec<(String, Value)> = match args.get("set") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                Some(_) => {
+                    return Err(ToolFailure::Message(
+                        "`set` must be an object of property → value".into(),
+                    ));
+                }
+            };
+            let remove = arg_str_list(args, "remove")?.unwrap_or_default();
+            if set.is_empty() && remove.is_empty() {
+                return Err(ToolFailure::Message(
+                    "nothing to do: pass `set` and/or `remove`".into(),
+                ));
+            }
+            if let Some((k, _)) = set.iter().find(|(k, _)| k.trim().is_empty()) {
+                return Err(ToolFailure::Message(format!(
+                    "`{k}` is not a property name"
+                )));
+            }
+            if let Some((k, _)) = set.iter().find(|(k, _)| remove.contains(k)) {
+                return Err(ToolFailure::Message(format!(
+                    "`{k}` is in both `set` and `remove`; pick one"
+                )));
+            }
+            let existing = org
+                .vault_sync
+                .get_file(VAULT_ID, &path)
+                .map_err(|e| backend_err("note", &path, &e))?;
+            let revision = note_revision(&existing.0);
+            if let Some(expected) = arg_str(args, "expected_revision")
+                && expected != revision
+            {
+                return Err(stale_note(&path, &expected, &revision));
+            }
+            let raw = String::from_utf8(existing.0).map_err(|_| {
+                ToolFailure::Message(format!("`{path}` is not UTF-8 text; it has no properties"))
+            })?;
+
+            // The kind the note will have after this call picks the
+            // schema its values are checked against.
+            let current = frontmatter_map(&raw);
+            let kind = match set.iter().find(|(k, _)| k == KIND_KEY) {
+                Some((_, Value::String(k))) => Some(k.trim().to_string()),
+                Some((_, other)) => {
+                    return Err(ToolFailure::Message(format!(
+                        "`{KIND_KEY}` must be a string naming a kind, got {other}"
+                    )));
+                }
+                None if remove.iter().any(|k| k == KIND_KEY) => None,
+                None => page_kind(&current).map(str::to_owned),
+            };
+            let schemas = load_property_schemas(org)?;
+            let set = validate_properties(&schemas.registry, kind.as_deref(), set)?;
+
+            let Some(updated) = vault::obsidian::edit_frontmatter(&raw, &set, &remove)
+                .map_err(|e| ToolFailure::Message(format!("couldn't edit `{path}`: {e}")))?
+            else {
+                return Ok(json!({ "path": path, "changed": false, "revision": revision }));
+            };
+            // Write against the revision just read, so a change landing
+            // between the read and this write is refused, not clobbered.
+            let ack = org
+                .vault_sync
+                .put_file(
+                    VAULT_ID,
+                    &path,
+                    updated.into_bytes(),
+                    vault_proto::IfMatch::Sha(revision.clone()),
+                )
+                .map_err(|e| match e {
+                    vault_proto::VaultSyncError::Conflict { server_sha, .. } => {
+                        stale_note(&path, &revision, &server_sha)
+                    }
+                    other => backend_err("note", &path, &other),
+                })?;
+            Ok(json!({
+                "path": path,
+                "changed": true,
+                "revision": ack.sha256,
+                "set": set.into_iter().collect::<serde_json::Map<String, Value>>(),
+                "removed": remove,
+            }))
+        }
+
+        "read_property_schema" => {
+            let schemas = load_property_schemas(org)?;
+            let registry = &schemas.registry;
+            let source = |kind: &str| {
+                schemas
+                    .org
+                    .iter()
+                    .find(|(_, k)| k == kind)
+                    .map_or_else(|| json!("builtin"), |(path, _)| json!(path))
+            };
+            let errors: Vec<Value> = schemas
+                .errors
+                .iter()
+                .map(|(path, error)| json!({ "path": path, "error": error }))
+                .collect();
+            if let Some(kind) = arg_str(args, "kind") {
+                let Some(resolved) = registry.get(&kind) else {
+                    return Err(ToolFailure::Message(format!(
+                        "no schema for kind `{kind}`. Known kinds: {}. A page with an unknown \
+                         kind is checked against `{FALLBACK_KIND}`.",
+                        registry.kinds().join(", ")
+                    )));
+                };
+                return Ok(json!({
+                    "kind": kind,
+                    "source": source(&kind),
+                    "extends": registry.declared(&kind).and_then(|s| s.extends.clone()),
+                    "properties": resolved.properties,
+                    "errors": errors,
+                }));
+            }
+            let kinds: Vec<Value> = registry
+                .kinds()
+                .iter()
+                .filter_map(|k| registry.declared(k))
+                .map(|s| {
+                    json!({
+                        "kind": s.kind,
+                        "source": source(&s.kind),
+                        "extends": s.extends,
+                        "properties": s.properties,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "applies_by": format!(
+                    "A note's `{KIND_KEY}:` frontmatter picks its schema; a note without one \
+                     (or with a kind listed nowhere here) is checked against \
+                     `{FALLBACK_KIND}`. Properties a schema doesn't declare are free-form."
+                ),
+                "org_schema_folder": SCHEMA_FOLDER,
+                "kinds": kinds,
+                "errors": errors,
             }))
         }
 
