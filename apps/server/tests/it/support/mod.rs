@@ -23,8 +23,9 @@ use task_server::AppState;
 pub const ORG: &str = "acme-audio";
 
 /// A page `examples/studio/acme-audio/Vault/` seeds into the org vault.
-/// No links, no tags — so a graph test must expect it among the orphans,
-/// and a manifest test must expect it in the listing.
+/// No links of its own and no tags — so a graph test must expect it
+/// among the deadends (not the orphans: a seeded note files itself
+/// under it), and a manifest test must expect it in the listing.
 ///
 /// It is **not the only** seeded page, and a test must not assume it is.
 /// It was once, and a manifest test pinned the listing to exactly this
