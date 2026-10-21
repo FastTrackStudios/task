@@ -123,8 +123,10 @@ struct Wire {
     subscriptions: Vec<Subscription>,
     devices: Vec<DeviceInfo>,
     mappings: Vec<MappingRow>,
-    /// Absent in files written before this node had a stable id; such a
-    /// file loads with none and mints one on the next write.
+    /// Absent in files written before this node had a stable id. Such a
+    /// file loads with none, and the next write adopts the newest legacy
+    /// "this device" row as this node and retires the rest — see
+    /// `adopt_legacy_local`.
     #[facet(default)]
     local: Option<DeviceId>,
 }
@@ -212,14 +214,18 @@ struct Holder {
 /// make every client the same device — which is the failure a stable
 /// server-side id used to risk when it was the answer for *every* caller.
 fn ensure_local(s: &mut SyncState, backend: &FilesBackend) -> DeviceId {
-    let local = *s.local.get_or_insert_with(DeviceId::generate);
     let endpoint = backend.endpoint_id();
+    if s.local.is_none() {
+        s.local = adopt_legacy_local(s, endpoint.as_deref());
+    }
+    let local = *s.local.get_or_insert_with(DeviceId::generate);
+    retire_self_duplicates(s, local, endpoint.as_deref());
     let row = s
         .devices
         .entry(local.to_string())
         .or_insert_with(|| DeviceInfo {
             id: local,
-            name: "this device".to_string(),
+            name: THIS_DEVICE.to_string(),
             // The machine this backend is running on, which for a server
             // is the org's own endpoint. It is not enrolled and does not
             // need to be — a host does not admit itself — but a row with
@@ -240,6 +246,75 @@ fn ensure_local(s: &mut SyncState, backend: &FilesBackend) -> DeviceId {
         row.endpoint = endpoint;
     }
     local
+}
+
+/// The name this node's own row is given. Also how a legacy row for this
+/// node is recognised, since before `local` was persisted nothing else
+/// marked it.
+const THIS_DEVICE: &str = "this device";
+
+/// Is `d` a row for *this node* rather than for a peer?
+///
+/// A row whose endpoint is this backend's own endpoint is this node: a
+/// host does not enroll itself, so no peer can legitimately carry it. A
+/// `"this device"` row with no endpoint at all is this node too, written
+/// before the endpoint was bound. Peers always carry one, because
+/// `enroll_device` refuses a device that does not present it.
+fn is_self_row(d: &DeviceInfo, endpoint: Option<&str>) -> bool {
+    match (d.endpoint.as_deref(), endpoint) {
+        (Some(row), Some(own)) => row == own,
+        (None, _) => d.name == THIS_DEVICE,
+        (Some(_), None) => false,
+    }
+}
+
+/// This node's id in a file written before `local` was persisted.
+///
+/// Before the id was persisted, every process minted a new one and
+/// wrote a new `"this device"` row for it, so a pre-persistence file
+/// holds one such row per server lifetime and no `local` saying which
+/// is current. Minting yet another would add one more, and the old
+/// ones would never be retired. Adopting the most recently seen one
+/// keeps the row a person is most likely to have acted on, such as a
+/// paused transfer, and [`retire_self_duplicates`] drops the rest.
+fn adopt_legacy_local(s: &SyncState, endpoint: Option<&str>) -> Option<DeviceId> {
+    s.devices
+        .values()
+        .filter(|d| d.name == THIS_DEVICE && is_self_row(d, endpoint))
+        .max_by_key(|d| d.last_seen)
+        .map(|d| d.id)
+}
+
+/// Drop every row for this node except `local`, with its subscriptions.
+///
+/// They are rows a dead process wrote for itself (see
+/// [`adopt_legacy_local`]). Nothing resolves to them: this node acts as
+/// `local`, and [`enrolled`] refuses this node's own endpoint. Keeping
+/// them would only list phantom devices in `devices()`. Their
+/// subscriptions go with them because a subscription is one device's
+/// choice, and that device no longer exists.
+fn retire_self_duplicates(s: &mut SyncState, local: DeviceId, endpoint: Option<&str>) {
+    let stale: Vec<(String, DeviceId)> = s
+        .devices
+        .iter()
+        .filter(|(_, d)| d.id != local && is_self_row(d, endpoint))
+        .map(|(key, d)| (key.clone(), d.id))
+        .collect();
+    if stale.is_empty() {
+        return;
+    }
+    for (key, _) in &stale {
+        s.devices.remove(key);
+    }
+    let before = s.subscriptions.len();
+    s.subscriptions
+        .retain(|(device, _), _| !stale.iter().any(|(_, id)| id == device));
+    tracing::info!(
+        retired = stale.len(),
+        subscriptions = before - s.subscriptions.len(),
+        %local,
+        "files sync: retired duplicate rows for this node left by earlier processes"
+    );
 }
 
 /// Mutate this org's state and persist it, registering this node first.
@@ -283,8 +358,12 @@ fn local_device(backend: &FilesBackend) -> DeviceId {
 ///   operator can also withdraw it directly. Either is enough.
 ///
 /// This node's own row is excluded: it is reached as [`Holder::local`],
-/// never by presenting an endpoint.
+/// never by presenting an endpoint. So is this node's own endpoint,
+/// whatever row carries it. A legacy file can hold rows for this node
+/// that are not `local` (see [`adopt_legacy_local`]), and no caller may
+/// present the org's own endpoint and be treated as an enrolled peer.
 fn enrolled(backend: &FilesBackend, endpoint: &str) -> Result<DeviceId, FilesFault> {
+    let own = backend.endpoint_id().is_some_and(|own| own == endpoint);
     let row = read_state(backend, |s| {
         s.devices
             .values()
@@ -304,6 +383,7 @@ fn enrolled(backend: &FilesBackend, endpoint: &str) -> Result<DeviceId, FilesFau
         ))
     };
     match row {
+        _ if own => refuse("this org's own endpoint, which is never a peer"),
         None => refuse("a device this org never enrolled"),
         Some((_, true)) => refuse("a revoked device"),
         Some((id, false)) => {
@@ -1153,6 +1233,93 @@ mod tests {
             s.devices.get_mut(&id.to_string()).unwrap().revoked = true;
         });
         assert!(enrolled(&backend, endpoint).is_err(), "revoked");
+    }
+
+    /// A transport that is never used: binding an endpoint takes one.
+    #[derive(Debug)]
+    struct NoRemotes;
+
+    #[async_trait::async_trait]
+    impl crate::lane::federation::RemoteFiles for NoRemotes {
+        async fn browse_offered(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &str,
+            _: &RootPath,
+        ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+        async fn read_offered(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &str,
+            _: &RootPath,
+        ) -> Result<files_proto::service::media::ByteTicket, FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+        async fn open_relay(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &str,
+            _: &str,
+        ) -> Result<files_proto::service::federation::RelayManifest, FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+        async fn fetch_relay(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &files_proto::service::federation::RelayManifest,
+            _: Option<(u64, u64)>,
+            _: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+        ) -> Result<(), FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+    }
+
+    // t[verify files.device.identity] — this node's own endpoint is never
+    // an enrolled peer, even when a legacy row that is not `local` holds it
+    #[test]
+    fn this_nodes_own_endpoint_never_resolves_as_a_peer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let own = "5555555555555555555555555555555555555555555555555555555555555555";
+        let backend = FilesBackend::new(dir.path(), dir.path().join("vault"))
+            .expect("backend")
+            .with_remotes(own, std::sync::Arc::new(NoRemotes));
+
+        // A legacy file's shape, written without `ensure_local`: a
+        // "this device" row for the org's own endpoint and no `local`.
+        let legacy = DeviceId::generate();
+        SYNC.write(&backend, |s| {
+            s.devices.insert(
+                legacy.to_string(),
+                DeviceInfo {
+                    id: legacy,
+                    name: "this device".into(),
+                    endpoint: Some(own.into()),
+                    last_seen: Utc::now(),
+                    transfer: TransferPolicy {
+                        max_bytes_per_sec: None,
+                        paused: false,
+                    },
+                    revoked: false,
+                },
+            );
+        });
+        // Even admitted, which a host never does for itself.
+        backend.admit_host(
+            files_domain::HostId(own.into()),
+            files_domain::Hosting::working(),
+        );
+        assert!(
+            enrolled(&backend, own).is_err(),
+            "the org's own endpoint resolved to a legacy row as though it were a peer"
+        );
+
+        // And the legacy row is adopted as this node rather than joined.
+        assert_eq!(local_device(&backend), legacy);
+        SYNC.forget(&backend);
+        assert_eq!(local_device(&backend), legacy, "adopted, and persisted");
+        assert_eq!(read_state(&backend, |s| s.devices.len()), 1);
     }
 
     #[test]
