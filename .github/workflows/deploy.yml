@@ -273,3 +273,5 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/node-binaries.yml
+    # TASK_RELEASE_MINISIGN_KEY signs the release's SHA256SUMS.
+    secrets: inherit

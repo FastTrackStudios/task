@@ -677,20 +677,16 @@ impl SubscriptionsBackend {
     /// subscriber cannot hold the same name as two kinds; two
     /// subscribers can, and the order above is then what decides.
     fn held_kind(&self, domain: &str, slug: &str) -> Result<SourceKind, WikiError> {
-        let mut subscribers = self.store.subscribers().map_err(store_err)?;
-        subscribers.sort_by_key(|s| (*s != Subscriber::Vault, s.key()));
-        for subscriber in &subscribers {
-            if let Some(held) = self
-                .store
-                .active(subscriber)
-                .map_err(store_err)?
-                .into_iter()
-                .find(|s| s.domain == domain && s.slug == slug)
-            {
-                return Ok(held.kind);
-            }
-        }
-        Ok(SourceKind::Wiki)
+        // One read of the store, then a scan in memory: the reference is
+        // resolved for the org, not for one subscriber, and reading the
+        // file again per subscriber made every resolution N+1 reads.
+        let mut held = self.store.all_active().map_err(store_err)?;
+        held.sort_by_key(|(s, _)| (*s != Subscriber::Vault, s.key()));
+        Ok(held
+            .iter()
+            .flat_map(|(_, active)| active)
+            .find(|s| s.domain == domain && s.slug == slug)
+            .map_or(SourceKind::Wiki, |s| s.kind))
     }
 
     /// Ask the source whether it admits this org; `Unknown` passes.

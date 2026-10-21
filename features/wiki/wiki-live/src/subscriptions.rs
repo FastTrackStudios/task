@@ -130,6 +130,30 @@ impl SubscriptionStore {
             .collect())
     }
 
+    /// Every subscriber with what it actively holds, from one read of
+    /// the store.
+    ///
+    /// For a question asked of the org as a whole (which kind does it
+    /// hold `domain/slug` as?): [`Self::subscribers`] then
+    /// [`Self::active`] per subscriber would read and parse the file
+    /// once more for each of them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::list`].
+    pub fn all_active(&self) -> Result<Vec<(Subscriber, Vec<Subscription>)>, SubscriptionError> {
+        Ok(self
+            .load()?
+            .0
+            .into_iter()
+            .filter_map(|(key, held)| {
+                let subscriber = Subscriber::from_key(&key)?;
+                let active = held.into_iter().filter(Subscription::is_active).collect();
+                Some((subscriber, active))
+            })
+            .collect())
+    }
+
     /// Every subscriber in the store, for a sweep.
     ///
     /// # Errors
@@ -319,6 +343,39 @@ mod tests {
                 .all(|s| s.slug != "bible-study")
         );
         assert_eq!(store.subscribers().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn all_active_reads_every_subscriber_and_leaves_declined_out() {
+        let (_tmp, store) = store();
+        let cooking = Subscriber::Wiki("cooking".into());
+        store
+            .subscribe(&Subscriber::Vault, wiki_sub("acme.test", "music-theory"))
+            .unwrap();
+        store
+            .subscribe(
+                &Subscriber::Vault,
+                Subscription {
+                    core: true,
+                    declined: true,
+                    ..wiki_sub("acme.test", "declined")
+                },
+            )
+            .unwrap();
+        store
+            .subscribe(&cooking, wiki_sub("alice.test", "bible-study"))
+            .unwrap();
+
+        let all = store.all_active().unwrap();
+        assert_eq!(all.len(), 2);
+        for (subscriber, active) in &all {
+            assert_eq!(active, &store.active(subscriber).unwrap(), "{subscriber:?}");
+        }
+        assert!(
+            all.iter()
+                .flat_map(|(_, active)| active)
+                .all(|s| s.slug != "declined")
+        );
     }
 
     #[test]

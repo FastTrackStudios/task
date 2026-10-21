@@ -213,6 +213,9 @@ async fn bind(book: &files::AddressBook) -> architect::iroh_link::iroh::Endpoint
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seven_small_orgs_stay_inside_the_memory_budget() {
+    if !alloc::counters_are_this_tests() {
+        return;
+    }
     alloc::reset_peak();
     let before_boot = alloc::live();
     let (state, _tmp) = support::boot_app_state_with_env(plant, &[("TASK_MCP_TOKEN", TOKEN)])
@@ -396,6 +399,9 @@ const SEARCH_CALL_BUDGET: usize = 2 << 20;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_path_search_reads_no_file_in_the_vault() {
+    if !alloc::counters_are_this_tests() {
+        return;
+    }
     const BIG: usize = 32 << 20;
     let (state, _tmp) = support::boot_app_state_with_env(
         |org| {

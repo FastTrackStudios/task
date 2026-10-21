@@ -641,10 +641,8 @@ impl VaultSync for Backend {
             None
         };
         match (&if_match, existing_sha.as_deref()) {
-            (IfMatch::CreateOnly, Some(_)) => return Err(conflict(&abs, existing_sha.as_deref())),
-            (IfMatch::Sha(want), Some(have)) if want != have => {
-                return Err(conflict(&abs, existing_sha.as_deref()));
-            }
+            (IfMatch::CreateOnly, Some(_)) => return Err(conflict(&abs)),
+            (IfMatch::Sha(want), Some(have)) if want != have => return Err(conflict(&abs)),
             _ => {}
         }
         let (new_sha, mtime_ms) = write_file_atomic(&abs, &bytes)?;
@@ -683,12 +681,7 @@ impl VaultSync for Backend {
         if let IfMatch::Sha(want) = &if_match {
             let (have, _) = sha256_file(&abs).map_err(io_err)?;
             if *want != have {
-                // The bytes only on the refusal, which ships them.
-                let bytes = std::fs::read(&abs).map_err(io_err)?;
-                return Err(VaultSyncError::Conflict {
-                    server_sha: have,
-                    server_bytes: bytes,
-                });
+                return Err(conflict(&abs));
             }
         }
         std::fs::remove_file(&abs).map_err(io_err)?;
@@ -1231,11 +1224,22 @@ fn write_file_atomic(abs: &Path, bytes: &[u8]) -> Result<(String, i64), VaultSyn
     Ok((sha256_hex(bytes), mtime_ms))
 }
 
-fn conflict(abs: &Path, existing_sha: Option<&str>) -> VaultSyncError {
-    let bytes = std::fs::read(abs).unwrap_or_default();
-    VaultSyncError::Conflict {
-        server_sha: existing_sha.unwrap_or("").to_string(),
-        server_bytes: bytes,
+/// The refusal of a write whose `If-Match` failed, carrying the file as
+/// it is now.
+///
+/// The check hashed the file by streaming it (no buffer the size of the
+/// file); the bytes are read only here, on the refusal that ships them.
+/// The file can change between the two reads (an editor on the host
+/// saving it), so `server_sha` is computed from the bytes that are sent
+/// rather than reused from the check: a client gets a pair that agrees,
+/// and its retry's `If-Match` names what it was actually shown.
+fn conflict(abs: &Path) -> VaultSyncError {
+    match std::fs::read(abs) {
+        Ok(bytes) => VaultSyncError::Conflict {
+            server_sha: sha256_hex(&bytes),
+            server_bytes: bytes,
+        },
+        Err(e) => io_err(e),
     }
 }
 
@@ -1843,9 +1847,39 @@ mod tests {
             )
             .unwrap_err();
         match err {
-            VaultSyncError::Conflict { server_bytes, .. } => assert_eq!(server_bytes, b"v1"),
+            VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            } => {
+                assert_eq!(server_bytes, b"v1");
+                assert_eq!(server_sha, sha256_hex(b"v1"));
+            }
             other => panic!("expected Conflict, got {other:?}"),
         }
+    }
+
+    /// A refused delete ships the file as it is, and the sha it names is
+    /// the sha of exactly those bytes, so the client's retry can match
+    /// what it was shown.
+    #[test]
+    fn if_match_delete_conflict_names_the_sha_of_the_bytes_it_ships() {
+        let (_tmp, b) = make_backend();
+        b.put_file("v1", "x.md", b"kept".to_vec(), IfMatch::CreateOnly)
+            .unwrap();
+        let err = b
+            .delete_file("v1", "x.md", IfMatch::Sha("deadbeef".into()))
+            .unwrap_err();
+        match err {
+            VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            } => {
+                assert_eq!(server_bytes, b"kept");
+                assert_eq!(server_sha, sha256_hex(&server_bytes));
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        assert_eq!(b.get_file("v1", "x.md").unwrap().0, b"kept");
     }
 
     #[test]
