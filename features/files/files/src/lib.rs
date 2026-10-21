@@ -29,6 +29,8 @@ pub mod certify;
 mod checkpoint;
 mod consts;
 mod content;
+/// A dialled client that shuts its vox connection down when dropped.
+pub mod dialled;
 mod durable;
 mod entity;
 mod error;
@@ -60,6 +62,7 @@ pub mod watcher;
 pub use backend::{
     Captured, FilesBackend, LocationBoundaries, MaterializeReport, OpLogCompaction, SyncTreeMeta,
 };
+pub use dialled::Dialled;
 pub use remotes::{AddressBook, IrohRemotes, bind_endpoint};
 // The cadence engine moved to `files-domain`: it is a state machine
 // about time, and needs neither jj-lib nor the version store. Re-exported
