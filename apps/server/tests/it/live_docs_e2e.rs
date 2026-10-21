@@ -78,6 +78,17 @@ async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
     panic!("timed out waiting for: {what}");
 }
 
+/// A replica of `doc_id`, syncing over the org's vox socket.
+async fn replica(vox_url: &str, doc_id: Uuid) -> CrdtDoc {
+    let doc = CrdtDoc::ephemeral();
+    let mut synced = SyncedDoc::new(doc_id, doc.clone());
+    let client: DocSyncClient = vox::connect_lane(vox_url).establish().await.unwrap();
+    tokio::spawn(async move {
+        let _ = synced.run(&client).await;
+    });
+    doc
+}
+
 /// `song.<name>` of a replica, as JSON.
 fn field(doc: &CrdtDoc, name: &str) -> Value {
     doc.loro()
@@ -175,32 +186,22 @@ async fn an_agent_edits_a_live_song_that_a_peer_sees_and_undoes_it() {
     }
     let setlist = set.id.clone();
 
-    // ── The band's peer joins over the org's vox lane and seeds the song ──
-    let lane = node
-        .caller(PERSONAL_SLUG, Some(token.clone()))
-        .await
-        .unwrap();
-    let joined = LiveSessionsClient::from_vox_lane(lane, None)
-        .join(setlist.clone())
-        .await
-        .expect("the peer joins");
+    // ── The band's peer joins over the org's vox socket and seeds the song ──
+    let vox_url = format!("{base}/org/{PERSONAL_SLUG}/vox");
+    let live: LiveSessionsClient = vox::connect_lane(&vox_url).establish().await.unwrap();
+    let joined = live.join(setlist.clone()).await.expect("the peer joins");
     let washed: Uuid = joined.songs[0].doc_id.parse().unwrap();
-    let peer = CrdtDoc::ephemeral();
-    {
-        let lane = node
-            .caller(PERSONAL_SLUG, Some(token.clone()))
-            .await
-            .unwrap();
-        let client = DocSyncClient::from_vox_lane(lane, None);
-        let mut synced = SyncedDoc::new(washed, peer.clone());
-        tokio::spawn(async move {
-            let _ = synced.run(&client).await;
-        });
-    }
+    let peer = replica(&vox_url, washed).await;
     let song = peer.loro().get_map("song");
     song.insert("tempo", 78).unwrap();
     song.insert("key", "G").unwrap();
     peer.loro().commit();
+    // A second peer has the seed: the set syncs both ways.
+    let second = replica(&vox_url, washed).await;
+    eventually("a second peer has the first's seed", || {
+        field(&second, "tempo") == json!(78)
+    })
+    .await;
 
     // ── live_observe: the set, each song's doc ref and version ──
     let watched = ok(
@@ -268,6 +269,10 @@ async fn an_agent_edits_a_live_song_that_a_peer_sees_and_undoes_it() {
     let apply_id = applied["apply"].as_str().expect("an apply id").to_owned();
     let v2 = applied["version"].as_str().unwrap().to_owned();
     assert_ne!(v2, v1, "the edit moved the version");
+    eventually("the other peer sees it too", || {
+        field(&second, "tempo") == json!(82)
+    })
+    .await;
     eventually("the peer sees the agent's edit live", || {
         field(&peer, "tempo") == json!(82) && field(&peer, "sections") == json!(["verse", "chorus"])
     })
@@ -560,4 +565,101 @@ async fn a_bad_doc_ref_says_what_to_use() {
     )
     .await;
     assert!(e.contains("no setlist"), "{e}");
+}
+
+/// The same apply straight on a host, beside two replicas syncing over a
+/// member's `DocSync` (the lanes the org mounts): what reaches a peer is
+/// the served doc's own commit, whatever transport carries it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_apply_on_the_host_reaches_every_replica() {
+    use architect::{LayerRouter, LocalServer, Scope};
+    use task_server::live::{LiveAccess, LiveHost, LiveOnly};
+    use task_server::live_docs::{self, ApplyRequest, Attribution};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let collections = collection::Store::open(tmp.path().join("collections.jsonl"));
+    let set = collections
+        .create(
+            "live-test".into(),
+            "Set".into(),
+            CollectionKind::new("songlist"),
+        )
+        .unwrap();
+    collections
+        .add_item(Placement {
+            collection_id: set.id.clone(),
+            node: NodeRef::song("washed"),
+            after: None,
+        })
+        .unwrap();
+    let resources = resources::ResourcesBackend::new(tmp.path().join("resources"));
+    let host = LiveHost::new("live-test".into(), collections, resources);
+    let joined = host.join(&set.id, None).unwrap();
+    let washed: Uuid = joined.songs[0].doc_id.parse().unwrap();
+
+    let only = LiveOnly::new(host.clone(), LiveAccess::default());
+    let local = LocalServer::serve(
+        LayerRouter::new().with(
+            crdt::sync::doc_sync_service_descriptor(),
+            crdt::sync::DocSyncDispatcher::new(only),
+        ),
+        Scope::new(),
+    );
+    let mut replicas = Vec::new();
+    for _ in 0..2 {
+        let doc = CrdtDoc::ephemeral();
+        let mut synced = SyncedDoc::new(washed, doc.clone());
+        let client: DocSyncClient = local.establish().await.unwrap();
+        tokio::spawn(async move {
+            let _ = synced.run(&client).await;
+        });
+        replicas.push(doc);
+    }
+    replicas[0]
+        .loro()
+        .get_map("song")
+        .insert("tempo", 78)
+        .unwrap();
+    replicas[0].loro().commit();
+    eventually("the replicas meet", || {
+        field(&replicas[1], "tempo") == json!(78)
+    })
+    .await;
+    let served = host.registry().doc(washed).await.unwrap();
+    for _ in 0..200 {
+        if field(&served, "tempo") == json!(78) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let doc_ref = live_docs::doc_ref(&set.id, "washed");
+    let applied = {
+        let host = host.clone();
+        tokio::task::spawn_blocking(move || {
+            live_docs::apply(
+                &host,
+                &doc_ref,
+                &ApplyRequest {
+                    ops: &json!([{ "op": "set", "path": ["song", "tempo"], "value": 90 }]),
+                    expected_version: None,
+                    propose: false,
+                    by: Attribution {
+                        created_by: Some("bot:atlas".into()),
+                        ..Attribution::default()
+                    },
+                },
+            )
+        })
+        .await
+        .unwrap()
+        .expect("applied")
+    };
+    assert_eq!(applied["applied"], json!(true));
+    for (i, r) in replicas.iter().enumerate() {
+        eventually(&format!("replica {i} sees the apply"), || {
+            field(r, "tempo") == json!(90)
+        })
+        .await;
+    }
 }
