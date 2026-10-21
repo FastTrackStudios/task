@@ -89,13 +89,14 @@ async fn replica(vox_url: &str, doc_id: Uuid) -> CrdtDoc {
     doc
 }
 
-/// `song.<name>` of a replica, as JSON.
+/// `song.<name>` of a replica, as JSON (a list or map deeply).
 fn field(doc: &CrdtDoc, name: &str) -> Value {
     doc.loro()
         .get_map("song")
         .get(name)
-        .and_then(|v| v.into_value().ok())
-        .map_or(Value::Null, |v| task_server::live_docs::to_json(&v))
+        .map_or(Value::Null, |v| {
+            task_server::live_docs::to_json(&v.get_deep_value())
+        })
 }
 
 // t[verify mcp.live.observe]
