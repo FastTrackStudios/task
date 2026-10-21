@@ -1,11 +1,14 @@
 # git-cliff config — generates CHANGELOG.md from the commit history.
 #
 # The release procedure runs it for you (scripts/release.sh, `just
-# release-plan` / `just release-prepare`); by hand:
+# release-plan` / `just release-prepare`), over a RANGE: the commits since
+# the last release tag become the new section, older sections stay as
+# released. Do not regenerate the whole file with `git cliff -o`: with
+# release branches, git-cliff's whole-history walk files a card merged
+# into dev during a release under that release, by date. By hand:
 #
-#   git cliff -o CHANGELOG.md                 regenerate the whole file
-#   git cliff --bumped-version                the version the next release gets
-#   git cliff --unreleased --tag v0.2.0       preview the next release's notes
+#   git cliff --bumped-version                    the version the next release gets
+#   git cliff --tag v0.2.5 --strip all v0.2.4..HEAD   preview the next release's notes
 #
 # Card PRs are squash-merged into `dev`, so each card is ONE commit whose
 # subject is the PR title — a conventional commit (`feat(files): …`,

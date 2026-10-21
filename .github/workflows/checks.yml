@@ -51,7 +51,7 @@ name: checks
 #                       checks that evidence and squash-merges. Running it
 #                       again here rebuilt the same tree in a second
 #                       target dir for ~20 minutes per push.
-#   release PR dev -> main   HERE, automatically, the FULL set (no change
+#   release PR release/vX.Y.Z -> main   HERE, automatically, the FULL set (no change
 #                       selection): it is the last look before production
 #                       and it runs once per release, not once per card.
 #   by hand             `gh workflow run checks.yml --ref <branch>` runs

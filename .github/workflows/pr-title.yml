@@ -1,7 +1,8 @@
-# PR title — card PRs into `dev` are squash-merged, so the PR TITLE becomes
-# the one commit subject on dev, and git-cliff turns that subject into the
-# release's changelog line (cliff.toml). This checks the title is a
-# conventional commit before the squash bakes it in.
+# PR title — card PRs into `dev` (and fix PRs into an open `release/v*`
+# branch) are squash-merged, so the PR TITLE becomes the one commit
+# subject, and git-cliff turns that subject into the release's changelog
+# line (cliff.toml). This checks the title is a conventional commit
+# before the squash bakes it in.
 #
 # It is the only thing that runs on a card PR, and it compiles nothing: a
 # hosted runner, a regex, seconds. The build gate for a card is the
@@ -18,7 +19,7 @@ name: pr-title
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, "release/**"]
     types: [opened, edited, reopened, synchronize]
 
 permissions:

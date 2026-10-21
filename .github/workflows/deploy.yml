@@ -20,9 +20,10 @@
 # image; everything else deploys.
 #
 # RELEASES. Under the release model (skills/release-workflow.md) main
-# moves only by release PRs merged from `dev` (merge commit; the release
-# guard in release.yml proves its tree is the tree `checks` tested), or a
-# hotfix/* PR. So a push here IS a release: the images built below get
+# moves only by release PRs merged from a `release/vX.Y.Z` branch cut
+# from dev (merge commit; the release guard in release.yml proves its
+# tree is the tree `checks` tested), or a hotfix/* PR. So a push here IS
+# a release: the images built below get
 # the version tag `v<Cargo.toml version>` beside `sha-<short>`, and once
 # "Verify live" passes, the `release` job tags the source and publishes
 # the GitHub Release (release.yml). A release always bumps Cargo.toml and
@@ -243,7 +244,7 @@ jobs:
           [ "$bad" = 0 ] || { echo "UNHEALTHY: an org did not answer ok"; exit 1; }
 
   # Production serves this commit: cut the release. Tag `v<version>` on
-  # the dev tip this merge brought in (same tree), GitHub Release with the
+  # the release branch tip this merge brought in (same tree), GitHub Release with the
   # CHANGELOG section and the migrations list. A no-op when the version's
   # release already exists (a re-run, a hotfix without a bump).
   #

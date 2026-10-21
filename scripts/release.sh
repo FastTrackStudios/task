@@ -14,15 +14,28 @@
 # conventional-commit title, so each card is one changelog line. Edit
 # the commit, not the file.
 #
+# A release is a BRANCH, `release/v<next>`, cut from dev's head. Dev never
+# freezes: cards keep landing while the release branch is checked,
+# merged into main, deployed and tagged. Afterwards main is back-merged
+# into dev, which is how dev gets the bump, the changelog and any fix
+# made on the release branch.
+#
 #   scripts/release.sh version            the current version
 #   scripts/release.sh plan               what the next release would be
-#   scripts/release.sh prepare [BUMP]     bump + changelog + release commit
-#                                          on release/v<next> (BUMP: patch
-#                                          (default), minor, major, auto or
-#                                          X.Y.Z; minor/major only when the
-#                                          Captain or Commander calls one)
+#   scripts/release.sh prepare [BUMP]     cut release/v<next> from origin/dev:
+#                                          bump + changelog + release commit
+#                                          (BUMP: patch (default), minor,
+#                                          major, auto or X.Y.Z; minor/major
+#                                          only when the Captain or Commander
+#                                          calls one)
+#   scripts/release.sh pr                 push the release (or hotfix) branch
+#                                          and open its PR into main
+#   scripts/release.sh refresh            on release/v*: after a fix landed on
+#                                          the branch, regenerate the changelog
+#                                          and re-add the release commit
+#   scripts/release.sh backmerge          after a release shipped: PR main ->
+#                                          dev (merge commit, auto-merge)
 #   scripts/release.sh notes [VERSION]    one version's changelog section
-#   scripts/release.sh pr                 open the dev -> main release PR
 #   scripts/release.sh hotfix             on hotfix/* (from main): patch bump
 #                                          + changelog + release commit
 #   scripts/release.sh guard              CI: is this PR a sound release?
@@ -64,6 +77,10 @@ version_at() {
 }
 
 is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
+# The release commit's subject for a version, as an ERE (a squash merge
+# may append " (#N)").
+release_subject_re() { printf '^chore\\(release\\): v%s( \\(#[0-9]+\\))?$' "${1//./\\.}"; }
 
 # true when $1 > $2 (both X.Y.Z)
 gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
@@ -136,8 +153,8 @@ cmd_plan() {
     echo "next release:          $next (patch, the default; minor/major only when the Captain or Commander calls one)"
     echo "git-cliff would bump:  ${cliff_next:-?} (informational; opt in with: just release-prepare auto)"
     echo
-    echo "── unreleased changelog ──"
-    cliff --unreleased --strip header ${next:+--tag "v$next"} || true
+    echo "── unreleased changelog (commits in ${tag:+$tag..}HEAD) ──"
+    cliff --strip header ${next:+--tag "v$next"} ${tag:+"$tag..HEAD"} || true
     if [ -n "$tag" ]; then
         local m; m="$(migrations_between "$tag" HEAD)"
         echo "── migrations since $tag ──"
@@ -154,7 +171,12 @@ cmd_prepare() {
     # a feat commit triggers. `auto` asks git-cliff instead.
     local want="${1:-patch}" cur next branch
     [ -z "$(git status --porcelain --untracked-files=no)" ] || die "working tree is dirty"
-    git fetch --quiet --tags origin "$INTEGRATION_BRANCH"
+    git fetch --quiet --tags origin "$INTEGRATION_BRANCH" "$PRODUCTION_BRANCH"
+    # The last release must have come back to dev first: otherwise the new
+    # branch lacks main's release merge, its version and changelog would
+    # collide with main's, and the guard would refuse the PR anyway.
+    git merge-base --is-ancestor "origin/$PRODUCTION_BRANCH" "origin/$INTEGRATION_BRANCH" \
+        || die "origin/$PRODUCTION_BRANCH is not in origin/$INTEGRATION_BRANCH: the last release has not been back-merged. Run: just release-backmerge (and let it merge) first."
     cur="$(version_at "origin/$INTEGRATION_BRANCH")"
     is_semver "$cur" || die "Cargo.toml version '$cur' is not X.Y.Z"
 
@@ -172,20 +194,48 @@ cmd_prepare() {
     esac
     gt "$next" "$cur" || die "next version $next is not greater than $cur"
     git rev-parse -q --verify "refs/tags/v$next" >/dev/null && die "tag v$next already exists"
+    if git ls-remote --exit-code --heads origin "release/v$next" >/dev/null 2>&1; then
+        git switch --quiet "$INTEGRATION_BRANCH" 2>/dev/null || git switch --quiet --detach "origin/$INTEGRATION_BRANCH"
+        git branch --quiet -D "$branch"
+        die "release/v$next is already open on origin. Finish (or close) that release first; a fix for it goes onto that branch (just release-refresh)."
+    fi
 
     git branch --quiet -M "$branch" "release/v$next"
-    note "preparing v$next (was $cur) on release/v$next from origin/$INTEGRATION_BRANCH"
+    note "cutting release/v$next (was $cur) from origin/$INTEGRATION_BRANCH $(git rev-parse --short "origin/$INTEGRATION_BRANCH")"
     release_commit "$cur" "$next"
     cat >&2 <<EOF
 
 Next:
-  1. Read CHANGELOG.md's [$next] section. Wrong line? Fix that commit's
-     subject on dev (or reword here) — never hand-edit the generated file.
-  2. git push origin release/v$next and open a PR into $INTEGRATION_BRANCH titled
-     "chore(release): v$next"; squash-merge it. Nothing else may land on
-     $INTEGRATION_BRANCH until the release PR is merged (the guard checks).
-  3. just release-pr   — opens $INTEGRATION_BRANCH -> $PRODUCTION_BRANCH; the full checks run there.
+  1. Read CHANGELOG.md's [$next] section. Wrong line? Reword the commit
+     on dev and re-run prepare — never hand-edit the generated file.
+  2. just release-pr   — pushes release/v$next and opens it -> $PRODUCTION_BRANCH; the full checks run there.
+  $INTEGRATION_BRANCH stays open the whole time: cards keep merging. A fix
+  for this release is a PR into release/v$next, then just release-refresh.
 EOF
+}
+
+# On a release/v* branch after a fix landed on it: regenerate the
+# changelog (the fix joins this version's section) and end the branch
+# with a release commit again, which is what the guard looks for.
+cmd_refresh() {
+    local ref v
+    ref="$(git rev-parse --abbrev-ref HEAD)"
+    case "$ref" in release/v*) ;; *) die "run this on the release/v* branch (on '$ref')" ;; esac
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || die "working tree is dirty"
+    git fetch --quiet --tags origin "$ref" 2>/dev/null || true
+    if git rev-parse -q --verify "origin/$ref" >/dev/null; then
+        git merge-base --is-ancestor "origin/$ref" HEAD \
+            || die "origin/$ref has commits this checkout lacks: git pull --ff-only first"
+    fi
+    v="$(version_at)"
+    [ "$ref" = "release/v$v" ] || die "branch $ref carries version $v"
+    if [[ "$(git log -1 --format=%s)" =~ $(release_subject_re "$v") ]]; then
+        note "the head is already the release commit — nothing to refresh"; return 0
+    fi
+    changelog_write "$v"
+    git add CHANGELOG.md
+    git commit --quiet --allow-empty -m "chore(release): v$v"
+    note "committed: $(git log -1 --format='%h %s'). Push it: git push origin $ref"
 }
 
 # Bump Cargo.toml + Cargo.lock, regenerate CHANGELOG.md, commit
@@ -201,17 +251,51 @@ release_commit() { # <cur> <next>
     # move. --offline first: a version bump needs no index.
     cargo update --workspace --offline 2>/dev/null || cargo update --workspace
 
-    cliff --tag "v$next" -o CHANGELOG.md
-    grep -q "^## \[$next\]" CHANGELOG.md || die "CHANGELOG.md has no [$next] section"
+    changelog_write "$next"
 
     git add Cargo.toml Cargo.lock CHANGELOG.md
     git commit --quiet -m "chore(release): v$next"
     note "committed: $(git log -1 --format='%h %s')"
 }
 
-# A hotfix: run ON a `hotfix/<name>` branch cut from origin/main that
-# already carries the fix commit(s). Adds the patch-bump release commit
-# the guard requires. After it ships, back-merge main into dev.
+# Write <version>'s section into CHANGELOG.md (replacing it if present),
+# above every older section, which stay as released. The section holds
+# exactly the commits reachable from HEAD and not from the last release
+# tag — a git RANGE. git-cliff's own whole-history walk files commits
+# under tags by date, and with release branches that is wrong: a card
+# merged into dev while v0.2.4 was out would be listed under 0.2.4,
+# which never shipped it.
+changelog_write() { # <version>
+    local v="$1" from sec
+    from="$(last_tag HEAD)"
+    sec="$(mktemp)"
+    cliff --tag "v$v" --strip all ${from:+"$from..HEAD"} > "$sec"
+    grep -q "^## \[$v\]" "$sec" \
+        || die "git-cliff produced no [$v] section: nothing to release since ${from:-the first commit}?"
+    awk -v want="## [$v]" -v sec="$sec" '
+        function emit(   n, i, l, buf) {
+            n = 0; while ((getline l < sec) > 0) buf[++n] = l
+            while (n > 0 && buf[n] == "") n--          # no trailing blanks
+            for (i = 1; i <= n; i++) print buf[i]
+            print ""; done = 1
+        }
+        index($0, want) == 1 { skip = 1; if (!done) emit(); next }
+        skip && /^## \[/ { skip = 0 }
+        skip { next }
+        /^## \[/ && !done { emit() }
+        { print }
+        END { if (!done) emit() }
+    ' CHANGELOG.md > "$sec.new"
+    mv "$sec.new" CHANGELOG.md
+    rm -f "$sec"
+    grep -q "^## \[$v\]" CHANGELOG.md || die "CHANGELOG.md has no [$v] section"
+}
+
+# A hotfix when NO release branch is open: run ON a `hotfix/<name>`
+# branch cut from origin/main that already carries the fix commit(s).
+# Adds the patch-bump release commit the guard requires. (With a release
+# branch open, the fix goes onto that branch instead: same version, one
+# PR, `refresh`.) After it ships, back-merge main into dev.
 cmd_hotfix() {
     local cur next ref
     ref="$(git rev-parse --abbrev-ref HEAD)"
@@ -223,41 +307,61 @@ cmd_hotfix() {
     cur="$(version_at "origin/$PRODUCTION_BRANCH")"
     next="$(bump "$cur" patch)"
     git rev-parse -q --verify "refs/tags/v$next" >/dev/null && die "tag v$next already exists"
+    if git ls-remote --exit-code --heads origin "release/v$next" >/dev/null 2>&1; then
+        die "release/v$next is open: put the fix on it instead (PR into release/v$next, then just release-refresh)"
+    fi
     note "hotfix v$next (was $cur) on $ref"
     release_commit "$cur" "$next"
     cat >&2 <<EOF
 
 Next:
-  1. git push origin $ref; open a PR $ref -> $PRODUCTION_BRANCH. checks + the release guard run.
+  1. just release-pr — pushes $ref and opens it -> $PRODUCTION_BRANCH. checks + the release guard run.
   2. Merge it with "Create a merge commit". Deploy -> Verify live -> v$next.
-  3. Back-merge: a PR $PRODUCTION_BRANCH -> $INTEGRATION_BRANCH (merge commit), so the next
-     release's tree identity holds.
+  3. just release-backmerge — $PRODUCTION_BRANCH -> $INTEGRATION_BRANCH, so dev gets the fix and the bump.
 EOF
 }
 
+# Push the current release/v* (or hotfix/*) branch and open its PR into
+# main, with the changelog, migrations and moved git deps as the body.
 cmd_pr() {
-    local v body
-    git fetch --quiet origin "$INTEGRATION_BRANCH" "$PRODUCTION_BRANCH"
-    v="$(version_at "origin/$INTEGRATION_BRANCH")"
+    local ref v body kind existing
+    ref="$(git rev-parse --abbrev-ref HEAD)"
+    case "$ref" in
+        release/v*) kind=Release ;;
+        hotfix/*) kind=Hotfix ;;
+        *) die "run this on the release/v* (or hotfix/*) branch (on '$ref'); just release-prepare makes one" ;;
+    esac
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || die "working tree is dirty"
+    v="$(version_at)"
+    [[ "$(git log -1 --format=%s)" =~ $(release_subject_re "$v") ]] \
+        || die "the head is not the release commit for v$v (just release-prepare / release-hotfix / release-refresh)"
+    git fetch --quiet --tags origin "$PRODUCTION_BRANCH"
+    git push --quiet origin "HEAD:refs/heads/$ref"
+    existing="$(gh pr list --repo "$REPO" --head "$ref" --base "$PRODUCTION_BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+    if [ -n "$existing" ]; then
+        note "pushed; the PR is already open: $existing"; return 0
+    fi
+    local from; from="$(last_tag "origin/$PRODUCTION_BRANCH")"
     body="$(mktemp)"
     {
-        echo "Release **v$v**: \`$INTEGRATION_BRANCH\` → \`$PRODUCTION_BRANCH\`."
+        echo "$kind **v$v**: \`$ref\` → \`$PRODUCTION_BRANCH\` (source \`$(git rev-parse --short HEAD)\`)."
         echo
         echo "Merge with **Create a merge commit** (never squash or rebase): the merge"
         echo "commit's tree is the tree the checks below tested, and the \`v$v\` tag"
-        echo "lands on the $INTEGRATION_BRANCH tip, which must stay in main's history."
+        echo "lands on this branch's tip, which must stay in main's history."
+        echo "\`$INTEGRATION_BRANCH\` stays open meanwhile; after the release, \`just release-backmerge\`."
         echo
         echo "On merge: deploy (server + web) → Verify live → tag \`v$v\` + GitHub Release;"
         echo "task-ios / task-macos upload TestFlight builds marked $v."
         echo
-        local m; m="$(migrations_between "$(last_tag "origin/$INTEGRATION_BRANCH")" "origin/$INTEGRATION_BRANCH")"
+        local m; m="$(migrations_between "$from" HEAD)"
         if [ -n "$m" ]; then
             echo "### ⚠ Database migrations (rollback past this release needs a data restore)"
             # shellcheck disable=SC2016,SC2086 # literal backticks; $m is a word list
             printf -- '- `%s`\n' $m
             echo
         fi
-        local d; d="$(git_deps_moved "$(last_tag "origin/$INTEGRATION_BRANCH")" "origin/$INTEGRATION_BRANCH")"
+        local d; d="$(git_deps_moved "$from" HEAD)"
         if [ -n "$d" ]; then
             echo "### Git dependencies moved (check them for migrations of their own)"
             # shellcheck disable=SC2086 # $d is a word list
@@ -265,19 +369,51 @@ cmd_pr() {
             echo
         fi
         echo "### Changelog"
-        git show "origin/$INTEGRATION_BRANCH:CHANGELOG.md" > "$body.cl"
-        awk -v want="## [$v]" 'index($0,want)==1{on=1;next} on&&/^## \[/{exit} on{print}' "$body.cl"
+        cmd_notes "$v"
     } > "$body"
-    gh pr create --repo "$REPO" --base "$PRODUCTION_BRANCH" --head "$INTEGRATION_BRANCH" \
-        --title "Release v$v" --body-file "$body"
-    rm -f "$body" "$body.cl"
+    gh pr create --repo "$REPO" --base "$PRODUCTION_BRANCH" --head "$ref" \
+        --title "$kind v$v" --body-file "$body"
+    rm -f "$body"
+}
+
+# After a release (or hotfix) reached main: bring main back into dev with
+# a merge commit, so dev carries the bump, the changelog and any fix made
+# on the release branch, and the next release branch contains main.
+# Idempotent: nothing to do when main is already in dev.
+cmd_backmerge() {
+    local v sha branch existing
+    git fetch --quiet --tags origin "$INTEGRATION_BRANCH" "$PRODUCTION_BRANCH"
+    if git merge-base --is-ancestor "origin/$PRODUCTION_BRANCH" "origin/$INTEGRATION_BRANCH"; then
+        note "origin/$PRODUCTION_BRANCH is already in origin/$INTEGRATION_BRANCH — nothing to back-merge"; return 0
+    fi
+    sha="$(git rev-parse "origin/$PRODUCTION_BRANCH")"
+    v="$(version_at "origin/$PRODUCTION_BRANCH")"
+    branch="backmerge/v$v"
+    existing="$(gh pr list --repo "$REPO" --head "$branch" --base "$INTEGRATION_BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+    if [ -z "$existing" ]; then
+        # A branch, not main itself, as the PR head: a conflict (a card that
+        # touched a workspace member's Cargo.lock entry next to its version
+        # line) is resolved by merging dev into this branch, never on main.
+        git push --quiet origin "$sha:refs/heads/$branch"
+        existing="$(gh pr create --repo "$REPO" --base "$INTEGRATION_BRANCH" --head "$branch" \
+            --title "chore(release): back-merge v$v into $INTEGRATION_BRANCH" \
+            --body "Brings \`$PRODUCTION_BRANCH\` ($(git rev-parse --short "$sha"), v$v) back into \`$INTEGRATION_BRANCH\`: the version bump, the changelog and any fix made on the release branch. **Merge commit**, never squash: dev must contain main for the next release. Opened by \`just release-backmerge\`." | tail -1)"
+    fi
+    local subj="Merge $PRODUCTION_BRANCH into $INTEGRATION_BRANCH after v$v"
+    gh pr merge "$existing" --repo "$REPO" --merge --auto --subject "$subj" \
+        || gh pr merge "$existing" --repo "$REPO" --merge --subject "$subj" \
+        || note "could not enable auto-merge; merge $existing with a merge commit once its title check is green"
+    note "back-merge: $existing"
+    if ! git merge-tree --write-tree "origin/$INTEGRATION_BRANCH" "$sha" >/dev/null 2>&1; then
+        note "it CONFLICTS: git switch $branch && git merge origin/$INTEGRATION_BRANCH, resolve (Cargo.lock: cargo update --workspace), push $branch"
+    fi
 }
 
 # CI, on a pull request into main. Fails unless merging this PR would
 # deploy exactly the tree the checks tested, at a new version, with notes.
 cmd_guard() {
     local base="${BASE_SHA:?}" head="${HEAD_SHA:?}" ref="${HEAD_REF:?}"
-    local v vb merged subject ok=1
+    local v vb merged subject cut="" ok=1
     fail() { echo "::error::$*"; ok=0; }
 
     # Bootstrap: until `dev` exists (migration step 1) main still takes
@@ -286,39 +422,67 @@ cmd_guard() {
         echo "::notice::no '$INTEGRATION_BRANCH' branch yet — release guard not enforced"
         return 0
     fi
-
-    case "$ref" in
-        "$INTEGRATION_BRANCH"|hotfix/*) ;;
-        *) fail "release PRs come from '$INTEGRATION_BRANCH' (or hotfix/*), not '$ref'. Card PRs target '$INTEGRATION_BRANCH'." ;;
-    esac
+    git fetch --quiet --tags origin \
+        "+refs/heads/$INTEGRATION_BRANCH:refs/remotes/origin/$INTEGRATION_BRANCH" 2>/dev/null || true
 
     v="$(version_at "$head")"; vb="$(version_at "$base")"
+    case "$ref" in
+        release/v*) [ "$ref" = "release/v$v" ] \
+                        || fail "branch '$ref' carries version '$v'; a release branch is named release/v<its version> (just release-prepare)" ;;
+        hotfix/*) ;;
+        *) fail "release PRs come from release/vX.Y.Z (just release-prepare) or hotfix/*, not '$ref'. Card PRs target '$INTEGRATION_BRANCH'." ;;
+    esac
+
     if ! is_semver "$v"; then fail "Cargo.toml version '$v' is not X.Y.Z"
-    elif ! gt "$v" "$vb"; then fail "version $v is not greater than main's $vb — run just release-prepare on $INTEGRATION_BRANCH"
+    elif ! gt "$v" "$vb"; then fail "version $v is not greater than main's $vb — cut the release with just release-prepare"
     fi
-    git fetch --quiet --tags origin 2>/dev/null || true
     git rev-parse -q --verify "refs/tags/v$v" >/dev/null && fail "tag v$v already exists"
 
     git show "$head:CHANGELOG.md" | grep -q "^## \[$v\]" \
         || fail "CHANGELOG.md at the head has no [$v] section"
 
     subject="$(git log -1 --format=%s "$head")"
-    local want_re="^chore\\(release\\): v${v//./\\.}( \\(#[0-9]+\\))?\$"
-    [[ "$subject" =~ $want_re ]] \
-        || fail "the head commit must be the release commit 'chore(release): v$v' (it is '$subject'). Something landed on $ref after release-prepare: re-run it."
+    [[ "$subject" =~ $(release_subject_re "$v") ]] \
+        || fail "the head commit must be the release commit 'chore(release): v$v' (it is '$subject'). A fix landed on $ref after it: run just release-refresh on the branch and push."
+
+    # Where the release was cut: the parent of its first release commit.
+    # It must be a commit of dev — a release ships what dev integrated,
+    # plus at most fixes made on the release branch itself. (Not dev's
+    # HEAD: dev keeps moving while the release is out.)
+    if [[ "$ref" == release/v* ]]; then
+        local first
+        first="$(git log --reverse --format='%H %s' "$base..$head" \
+            | while read -r h s; do [[ "$s" =~ $(release_subject_re "$v") ]] && { echo "$h"; break; }; done || true)"
+        if [ -z "$first" ]; then
+            fail "no 'chore(release): v$v' commit between main and the head"
+        elif ! git rev-parse -q --verify "origin/$INTEGRATION_BRANCH" >/dev/null; then
+            fail "cannot see origin/$INTEGRATION_BRANCH to check where $ref was cut"
+        else
+            cut="$(git rev-parse "$first^")"
+            git merge-base --is-ancestor "$cut" "origin/$INTEGRATION_BRANCH" \
+                || fail "$ref was not cut from $INTEGRATION_BRANCH (its base $(git rev-parse --short "$cut") is not in origin/$INTEGRATION_BRANCH). Re-cut it: just release-prepare"
+        fi
+    fi
+
+    # Main must already be in the head: the back-merge of the last release
+    # happened before this branch was cut (or, for a hotfix, it was cut
+    # from main).
+    git merge-base --is-ancestor "$base" "$head" \
+        || fail "main ($(git rev-parse --short "$base")) is not in $ref: back-merge main into $INTEGRATION_BRANCH (just release-backmerge) and re-cut, or merge origin/main into $ref and run just release-refresh"
 
     # Tree identity: the merge commit main will get must have the head's
     # tree — so checks (which test this tree), deploy (which builds the
     # merge commit) and the tag (on the head) all name the same source.
-    # It holds as long as main only ever receives release merges.
     merged="$(git merge-tree --write-tree "$base" "$head" 2>/dev/null | head -1 || true)"
     [ "$merged" = "$(git rev-parse "$head^{tree}")" ] \
-        || fail "merging into main would not reproduce the head's tree (main has commits that are not in $ref). Back-merge main into $INTEGRATION_BRANCH first."
+        || fail "merging into main would not reproduce the head's tree"
 
     {
         echo "### Release guard: v$v ($ref → main)"
         echo "- version: $vb → $v"
         echo "- head: \`$(git rev-parse --short "$head")\` $subject"
+        [ -n "$cut" ] && echo "- cut from $INTEGRATION_BRANCH at: \`$(git rev-parse --short "$cut")\` ($(git rev-list --count "$cut..origin/$INTEGRATION_BRANCH") commits on $INTEGRATION_BRANCH since — they ship next time)"
+        [ -n "$cut" ] && echo "- fixes on the release branch: $(git log --format=%s "$cut..$head" | grep -cvE "$(release_subject_re "$v")" || true)"
         echo "- merge tree identical to head tree: $([ "$merged" = "$(git rev-parse "$head^{tree}")" ] && echo yes || echo NO)"
         local m; m="$(migrations_between "$(last_tag "$base")" "$head" | paste -sd, -)"
         echo "- migrations since last release: ${m:-none}"
@@ -343,9 +507,9 @@ cmd_publish() {
     if ! grep -q "^## \[$v\]" CHANGELOG.md; then
         note "CHANGELOG.md has no [$v] section — not a release commit, nothing to publish"; return 0
     fi
-    # Tag the dev tip (the merge's second parent) when it carries the same
-    # tree: that commit is in dev's AND main's history, so the next
-    # changelog on dev starts after it. A plain commit is tagged itself.
+    # Tag the release branch's tip (the merge's second parent) when it
+    # carries the same tree: that commit reaches dev with the back-merge,
+    # so the next changelog starts after it. A plain commit is tagged itself.
     target="$(git rev-parse HEAD)"
     if git rev-parse -q --verify HEAD^2 >/dev/null \
         && [ "$(git rev-parse 'HEAD^2^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
@@ -398,6 +562,8 @@ case "${1:-}" in
     guard) shift; cmd_guard "$@" ;;
     publish) shift; cmd_publish "$@" ;;
     hotfix) shift; cmd_hotfix "$@" ;;
+    refresh) shift; cmd_refresh "$@" ;;
+    backmerge) shift; cmd_backmerge "$@" ;;
     migrations) shift; migrations_between "${1:-$(last_tag)}" "${2:-HEAD}" ;;
-    *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
