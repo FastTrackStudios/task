@@ -311,6 +311,19 @@ has nothing to materialize. When in doubt the pull refuses and reports the
 file as kept, because a refused replace costs a retry and a wrong delete costs
 the org's pages.
 
+t[files.peering.idempotent-import]
+A pull that changes nothing writes nothing. Importing a remote head that the
+local view already reaches (it is a visible head, or an ancestor of one, which
+is the ordinary case when the peer is behind this host) records no operation:
+the version store's op log grows only when a pull changes what is visible.
+Operations that recorded nothing (one parent, the parent's view, no rewritten
+commits), which sweeps wrote before this rule, are dropped from a root's log
+when the server's device sync starts: the operations that remain keep their
+views and are re-parented onto the nearest kept ancestor, the op head moves
+only if no other writer moved it meanwhile, and only then are the unreachable
+operation files swept. No version, head or GC reference changes.
+`TASK_FILES_COMPACT_OPS=0` turns the compaction off.
+
 ### Every host serves the whole org
 
 t[files.peering.serving]

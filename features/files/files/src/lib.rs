@@ -57,7 +57,9 @@ mod transcode;
 mod versions;
 pub mod watcher;
 
-pub use backend::{Captured, FilesBackend, LocationBoundaries, MaterializeReport, SyncTreeMeta};
+pub use backend::{
+    Captured, FilesBackend, LocationBoundaries, MaterializeReport, OpLogCompaction, SyncTreeMeta,
+};
 pub use remotes::{AddressBook, IrohRemotes, bind_endpoint};
 // The cadence engine moved to `files-domain`: it is a state machine
 // about time, and needs neither jj-lib nor the version store. Re-exported

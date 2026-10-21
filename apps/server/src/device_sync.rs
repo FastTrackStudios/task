@@ -395,6 +395,9 @@ fn interval() -> Option<Duration> {
 fn sweep_every(state: &AppState, slug: &str, endpoint: &iroh::Endpoint, interval: Duration) {
     let (state, slug_owned, endpoint) = (state.clone(), slug.to_owned(), endpoint.clone());
     tokio::spawn(async move {
+        // Before the first pass, and in the same task so no pass runs
+        // beside it: drop the no-op operations earlier sweeps wrote.
+        compact_op_logs(&state, &slug_owned).await;
         // A first pass immediately, so an operator who has just
         // pasted an id does not wait a minute to see it take.
         let mut timer = tokio::time::interval(interval);
@@ -404,6 +407,59 @@ fn sweep_every(state: &AppState, slug: &str, endpoint: &iroh::Endpoint, interval
         }
     });
     info!(%slug, secs = interval.as_secs(), "device sync: sweeping this org's devices");
+}
+
+/// Whether to compact each root's op log when the sweep starts.
+/// On unless `TASK_FILES_COMPACT_OPS=0`.
+fn compacts_op_logs() -> bool {
+    !std::env::var("TASK_FILES_COMPACT_OPS").is_ok_and(|v| v == "0")
+}
+
+/// Drop the operations that recorded nothing from every root this org
+/// holds — the leftovers of sweeps from before
+/// `files.peering.idempotent-import`, one per root per pass (76k on the
+/// oldest prod roots). Once a log is clean this is a walk of what is
+/// left and writes nothing. Best-effort: a root that fails is logged and
+/// keeps the log it had.
+// t[impl files.peering.idempotent-import]
+async fn compact_op_logs(state: &AppState, slug: &str) {
+    if !compacts_op_logs() {
+        return;
+    }
+    let Some(org) = state.org(slug) else { return };
+    let roots = match org.files.replica_roots().await {
+        Ok(roots) => roots,
+        Err(e) => {
+            warn!(%slug, error = %e, "device sync: cannot list roots to compact");
+            return;
+        }
+    };
+    for root in roots {
+        let (files, id) = (org.files.clone(), root.id);
+        let outcome = tokio::task::spawn_blocking(move || files.compact_op_log(id, None)).await;
+        match outcome {
+            Ok(Ok(report)) if report.ops_dropped > 0 => info!(
+                %slug,
+                root = %root.id,
+                name = %root.name,
+                before = report.ops_before,
+                after = report.ops_after,
+                rewritten = report.ops_rewritten,
+                "device sync: dropped operations that recorded nothing"
+            ),
+            Ok(Ok(report)) => {
+                if let Some(why) = report.skipped {
+                    info!(%slug, root = %root.id, %why, "device sync: op log left as it was");
+                }
+            }
+            Ok(Err(e)) => {
+                warn!(%slug, root = %root.id, error = %e, "device sync: op log compaction failed")
+            }
+            Err(e) => {
+                warn!(%slug, root = %root.id, error = %e, "device sync: op log compaction panicked")
+            }
+        }
+    }
 }
 
 #[cfg(test)]
