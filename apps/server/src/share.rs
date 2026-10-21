@@ -1633,8 +1633,9 @@ async fn live_guest(
         setlist,
         reset: (reset_secs > 0).then(|| std::time::Duration::from_secs(u64::from(reset_secs))),
         files: std::sync::Arc::new(files),
+        access: crate::live::LiveAccess::default(),
     };
-    let only = crate::live::LiveOnly(org.live.clone());
+    let only = crate::live::LiveOnly::new(org.live.clone(), lane.access.clone());
     let router = architect::LayerRouter::new()
         .with(
             live_proto::live_sessions_rpc_service_descriptor(),

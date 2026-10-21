@@ -22,6 +22,15 @@
 //! Two lanes serve it: a member's ([`LiveLane`], any setlist of the org)
 //! and a guest's ([`GuestLiveLane`], a live share link's one setlist, with
 //! each song's files as a documents link).
+//!
+//! **Observers.** A peer that only watches (an assistant without edit
+//! rights) calls `observe` instead of `join`. Its connection's
+//! [`LiveAccess`] then marks the set's song docs read-only, and that
+//! connection's `DocSync` serves them through [`LiveHost::watch`]: the doc
+//! and every change to it go down, and every update it sends up is
+//! refused (counted, logged, never applied or relayed). Presence is not
+//! gated: an observer shows up in the set like anyone. Members and bots
+//! with edit rights `join` and write live.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
@@ -43,6 +52,9 @@ const IDLE: Duration = Duration::from_secs(15 * 60);
 /// A reset interval is never shorter than this (a link's typo is not a
 /// set that resets every second).
 const SHORTEST_RESET: Duration = Duration::from_secs(30);
+/// How often a watched doc is touched in the registry, so it is not let
+/// go while only observers follow it (well inside [`IDLE`]).
+const WATCH_KEEPALIVE: Duration = Duration::from_secs(60);
 /// The library kind a setlist is.
 const SETLIST_KIND: &str = "songlist";
 /// A set for a service or a show — played live as a song list is.
@@ -213,7 +225,131 @@ impl LiveHost {
             songs,
             resets_every_secs,
             resets_at,
+            read_only: false,
         })
+    }
+
+    /// Serve `doc_id` to a peer that only watches it: the doc's history
+    /// it lacks (after `from`, its version vector) and every change after
+    /// that go down `down`; every update it sends up `up` is refused —
+    /// never applied, never relayed. Runs until the peer's up channel
+    /// closes (or the doc stops being served: a new epoch), like a
+    /// `DocSync` session.
+    ///
+    /// The registry does not count this as a session, so the doc is
+    /// touched every [`WATCH_KEEPALIVE`] to keep it from being let go
+    /// while only observers follow it.
+    ///
+    /// # Errors
+    ///
+    /// The doc is not served here, or `from` is not a version vector.
+    pub async fn watch(
+        &self,
+        doc_id: Uuid,
+        from: Vec<u8>,
+        mut up: vox::Rx<Vec<u8>>,
+        down: vox::Tx<SyncDown>,
+    ) -> Result<(), SyncError> {
+        use crdt::loro::{ExportMode, VersionVector};
+        let registry = self.registry();
+        let doc = registry.doc(doc_id).await?;
+        let from = if from.is_empty() {
+            VersionVector::new()
+        } else {
+            VersionVector::decode(&from).map_err(|e| SyncError::BadVersion(e.to_string()))?
+        };
+        // Subscribe before the first export, so a change landing between
+        // the two is not missed (sending it twice is harmless: imports
+        // merge). The callback holds no doc handle — see the deadlock
+        // note on `CrdtDoc::downgrade`.
+        let changed = Arc::new(tokio::sync::Notify::new());
+        let wake = Arc::clone(&changed);
+        let subscription =
+            doc.loro()
+                .subscribe_root(Arc::new(move |_: crdt::loro::event::DiffEvent<'_>| {
+                    wake.notify_one()
+                }));
+        // The frontier first, then everything after `from`: the export can
+        // only run ahead of what `sent` says, never behind it.
+        let mut sent = doc.loro().oplog_vv();
+        let backlog = doc
+            .loro()
+            .export(ExportMode::updates(&from))
+            .map_err(|e| SyncError::Internal(format!("export updates: {e}")))?;
+        down.send(SyncDown::Attached {
+            server_vv: sent.encode(),
+            backlog,
+        })
+        .await
+        .map_err(|e| SyncError::Internal(format!("send attach: {e}")))?;
+        wide::set("live.sync", "observer");
+
+        let mut refused: u64 = 0;
+        let mut keepalive = tokio::time::interval(WATCH_KEEPALIVE);
+        keepalive.tick().await; // the first tick is now
+        loop {
+            tokio::select! {
+                () = changed.notified() => {
+                    let now = doc.loro().oplog_vv();
+                    if now == sent {
+                        continue;
+                    }
+                    let update = match doc.loro().export(ExportMode::updates(&sent)) {
+                        Ok(update) => update,
+                        Err(e) => {
+                            tracing::warn!(%doc_id, "live: an observer's update could not be exported: {e}");
+                            continue;
+                        }
+                    };
+                    sent = now;
+                    if down.send(SyncDown::Update(update)).await.is_err() {
+                        break;
+                    }
+                }
+                frame = up.recv() => {
+                    if !matches!(frame, Ok(Some(_))) {
+                        break;
+                    }
+                    refused += 1;
+                    if refused == 1 {
+                        tracing::warn!(%doc_id, "live: an observer sent an edit; refused (read-only)");
+                    }
+                }
+                _ = keepalive.tick() => {
+                    // Gone from the host (a new epoch): the session ends,
+                    // and the peer re-observes the next epoch's docs.
+                    if registry.doc(doc_id).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        wide::set(
+            "live.writes_refused",
+            i64::try_from(refused).unwrap_or(i64::MAX),
+        );
+        // The subscription goes before the doc handle.
+        drop(subscription);
+        drop(doc);
+        Ok(())
+    }
+
+    /// Serve `doc_id` over `DocSync` as `access` allows: read-only to a
+    /// connection that observes it ([`Self::watch`]), else as the
+    /// registry does.
+    async fn sync_as(
+        &self,
+        access: &LiveAccess,
+        doc_id: Uuid,
+        from: Vec<u8>,
+        up: vox::Rx<Vec<u8>>,
+        down: vox::Tx<SyncDown>,
+    ) -> Result<(), SyncError> {
+        if access.is_read_only(doc_id) {
+            self.watch(doc_id, from, up, down).await
+        } else {
+            self.registry().sync(doc_id, from, up, down).await
+        }
     }
 
     fn title(&self, slug: &str) -> String {
@@ -271,23 +407,86 @@ fn now_micros() -> f64 {
     start.elapsed().as_secs_f64() * 1e6
 }
 
+/// What one connection may do in the live sets it reached: the song docs
+/// it observes (read-only) rather than joined. Shared by that
+/// connection's `LiveSessions` lane and its `DocSync`, so an `observe`
+/// makes its `DocSync` refuse the set's writes, and a `join` lifts it.
+/// A fresh connection observes nothing.
+#[derive(Clone, Default)]
+pub struct LiveAccess {
+    read_only: Arc<Mutex<HashSet<Uuid>>>,
+}
+
+impl LiveAccess {
+    /// `set`'s songs are read-only on this connection from now on.
+    fn observe(&self, set: &LiveSet) {
+        lock(&self.read_only).extend(song_ids(set));
+    }
+
+    /// `set`'s songs are writable on this connection again.
+    fn join(&self, set: &LiveSet) {
+        let mut read_only = lock(&self.read_only);
+        for id in song_ids(set) {
+            read_only.remove(&id);
+        }
+    }
+
+    /// Whether this connection only watches `doc_id`.
+    #[must_use]
+    pub fn is_read_only(&self, doc_id: Uuid) -> bool {
+        lock(&self.read_only).contains(&doc_id)
+    }
+}
+
+/// The ids of `set`'s song docs (not its presence channel: an observer's
+/// presence counts like anyone's).
+fn song_ids(set: &LiveSet) -> impl Iterator<Item = Uuid> + '_ {
+    set.songs.iter().filter_map(|s| s.doc_id.parse().ok())
+}
+
+/// `set`, as an observer gets it — `access` marking its songs read-only.
+fn observed(access: &LiveAccess, mut set: LiveSet) -> LiveSet {
+    access.observe(&set);
+    set.read_only = true;
+    wide::set("live.role", "observer");
+    set
+}
+
 /// A member's live sessions: any setlist of the org.
 #[derive(Clone)]
-pub struct LiveLane(pub LiveHost);
+pub struct LiveLane {
+    pub host: LiveHost,
+    /// This connection's access, shared with its [`DocSyncRouter`].
+    pub access: LiveAccess,
+}
+
+impl LiveLane {
+    /// A lane for one connection, observing nothing yet.
+    #[must_use]
+    pub fn new(host: LiveHost, access: LiveAccess) -> Self {
+        Self { host, access }
+    }
+}
 
 impl live_proto::LiveSessions for LiveLane {
     async fn join(&self, setlist: String) -> Result<LiveSet, LiveError> {
-        self.0.join(&setlist, None)
+        let set = self.host.join(&setlist, None)?;
+        self.access.join(&set);
+        Ok(set)
     }
 
     async fn now(&self) -> f64 {
         now_micros()
     }
+
+    async fn observe(&self, setlist: String) -> Result<LiveSet, LiveError> {
+        Ok(observed(&self.access, self.host.join(&setlist, None)?))
+    }
 }
 
 impl live_proto::LiveSessionsStreamSource for LiveLane {
     fn epochs_hub(&self) -> &architect::PubSub<LiveEpoch> {
-        self.0.epochs_hub()
+        self.host.epochs_hub()
     }
 }
 
@@ -300,11 +499,14 @@ pub struct GuestLiveLane {
     pub reset: Option<Duration>,
     /// Each song's files link, by slug.
     pub files: Arc<HashMap<String, String>>,
+    /// This connection's access, shared with its [`LiveOnly`].
+    pub access: LiveAccess,
 }
 
-impl live_proto::LiveSessions for GuestLiveLane {
-    /// `setlist` empty joins the link's set — a guest need not know its id.
-    async fn join(&self, setlist: String) -> Result<LiveSet, LiveError> {
+impl GuestLiveLane {
+    /// The link's set, joined: `setlist` empty is the link's set — a guest
+    /// need not know its id — and any other set is refused.
+    fn open(&self, setlist: String) -> Result<LiveSet, LiveError> {
         let setlist = if setlist.is_empty() {
             self.setlist.clone()
         } else {
@@ -320,9 +522,23 @@ impl live_proto::LiveSessions for GuestLiveLane {
         }
         Ok(set)
     }
+}
+
+impl live_proto::LiveSessions for GuestLiveLane {
+    /// `setlist` empty joins the link's set — a guest need not know its id.
+    async fn join(&self, setlist: String) -> Result<LiveSet, LiveError> {
+        let set = self.open(setlist)?;
+        self.access.join(&set);
+        Ok(set)
+    }
 
     async fn now(&self) -> f64 {
         now_micros()
+    }
+
+    /// `setlist` empty observes the link's set.
+    async fn observe(&self, setlist: String) -> Result<LiveSet, LiveError> {
+        Ok(observed(&self.access, self.open(setlist)?))
     }
 }
 
@@ -332,12 +548,14 @@ impl live_proto::LiveSessionsStreamSource for GuestLiveLane {
     }
 }
 
-/// The org's one `DocSync`: a live doc to the live host, anything else to
-/// the vault's registry.
+/// The org's one `DocSync`: a live doc to the live host (read-only where
+/// this connection observes it), anything else to the vault's registry.
 #[derive(Clone)]
 pub struct DocSyncRouter {
     pub live: LiveHost,
     pub vault: crate::doc_guard::GuardedVaultDocs,
+    /// This connection's access, shared with its [`LiveLane`].
+    pub access: LiveAccess,
 }
 
 impl DocSync for DocSyncRouter {
@@ -349,16 +567,31 @@ impl DocSync for DocSyncRouter {
         down: vox::Tx<SyncDown>,
     ) -> Result<(), SyncError> {
         if self.live.admits(doc_id) {
-            self.live.registry().sync(doc_id, from, up, down).await
+            self.live
+                .sync_as(&self.access, doc_id, from, up, down)
+                .await
         } else {
             self.vault.sync(doc_id, from, up, down).await
         }
     }
 }
 
-/// A guest's `DocSync` / `DocPresence`: live docs only.
+/// A guest's `DocSync` / `DocPresence`: live docs only (read-only where
+/// this connection observes them).
 #[derive(Clone)]
-pub struct LiveOnly(pub LiveHost);
+pub struct LiveOnly {
+    pub host: LiveHost,
+    /// This connection's access, shared with its [`GuestLiveLane`].
+    pub access: LiveAccess,
+}
+
+impl LiveOnly {
+    /// The live docs for one connection, observing nothing yet.
+    #[must_use]
+    pub fn new(host: LiveHost, access: LiveAccess) -> Self {
+        Self { host, access }
+    }
+}
 
 impl DocSync for LiveOnly {
     async fn sync(
@@ -368,7 +601,9 @@ impl DocSync for LiveOnly {
         up: vox::Rx<Vec<u8>>,
         down: vox::Tx<SyncDown>,
     ) -> Result<(), SyncError> {
-        self.0.registry().sync(doc_id, from, up, down).await
+        self.host
+            .sync_as(&self.access, doc_id, from, up, down)
+            .await
     }
 }
 
@@ -379,7 +614,7 @@ impl DocPresence for LiveOnly {
         up: vox::Rx<Vec<u8>>,
         down: vox::Tx<Vec<u8>>,
     ) -> Result<(), SyncError> {
-        self.0.registry().presence(doc_id, up, down).await
+        self.host.registry().presence(doc_id, up, down).await
     }
 }
 

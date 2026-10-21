@@ -12,7 +12,7 @@ use collection::{CollectionKind, CollectionService as _, NodeRef, Placement};
 use crdt::CrdtDoc;
 use crdt::sync::{DocSyncClient, SyncedDoc};
 use live_proto::{LiveSessionsClient, LiveSessionsStreamClient};
-use task_server::live::{GuestLiveLane, LiveHost, LiveLane, LiveOnly};
+use task_server::live::{GuestLiveLane, LiveAccess, LiveHost, LiveLane, LiveOnly};
 use uuid::Uuid;
 
 async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
@@ -51,18 +51,27 @@ fn host(tmp: &std::path::Path) -> (LiveHost, String) {
     )
 }
 
-/// A member's router: the lanes the org mounts for live sessions.
+/// A member's router: the lanes the org mounts for live sessions, over one
+/// connection's access.
 fn member(host: &LiveHost) -> LocalServer {
-    let only = LiveOnly(host.clone());
+    let access = LiveAccess::default();
+    let only = LiveOnly::new(host.clone(), access.clone());
     let router = LayerRouter::new()
         .with(
             live_proto::live_sessions_rpc_service_descriptor(),
-            live_proto::serve(LiveLane(host.clone())),
+            live_proto::serve(LiveLane::new(host.clone(), access.clone())),
         )
-        .merge(live_proto::stream_layer(LiveLane(host.clone())))
+        .merge(live_proto::stream_layer(LiveLane::new(
+            host.clone(),
+            access,
+        )))
         .with(
             crdt::sync::doc_sync_service_descriptor(),
-            crdt::sync::DocSyncDispatcher::new(only),
+            crdt::sync::DocSyncDispatcher::new(only.clone()),
+        )
+        .with(
+            crdt::sync::doc_presence_service_descriptor(),
+            crdt::sync::DocPresenceDispatcher::new(only),
         );
     LocalServer::serve(router, Scope::new())
 }
@@ -198,6 +207,7 @@ async fn a_guest_is_kept_to_its_links_set_and_given_its_songs_files() {
         setlist: setlist.clone(),
         reset: Some(Duration::from_secs(300)),
         files: std::sync::Arc::new(files),
+        access: LiveAccess::default(),
     };
     let router = LayerRouter::new().with(
         live_proto::live_sessions_rpc_service_descriptor(),
@@ -233,4 +243,176 @@ async fn a_guest_is_kept_to_its_links_set_and_given_its_songs_files() {
         setlist,
         "empty is the link's set"
     );
+    assert!(!set.read_only, "a guest who joins plays");
+    let watched = live.observe(String::new()).await.unwrap();
+    assert!(watched.read_only, "a guest may only watch");
+    assert_eq!(watched.setlist, setlist, "empty observes the link's set");
+    assert!(
+        live.observe("another-set".into()).await.is_err(),
+        "an observer too is kept to the link's set"
+    );
+}
+
+/// `song.<field>` of a replica, as a string.
+fn field(doc: &CrdtDoc, name: &str) -> Option<String> {
+    doc.loro()
+        .get_map("song")
+        .get(name)
+        .and_then(|v| v.into_value().ok())
+        .and_then(|v| v.into_string().ok())
+        .map(|s| s.to_string())
+}
+
+/// Set `song.<name>` on a replica, as its user would.
+fn edit(doc: &CrdtDoc, name: &str, value: &str) {
+    doc.loro().get_map("song").insert(name, value).unwrap();
+    doc.loro().commit();
+}
+
+// Spec §7 S1: an observer gets the set and every change in it, but what
+// it sends up a song's DocSync is refused — nobody else sees it, and the
+// server's doc never holds it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_observer_follows_a_song_but_its_edits_are_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host, setlist) = host(tmp.path());
+    // Two connections: a member who plays, an assistant who watches.
+    let band = member(&host);
+    let watcher = member(&host);
+    let band_live: LiveSessionsClient = band.establish().await.unwrap();
+    let watcher_live: LiveSessionsClient = watcher.establish().await.unwrap();
+
+    let set = band_live.join(setlist.clone()).await.unwrap();
+    assert!(!set.read_only, "a member who joins writes live");
+    let watched = watcher_live.observe(setlist.clone()).await.unwrap();
+    assert!(watched.read_only, "an observer is told it only watches");
+    assert_eq!(
+        watched.songs, set.songs,
+        "an observer gets the same set, the same docs"
+    );
+    assert_eq!(watched.presence_id, set.presence_id);
+
+    let washed: Uuid = set.songs[0].doc_id.parse().unwrap();
+    let player = replica(&band, washed).await;
+    edit(&player, "tempo", "78");
+    let check = replica(&band, washed).await;
+    eventually("a second member sees the first edit", || {
+        field(&check, "tempo").as_deref() == Some("78")
+    })
+    .await;
+
+    // The observer catches up on what was done before it came…
+    let observer = replica(&watcher, washed).await;
+    eventually("the observer has the set's history", || {
+        field(&observer, "tempo").as_deref() == Some("78")
+    })
+    .await;
+    // …and follows what is done after.
+    edit(&player, "tempo", "80");
+    eventually("the observer follows a live edit", || {
+        field(&observer, "tempo").as_deref() == Some("80")
+    })
+    .await;
+
+    // Its own edit goes nowhere.
+    edit(&observer, "key", "G");
+    edit(&player, "tempo", "82");
+    eventually("the member's later edit arrived everywhere", || {
+        field(&observer, "tempo").as_deref() == Some("82")
+            && field(&check, "tempo").as_deref() == Some("82")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        field(&check, "key"),
+        None,
+        "no member sees an observer's edit"
+    );
+    assert_eq!(field(&player, "key"), None);
+    let served = host.registry().doc(washed).await.unwrap();
+    assert_eq!(
+        field(&served, "key"),
+        None,
+        "the server's doc never took the observer's edit"
+    );
+    assert_eq!(field(&served, "tempo").as_deref(), Some("82"));
+    let late = replica(&band, washed).await;
+    eventually("a late member has the set", || {
+        field(&late, "tempo").as_deref() == Some("82")
+    })
+    .await;
+    assert_eq!(field(&late, "key"), None, "nor does anyone who comes later");
+}
+
+// An observer is still in the room: its presence counts like anyone's.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_observers_presence_is_seen_by_the_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host, setlist) = host(tmp.path());
+    let band = member(&host);
+    let watcher = member(&host);
+    let band_live: LiveSessionsClient = band.establish().await.unwrap();
+    let watcher_live: LiveSessionsClient = watcher.establish().await.unwrap();
+    let set = band_live.join(setlist.clone()).await.unwrap();
+    let watched = watcher_live.observe(setlist).await.unwrap();
+    let channel: Uuid = watched.presence_id.parse().unwrap();
+    assert_eq!(watched.presence_id, set.presence_id);
+
+    let (player, mut player_driver) = crdt::sync::PresencePeer::new(channel, 30_000);
+    let (assistant, mut assistant_driver) = crdt::sync::PresencePeer::new(channel, 30_000);
+    let band_presence: crdt::sync::DocPresenceClient = band.establish().await.unwrap();
+    let watcher_presence: crdt::sync::DocPresenceClient = watcher.establish().await.unwrap();
+    tokio::spawn(async move {
+        let _ = player_driver.run(&band_presence).await;
+    });
+    tokio::spawn(async move {
+        let _ = assistant_driver.run(&watcher_presence).await;
+    });
+    player.set("player", "on washed");
+    assistant.set("assistant", "watching washed");
+    eventually("the band sees the observer", || {
+        player.states().contains_key("assistant")
+    })
+    .await;
+    eventually("the observer sees the band", || {
+        assistant.states().contains_key("player")
+    })
+    .await;
+}
+
+// Observing is per connection and a join lifts it: the same connection,
+// once it joins, writes live again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_join_after_observing_writes_live() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host, setlist) = host(tmp.path());
+    let band = member(&host);
+    let watcher = member(&host);
+    let band_live: LiveSessionsClient = band.establish().await.unwrap();
+    let watcher_live: LiveSessionsClient = watcher.establish().await.unwrap();
+    let set = band_live.join(setlist.clone()).await.unwrap();
+    let washed: Uuid = set.songs[0].doc_id.parse().unwrap();
+    let player = replica(&band, washed).await;
+
+    // Observing on one connection does not make the band read-only.
+    watcher_live.observe(setlist.clone()).await.unwrap();
+    edit(&player, "tempo", "78");
+    let check = replica(&band, washed).await;
+    eventually("the band still writes", || {
+        field(&check, "tempo").as_deref() == Some("78")
+    })
+    .await;
+
+    let joined = watcher_live.join(setlist).await.unwrap();
+    assert!(!joined.read_only, "a join plays");
+    let now_playing = replica(&watcher, washed).await;
+    eventually("it has the set", || {
+        field(&now_playing, "tempo").as_deref() == Some("78")
+    })
+    .await;
+    edit(&now_playing, "key", "G");
+    eventually("the band sees its edit", || {
+        field(&player, "key").as_deref() == Some("G")
+    })
+    .await;
 }

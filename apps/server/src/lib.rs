@@ -3825,6 +3825,10 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
     // Unused only in a core-only build (every plugin compiled out).
     #[allow(unused_variables)]
     let on = |id: &str| org.plugins.contains(id);
+    // This connection's live access: the sets it observes rather than
+    // joined, shared by its `LiveSessions` lane and its `DocSync` (which
+    // refuses an observer's writes).
+    let live_access = LiveAccess::default();
 
     let mut router = LayerRouter::new()
         // Auth — wrapped with the server middleware that validates
@@ -4414,9 +4418,12 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             // Live sessions: a setlist played together, kept open here.
             .with(
                 live_proto::live_sessions_rpc_service_descriptor(),
-                live_proto::serve(live::LiveLane(org.live.clone())),
+                live_proto::serve(live::LiveLane::new(org.live.clone(), live_access.clone())),
             )
-            .merge(live_proto::stream_layer(live::LiveLane(org.live.clone())));
+            .merge(live_proto::stream_layer(live::LiveLane::new(
+                org.live.clone(),
+                live_access.clone(),
+            )));
     }
 
     // ── Mealplan plugin — cookbook / plan / pantry / shopping /
@@ -4538,7 +4545,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // the plain files on disk authoritative for everyone else.
         .with(
             crdt::sync::doc_sync_service_descriptor(),
-            crdt::sync::DocSyncDispatcher::new(org_doc_sync(org)),
+            crdt::sync::DocSyncDispatcher::new(org_doc_sync(org, &live_access)),
         )
         // The same documents for the org's other nodes (`offline.peers`):
         // listed and exchanged by path, gated on `docs/replica` — the
@@ -4661,17 +4668,25 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 /// The org's one `DocSync` backend: live-session docs to the live host,
 /// vault files to the vault's registry.
 #[cfg(feature = "plugin-fasttrackstudio")]
-fn org_doc_sync(org: &OrgAppState) -> live::DocSyncRouter {
+fn org_doc_sync(org: &OrgAppState, live_access: &LiveAccess) -> live::DocSyncRouter {
     live::DocSyncRouter {
         live: org.live.clone(),
         vault: vault_docs(org),
+        access: live_access.clone(),
     }
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
-fn org_doc_sync(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
+fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> doc_guard::GuardedVaultDocs {
     vault_docs(org)
 }
+
+/// One connection's live access (`live::LiveAccess`): the sets it only
+/// observes. Nothing to hold without the live sessions' plugin.
+#[cfg(feature = "plugin-fasttrackstudio")]
+type LiveAccess = live::LiveAccess;
+#[cfg(not(feature = "plugin-fasttrackstudio"))]
+type LiveAccess = ();
 
 /// Whether `ffprobe` runs here — asked once per process, not once per org.
 /// The answer is the machine's (what is on `PATH`), and spawning a
