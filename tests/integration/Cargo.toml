@@ -80,6 +80,11 @@ chrono = { workspace = true }
 # than restated here.
 inbox-proto = { workspace = true, features = ["vox"] }
 scheduling-proto = { workspace = true }
+# `contacts_security.rs`: CardDAV accounts saved over the wire, synced
+# against the fake TLS server `contacts::testing` provides, and the
+# vault they sit in replicated to a peer.
+contacts = { workspace = true, features = ["test-support"] }
+contacts-proto = { workspace = true, features = ["vox"] }
 
 [lints]
 workspace = true

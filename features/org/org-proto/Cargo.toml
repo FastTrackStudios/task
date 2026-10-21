@@ -36,6 +36,9 @@ full = ["vox", "server", "fake"]
 
 [dev-dependencies]
 tempfile = "3"
+# Wire-compat tests decode an older client's bytes through the same
+# writer→reader compat program vox uses (tests/bots_wire_compat.rs).
+vox-phon = "0.10.0-rc.7"
 
 [lints]
 workspace = true

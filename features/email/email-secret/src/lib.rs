@@ -121,6 +121,83 @@ impl Secret {
             }
         }
     }
+    /// [`Secret::resolve`] for a caller that is not async — a sync RPC
+    /// backend running on a blocking thread (the contacts feature's
+    /// CardDAV pull). Same variants, same errors; a `Command` is run
+    /// with `std::process` and the same timeout.
+    pub fn resolve_blocking(&self) -> Result<SecretValue, SecretError> {
+        match self {
+            Self::Raw { value } => Ok(SecretValue::new(value.clone())),
+            Self::EnvVar { name } => {
+                let v = std::env::var(name).map_err(|_| SecretError::EnvMissing(name.clone()))?;
+                Ok(SecretValue::new(v))
+            }
+            Self::Command { argv, timeout_ms } => {
+                #[cfg(feature = "command")]
+                {
+                    let timeout = timeout_ms
+                        .map(Duration::from_millis)
+                        .unwrap_or(DEFAULT_COMMAND_TIMEOUT);
+                    command::run_blocking(argv, timeout)
+                }
+                #[cfg(not(feature = "command"))]
+                {
+                    let _ = (argv, timeout_ms);
+                    Err(SecretError::Unsupported("command resolver disabled"))
+                }
+            }
+            Self::Keyring { service, account } => {
+                #[cfg(feature = "keyring")]
+                {
+                    keyring_resolver::get(service, account)
+                }
+                #[cfg(not(feature = "keyring"))]
+                {
+                    let _ = (service, account);
+                    Err(SecretError::Unsupported("keyring resolver disabled"))
+                }
+            }
+        }
+    }
+}
+
+/// Write `value` into the OS keyring under `(service, account)`, so a
+/// [`Secret::Keyring`] naming the same pair resolves to it. Replaces
+/// any value already there.
+///
+/// # Errors
+///
+/// [`SecretError::Keyring`] when the platform store refuses (no Secret
+/// Service, a locked keychain); [`SecretError::Unsupported`] on a build
+/// without the `keyring` feature.
+pub fn keyring_store(service: &str, account: &str, value: &str) -> Result<(), SecretError> {
+    #[cfg(feature = "keyring")]
+    {
+        keyring_resolver::set(service, account, value)
+    }
+    #[cfg(not(feature = "keyring"))]
+    {
+        let _ = (service, account, value);
+        Err(SecretError::Unsupported("keyring resolver disabled"))
+    }
+}
+
+/// Remove `(service, account)` from the OS keyring. Absent is not an
+/// error.
+///
+/// # Errors
+///
+/// As [`keyring_store`].
+pub fn keyring_delete(service: &str, account: &str) -> Result<(), SecretError> {
+    #[cfg(feature = "keyring")]
+    {
+        keyring_resolver::delete(service, account)
+    }
+    #[cfg(not(feature = "keyring"))]
+    {
+        let _ = (service, account);
+        Err(SecretError::Unsupported("keyring resolver disabled"))
+    }
 }
 
 /// A resolved secret. The inner string zeroes itself when this
@@ -218,6 +295,27 @@ mod tests {
         };
         let err = s.resolve().await.unwrap_err();
         assert!(matches!(err, SecretError::EmptyArgv));
+    }
+
+    #[test]
+    #[cfg(feature = "command")]
+    fn blocking_resolve_matches_async() {
+        let s = Secret::command(["sh", "-c", "printf 'hello\\n'"]);
+        assert_eq!(s.resolve_blocking().unwrap().as_str(), "hello");
+        let failing = Secret::command(["sh", "-c", "exit 3"]);
+        assert!(matches!(
+            failing.resolve_blocking().unwrap_err(),
+            SecretError::CommandFailed(_)
+        ));
+        let slow = Secret::Command {
+            argv: vec!["sleep".into(), "5".into()],
+            timeout_ms: Some(50),
+        };
+        assert!(matches!(
+            slow.resolve_blocking().unwrap_err(),
+            SecretError::CommandTimedOut
+        ));
+        assert_eq!(Secret::raw("x").resolve_blocking().unwrap().as_str(), "x");
     }
 
     #[test]

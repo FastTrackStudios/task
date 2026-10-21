@@ -1566,6 +1566,11 @@ impl FilesBackend {
                 continue;
             }
             let file_type = entry.file_type()?;
+            // Node-private directories are hidden at every depth and in
+            // every listing — root browse and Drive alike.
+            if file_type.is_dir() && crate::consts::is_private_dir(&entry.path()) {
+                continue;
+            }
             let size = if file_type.is_file() {
                 Some(entry.metadata()?.len())
             } else {
@@ -1644,6 +1649,11 @@ impl FilesBackend {
             })?;
             if !std::fs::metadata(target)?.is_dir() {
                 return Err(Error::BadRequest(format!("{subpath}: not a directory")));
+            }
+            // Hidden from the parent's listing is no guard if the
+            // directory can be browsed by naming it.
+            if crate::consts::is_within_private(&root_path, &subpath) {
+                return Err(Error::NotFound(subpath));
             }
         }
         // `.git` is hidden at every depth on a software root (a nested
@@ -2529,6 +2539,12 @@ impl FilesBackend {
         let disk_path = root_path.join(repo_path.as_internal_file_string());
         if let Ok(canonical) = disk_path.canonicalize() {
             files_store::confine(&canonical, &root_path).map_err(confinement)?;
+        }
+        // Nothing inside a node-private directory is reachable by name —
+        // not to read, hydrate, restore or overwrite.
+        // t[impl vault.private.node-only]
+        if crate::consts::is_within_private(&root_path, repo_path.as_internal_file_string()) {
+            return Err(Error::NotFound(path.to_string()));
         }
         Ok((disk_path, repo_path))
     }
@@ -4944,6 +4960,14 @@ impl FilesBackend {
         // Store side: every tracked path absent from disk materializes
         // per the hydration policy.
         for (path, want_id) in &target {
+            // A node-private directory is never written from history:
+            // a head that still tracks a path under one (recorded before
+            // the directory was marked) must not resurrect the old bytes
+            // over what this node keeps there now.
+            // t[impl vault.private.node-only]
+            if crate::consts::is_within_private(&root_path, path.as_internal_file_string()) {
+                continue;
+            }
             if on_disk.contains(path) {
                 // Present: reconcile hydration STATE with the policy
                 // (hydrate a stub the policy wants resident; a resident

@@ -50,6 +50,8 @@ pub fn InboxView() -> Element {
     let known = use_known_people(slug);
     let result = stores::use_inbox_list();
     let store = stores::use_inbox_store();
+    // The signed-in account: its own captures read "from you".
+    let account = use_context::<crate::auth::AuthCtx>().active;
 
     // Freeze the due set ONCE (when the list first loads) so decisions —
     // which patch the store optimistically — never reshuffle the cards.
@@ -174,6 +176,7 @@ pub fn InboxView() -> Element {
         })
         .collect();
     let left = rows.len();
+    let me = account.read().as_ref().map(|a| a.user_id.to_string());
     // With captures waiting the main action is processing them; with
     // none, it is capturing one.
     let header_icon = if left > 0 {
@@ -231,11 +234,15 @@ pub fn InboxView() -> Element {
                         let Marks { tags, contexts, .. } = m;
                         let kind = CaptureKind::of(&it);
                         let age = ago(&it.created, Utc::now());
-                        // A suggestion also says who proposed it.
-                        let from = (kind == CaptureKind::Suggested
-                            && it.source != "ui"
-                            && it.source != "cli")
-                            .then(|| format!("from {}", it.source));
+                        // t[impl attribution.shown]
+                        // Who captured it — "from you", "from Atlas" —
+                        // from the server-stamped creator. A capture
+                        // from before attribution says nothing.
+                        let from = inbox_proto::creator::creator_label(
+                            it.created_by.as_deref(),
+                            it.created_by_name.as_deref(),
+                            me.as_deref(),
+                        );
                         let has_meta = from.is_some() || !tags.is_empty() || !contexts.is_empty();
                         rsx! {
                             li { key: "{it.id}",

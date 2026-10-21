@@ -17,6 +17,8 @@ thiserror = { workspace = true }
 architect = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# The creator ref (`created_by`) rules, shared with tasks.
+workflows-proto = { workspace = true }
 
 vox = { workspace = true, optional = true }
 vox-types = { workspace = true, optional = true }

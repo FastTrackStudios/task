@@ -405,6 +405,12 @@ impl Backend {
             return Err(VaultSyncError::BadPath);
         }
         let root = self.root(vault_id)?;
+        // Out of the manifest is not enough: a private file must not be
+        // readable — or writable — by spelling its path either.
+        // t[impl vault.private.node-only]
+        if files_proto::consts::is_within_private(&root, rel) {
+            return Err(VaultSyncError::NotFound);
+        }
         Ok(root.join(rel))
     }
 
@@ -1069,6 +1075,13 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), 
             continue;
         }
         if path.is_dir() {
+            // A node-private directory never leaves this machine — not
+            // in the manifest, so no replica or vault client ever asks
+            // for what is under it (`vault.private.node-only`).
+            // t[impl vault.private.node-only]
+            if files_proto::consts::is_private_dir(&path) {
+                continue;
+            }
             // A nested shelf is somebody else's root. It has its own
             // manifest, and putting its files in this one would make a
             // replica pull them twice and a CRDT open them under two
@@ -1604,6 +1617,45 @@ mod tests {
         let m = b.manifest("v1").unwrap();
         assert_eq!(m.vault_id, "v1");
         assert!(m.files.is_empty());
+    }
+
+    /// A node-private directory is out of the manifest, and its files
+    /// cannot be read or written by naming them either.
+    // t[verify vault.private.node-only]
+    #[test]
+    fn private_directories_never_leave_the_node() {
+        let (tmp, b) = make_backend();
+        let private = tmp.path().join("Records/contacts/.sync");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join(crate::private::PRIVATE_MARKER), b"").unwrap();
+        std::fs::write(private.join("acct.md"), b"secret-ish").unwrap();
+        std::fs::write(tmp.path().join("Records/contacts/ada.md"), b"Ada").unwrap();
+
+        let paths: Vec<String> = b
+            .manifest("v1")
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(paths, vec!["Records/contacts/ada.md".to_string()]);
+        assert!(matches!(
+            b.get_file("v1", "Records/contacts/.sync/acct.md"),
+            Err(VaultSyncError::NotFound)
+        ));
+        assert!(
+            b.put_file(
+                "v1",
+                "Records/contacts/.sync/acct.md",
+                b"overwrite".to_vec(),
+                IfMatch::Force
+            )
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read(private.join("acct.md")).unwrap(),
+            b"secret-ish"
+        );
     }
 
     #[test]

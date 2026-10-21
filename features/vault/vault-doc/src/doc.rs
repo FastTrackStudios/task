@@ -109,6 +109,23 @@ pub fn render(doc: &LoroDoc, previous: Option<&str>) -> String {
     markdown::materialise(&props(doc), &body(doc), previous)
 }
 
+/// Frontmatter keys that are set once and never changed by a merge:
+/// who created the record (`attribution.immutable`) — an inbox item's
+/// `created_by` / `created_by_name`, a task's `createdBy` /
+/// `createdByName`. A text version arriving from a folder edit, an
+/// import or another replica may *add* one to a document that has
+/// none, but never rewrites or removes one the document already holds.
+pub const WRITE_ONCE_PROPS: &[&str] = &[
+    "created_by",
+    "created_by_name",
+    "createdBy",
+    "createdByName",
+];
+
+fn is_write_once(key: &str) -> bool {
+    WRITE_ONCE_PROPS.contains(&key)
+}
+
 /// What a merge changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Merged {
@@ -148,12 +165,17 @@ pub fn merge_text(doc: &LoroDoc, base: &str, new: &str) -> Merged {
     if let (Some(bp), Some(np)) = (b.props(), n.props()) {
         for (k, v) in &np {
             if bp.get(k) != Some(v) {
+                // t[impl attribution.immutable] — a creator, once the
+                // document holds one, is not rewritten by any later text.
+                if is_write_once(k) && prop(doc, k).is_some() {
+                    continue;
+                }
                 set_prop(doc, k, v.clone());
                 merged.props = true;
             }
         }
         for k in bp.keys() {
-            if !np.contains_key(k) {
+            if !np.contains_key(k) && !is_write_once(k) {
                 remove_prop(doc, k);
                 merged.props = true;
             }
@@ -393,6 +415,39 @@ mod tests {
         assert_eq!(
             ra,
             "---\nstatus: done\ntitle: Final mix\n---\nfrom B\nLine one\nfrom A\n"
+        );
+    }
+
+    // t[verify attribution.immutable]
+    #[test]
+    fn a_creator_survives_every_later_text() {
+        let doc = LoroDoc::new();
+        let made = "---\ntitle: Restring\ncreatedBy: bot:atlas\n---\nbody\n";
+        adopt_text(&doc, made);
+        doc.commit();
+
+        // A replica's text naming someone else, then one leaving it out.
+        let spoof = "---\ntitle: Restring the Strat\ncreatedBy: user:mallory\n---\nbody\n";
+        merge_text(&doc, made, spoof);
+        doc.commit();
+        let gone = "---\ntitle: Restring the Strat\n---\nbody\n";
+        merge_text(&doc, spoof, gone);
+        doc.commit();
+
+        assert_eq!(prop(&doc, "createdBy"), Some(LoroValue::from("bot:atlas")));
+        assert_eq!(
+            prop(&doc, "title"),
+            Some(LoroValue::from("Restring the Strat"))
+        );
+
+        // A document with no creator may still get its first one.
+        let legacy = LoroDoc::new();
+        let old = "---\ntitle: Old\n---\n";
+        adopt_text(&legacy, old);
+        merge_text(&legacy, old, "---\ntitle: Old\ncreated_by: user:u1\n---\n");
+        assert_eq!(
+            prop(&legacy, "created_by"),
+            Some(LoroValue::from("user:u1"))
         );
     }
 

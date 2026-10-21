@@ -52,8 +52,6 @@ impl Laptop {
     /// Set the laptop up with the project already on it and pinned.
     pub async fn open() -> Self {
         let dir = tempfile::tempdir().expect("laptop data dir");
-        let backend =
-            files::FilesBackend::new(dir.path(), dir.path().join("vault")).expect("laptop backend");
 
         // The project as it lands on a device: both companies' halves,
         // under the names the composition gave them.
@@ -78,11 +76,23 @@ impl Laptop {
         )
         .unwrap();
 
+        Self::holding(dir, tree, "Album").await
+    }
+
+    /// A laptop whose `tree` — already written, under `dir` — becomes
+    /// its one root, adopted in place, checkpointed and served.
+    ///
+    /// What [`Self::open`] does with the album, for a chapter that needs
+    /// a different tree on the device (a vault, say).
+    pub async fn holding(dir: tempfile::TempDir, tree: std::path::PathBuf, name: &str) -> Self {
+        let backend =
+            files::FilesBackend::new(dir.path(), dir.path().join("vault")).expect("laptop backend");
+
         let album = files::service::RootsService::adopt(
             &backend,
             files::service::roots::AdoptRequest {
                 path: tree.to_string_lossy().into_owned(),
-                name: "Album".into(),
+                name: name.into(),
                 flavor: RootFlavor::Media,
                 hash_content: true,
             },

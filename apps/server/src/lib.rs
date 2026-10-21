@@ -24,6 +24,7 @@ pub mod admin_cli;
 pub mod agent_router;
 pub mod api_ref;
 pub mod attachments;
+pub mod attribution;
 #[cfg(feature = "plugin-scripture")]
 pub mod bible_cli;
 pub mod bots;
@@ -71,6 +72,7 @@ pub mod presence;
 pub mod server_mgmt;
 pub mod share;
 pub mod share_guest;
+pub mod sharing;
 #[cfg(feature = "plugin-wiki")]
 pub mod shelves;
 pub mod snapshot;
@@ -183,6 +185,10 @@ pub struct OrgAppState {
     /// Share links (`<org>/shares.json`) — link CRUD on the org lane +
     /// the token-checked `/org/{slug}/share/{token}` landing route.
     pub shares: Arc<share::ShareStore>,
+    /// Cross-org Sharing Grants this org has made (`<org>/sharing.sqlite`)
+    /// — the owner-only `sharing` service, and what the grant lane
+    /// admits a guest by (`docs/spec/sharing.md`).
+    pub sharing: sharing::Sharing,
     pub attachments: Arc<attachments::AttachmentServiceImpl>,
     /// File-replication backend rooted at this org's
     /// `vault/` dir.
@@ -360,6 +366,9 @@ pub struct OrgAppState {
     pub actors: crate::activity::ActorLedger,
     /// User id → display name for the feed's bylines.
     pub people: crate::activity::People,
+    /// Account id → creator ref + name, for `created_by`
+    /// (`crate::attribution`).
+    pub creators: crate::attribution::Creators,
     /// Recall backend — spaced-repetition learning cards under
     /// `vault/Records/recall/`. Mounted for `Recall` so the deck UI +
     /// flashcard review round-trip FSRS-scheduled cards.
@@ -1401,10 +1410,19 @@ pub(crate) async fn build_org_state(
             .map_err(|e| eyre::eyre!("recall backend: {e}"))?;
 
         // Contacts backend rooted at the same vault — people live
-        // under `Records/contacts/`.
+        // under `Records/contacts/`. CardDAV passwords never do: they
+        // go to the OS keyring or, where there is none, the envelope
+        // keyed by this server's auth secret (`contacts.secret.out-of-vault`).
         #[cfg(feature = "plugin-contacts")]
-        let contacts = contacts::VaultContacts::new(vault_root.clone())
-            .map_err(|e| eyre::eyre!("contacts backend: {e}"))?;
+        let contacts = contacts::VaultContacts::with_secrets(
+            vault_root.clone(),
+            std::sync::Arc::new(contacts::NativeCredentials::new(
+                contacts::Preference::from_env(),
+                Some(auth_secret()),
+            )),
+            contacts::Transport::from_env(),
+        )
+        .map_err(|e| eyre::eyre!("contacts backend: {e}"))?;
 
         // Tag registry rooted at the same vault — `Records/tags.json`.
         let tags =
@@ -2135,6 +2153,14 @@ pub(crate) async fn build_org_state(
         // gap used to be silent — that is how it sat at 2/71.
         permits::log_coverage(org_root.slug(), &permissions, enforce_permissions());
         let shares = Arc::new(share::ShareStore::open(org_root.path()));
+        let sharing = sharing::Sharing {
+            store: Arc::new(
+                sharing::GrantStore::open(&org_root.sharing_db(), org_root.slug()).await?,
+            ),
+            home: home_identity.cloned(),
+            subtree: Arc::new(sharing::ProjectTreeStub::new(projects.clone())),
+        };
+        sqlite_conns.push(sharing.store.conn().clone());
         #[cfg(feature = "plugin-fasttrackstudio")]
         let live = live::LiveHost::new(
             org_root.slug().to_owned(),
@@ -2142,6 +2168,10 @@ pub(crate) async fn build_org_state(
             resources.clone(),
         );
 
+        // Who a write is attributed to (`created_by`): this org's
+        // accounts, and the home org's — where bot accounts live.
+        let creators =
+            crate::attribution::Creators::new(auth.clone(), home_identity.map(|h| h.auth.clone()));
         Ok(OrgAppState {
             slug: org_root.slug().to_owned(),
             org_root: org_root.clone(),
@@ -2149,6 +2179,7 @@ pub(crate) async fn build_org_state(
             auth,
             permissions,
             shares,
+            sharing,
             attachments: attachment_service,
             vault_sync: vault_sync_state,
             vault_collab,
@@ -2222,6 +2253,7 @@ pub(crate) async fn build_org_state(
             activity,
             actors: crate::activity::ActorLedger::default(),
             people: crate::activity::People::default(),
+            creators,
             #[cfg(feature = "plugin-recall")]
             recall,
             #[cfg(feature = "plugin-contacts")]
@@ -3847,6 +3879,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 share_public_base(),
                 Some(org.files.clone()),
             )),
+        )
+        // Sharing Grants — the owner's preview / create / list / revoke.
+        // Owner- and admin-only inside the impl (`crate::sharing`).
+        .with(
+            share_proto::sharing_service_service_descriptor(),
+            share_proto::SharingServiceDispatcher::new(sharing::SharingServiceImpl::new(
+                org.sharing.clone(),
+            )),
         );
 
     // ── Agent plugin ─────────────────────────────────────────────
@@ -4012,6 +4052,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             inbox_proto::service::inbox::serve(crate::activity::AttributedInbox {
                 inner: org.inbox.clone(),
                 ledger: org.actors.clone(),
+                creators: org.creators.clone(),
             }),
         )
         // Live inbox changes — `Inbox`'s `#[subscribe]` stream
@@ -4287,6 +4328,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             task::serve_task_service(crate::activity::AttributedTasks {
                 inner: org.tasks.clone(),
                 ledger: org.actors.clone(),
+                creators: org.creators.clone(),
             }),
         )
         // Live task changes — the `#[subscribe]` stream sibling of

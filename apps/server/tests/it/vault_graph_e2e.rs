@@ -7,8 +7,8 @@
 //! deadends / tags over the same socket.
 //!
 //! The example vault seeds one page of its own — link-less, tag-less —
-//! so it appears in `orphans` and `deadends` beside the page this test
-//! plants for the purpose, and nowhere else.
+//! so it appears in `deadends` beside the page this test plants for
+//! the purpose; a seeded note links *to* it, so it is not an orphan.
 //!
 //! Uses `vault_id = "default"` throughout — the server mounts
 //! one vault per org under that id (`Backend::single`), and the
@@ -85,13 +85,24 @@ async fn graph_queries_over_seeded_vault() {
     // place to hear about it.
     //
     // What matters is that a page this test planted with no links *is*
-    // one, and a page it planted *with* links is not.
+    // one, and a page it planted *with* links is not. The seeded
+    // example page has no links of its own, so it is a deadend — but
+    // it is not an orphan: the committed note "The B room hum is the
+    // fridge on the studio circuit" files itself under it
+    // (`folder: "[[Studio Notes]]"`), and a frontmatter link is a link.
     for page in ["Loose.md", support::EXAMPLE_PAGE] {
-        let orphans = graph.orphans("default".to_string()).await.unwrap();
-        assert!(orphans.contains(&page.to_string()), "{page}: {orphans:?}");
         let deadends = graph.deadends("default".to_string()).await.unwrap();
         assert!(deadends.contains(&page.to_string()), "{page}: {deadends:?}");
     }
+    let orphans = graph.orphans("default".to_string()).await.unwrap();
+    assert!(
+        orphans.contains(&"Loose.md".to_string()),
+        "an unlinked page is an orphan: {orphans:?}"
+    );
+    assert!(
+        !orphans.contains(&support::EXAMPLE_PAGE.to_string()),
+        "a page the seed links to is not an orphan: {orphans:?}"
+    );
     // The other half of the claim: a page WITH links is neither.
     let orphans = graph.orphans("default".to_string()).await.unwrap();
     assert!(

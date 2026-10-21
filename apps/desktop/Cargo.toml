@@ -77,6 +77,22 @@ block2 = "0.6"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
+# The bundle's two other programs. Each is a one-call wrapper sharing its
+# name with another workspace target (`task-cli`'s `task` bin and the
+# `task` crate; `files-daemon`'s `fts-files-daemon`), so rustdoc skips
+# them: two `cargo doc --workspace` targets writing to one
+# `target/doc/<name>` is an output-filename collision. The names must
+# stay; the macOS bundle ships `Contents/MacOS/{task,fts-files-daemon}`.
+[[bin]]
+name = "task"
+path = "src/bin/task.rs"
+doc = false
+
+[[bin]]
+name = "fts-files-daemon"
+path = "src/bin/fts-files-daemon.rs"
+doc = false
+
 [features]
 default = ["desktop"]
 desktop = ["dioxus/desktop", "dioxus/launch"]

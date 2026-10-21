@@ -70,3 +70,19 @@ A page is written whole or not at all: readers and other tools never observe a
 partially written file, including when the process dies mid-write. Frontmatter
 round-trips without reordering or reformatting the parts of the document the
 write did not touch.
+
+---
+
+## What leaves the node
+
+### A private directory stays on its node
+
+t[vault.private.node-only]
+A directory holding the `.fts-private` marker (`files_proto::consts::PRIVATE_MARKER`)
+is node-private: nothing under it is versioned (so it is in no history and no
+replica), listed by a browse, a facet listing, the vault manifest or a page
+walk, or served, hydrated, restored or written by path — by Files or by the
+vault lanes. A head recorded before the marker existed is never materialized
+over it. The feature that owns the directory writes the marker before anything
+else; the lanes only honour it. The contacts feature's CardDAV accounts
+(`Records/contacts/.sync/`) are the first such directory.

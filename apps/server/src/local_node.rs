@@ -74,7 +74,9 @@ pub const SECRET_FILE: &str = "auth-secret";
 
 /// Where a node serving on loopback says its `ws://` base, beside `orgs/`
 /// (owner-only) — what the `task` CLI dials ([`LocalNode::serve_loopback`]).
-pub const LOCAL_ENDPOINT_FILE: &str = "local-endpoint";
+/// The name is `task_dial`'s, which apps resolve their node with
+/// (`task_dial::resolve_node`), so the writer and the readers cannot drift.
+pub const LOCAL_ENDPOINT_FILE: &str = task_dial::LOCAL_ENDPOINT_FILE;
 
 /// Present while a first run provisions, removed once [`OWNER_FILE`] is
 /// written: found on a later boot, it says the first run was cut short.

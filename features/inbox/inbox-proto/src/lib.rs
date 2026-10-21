@@ -27,6 +27,7 @@ pub use inbox_item::InboxItem;
 pub use schedule::{ReviewResponse, review, schedule};
 pub use service::Inbox;
 pub use service::inbox::InboxEvent;
+pub use workflows_proto::creator;
 
 // architect-emitted vox bits: the async client / dispatcher /
 // descriptor for the one capability. Mount sites stitch the

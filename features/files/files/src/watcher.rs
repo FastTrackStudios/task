@@ -214,6 +214,11 @@ fn relative_paths(root_path: &Path, paths: &[PathBuf]) -> Vec<String> {
         if rel == MARKER_FILE || rel == STORE_DIR || rel.starts_with(&format!("{STORE_DIR}/")) {
             continue;
         }
+        // A write into a node-private directory is not activity on the
+        // root: nothing under it will ever be versioned.
+        if crate::consts::is_within_private(root_path, &rel) {
+            continue;
+        }
         out.push(rel);
     }
     out.sort();

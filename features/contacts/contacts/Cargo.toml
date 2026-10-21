@@ -31,6 +31,27 @@ chrono = { workspace = true, features = ["clock", "std", "serde"] }
 ureq = "2.12"
 roxmltree = "0.20"
 ical = { version = "0.11", default-features = false, features = ["vcard"] }
+# Where the CardDAV password lives instead of the vault: the OS keyring
+# through email-secret's resolver, or the auth::crypto envelope.
+email-secret = { workspace = true }
+auth = { workspace = true }
+zeroize = { version = "1", features = ["derive"] }
+# The transport policy: parse origins properly (https-only, credential
+# scope), and trust an extra CA (`TASK_CARDDAV_EXTRA_CA`) alongside the
+# public roots ureq ships with. Versions match ureq 2.12's own.
+url = "2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+# The page walk's private-directory marker (`vault.private.node-only`).
+vault-live = { workspace = true }
+
+[features]
+default = []
+# `contacts::testing` — the fake TLS CardDAV server the integration
+# suite dials. Test-only; the server never enables it.
+test-support = []
 
 [dev-dependencies]
 tempfile = "3"

@@ -131,6 +131,14 @@ impl Inbox for VaultInbox {
             .collect())
     }
 
+    fn list_inbox_by(&self, created_by: String) -> Result<Vec<InboxItem>, InboxError> {
+        Ok(self
+            .list_inbox()?
+            .into_iter()
+            .filter(|i| i.created_by_matches(&created_by))
+            .collect())
+    }
+
     fn get_inbox_item(&self, id: &str) -> Result<InboxItem, InboxError> {
         let rel = format!("{INBOX_DIR}/{}.md", sanitize(id));
         let abs = self.root.join(&rel);
@@ -155,6 +163,17 @@ impl Inbox for VaultInbox {
                 reason: "id must be non-empty".into(),
             });
         }
+        // t[impl attribution.immutable]
+        // Who created an item is write-once: an item already on disk
+        // keeps the creator it was captured with, whatever the upsert
+        // carries — an edit, a decision or a stale client copy can't
+        // re-attribute it, nor can a missing field erase it.
+        let mut item = item.clone();
+        if let Ok(existing) = self.get_inbox_item(&item.id) {
+            item.created_by = existing.created_by;
+            item.created_by_name = existing.created_by_name;
+        }
+        let item = &item;
         let body = serialize_inbox_item(item).map_err(|e| InboxError::Backend {
             message: e.to_string(),
         })?;
@@ -256,6 +275,39 @@ mod tests {
         let list = inbox.list_inbox().unwrap();
         assert_eq!(list[0].body, "first");
         assert_eq!(list[1].body, "second");
+    }
+
+    // t[verify attribution.immutable]
+    #[test]
+    fn created_by_is_write_once() {
+        let (_tmp, inbox) = fixture();
+        let mut item = InboxItem::capture("w", "first", "mcp", "2026-05-31T09:00:00Z");
+        item.created_by = Some("bot:atlas".into());
+        item.created_by_name = Some("Atlas".into());
+        inbox.upsert_inbox_item(&item).unwrap();
+
+        // A later write naming someone else — or no one — keeps it.
+        let mut edit = item.clone();
+        edit.body = "edited".into();
+        edit.created_by = Some("user:mallory".into());
+        edit.created_by_name = Some("Mallory".into());
+        inbox.upsert_inbox_item(&edit).unwrap();
+        let mut cleared = edit.clone();
+        cleared.created_by = None;
+        cleared.created_by_name = None;
+        inbox.upsert_inbox_item(&cleared).unwrap();
+
+        let got = inbox.get_inbox_item("w").unwrap();
+        assert_eq!(got.body, "edited");
+        assert_eq!(got.created_by.as_deref(), Some("bot:atlas"));
+        assert_eq!(got.created_by_name.as_deref(), Some("Atlas"));
+        assert_eq!(inbox.list_inbox_by("bot:atlas".into()).unwrap().len(), 1);
+        assert!(
+            inbox
+                .list_inbox_by("user:mallory".into())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

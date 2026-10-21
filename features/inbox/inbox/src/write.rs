@@ -16,6 +16,12 @@ pub fn serialize_inbox_item(item: &InboxItem) -> Result<String, WriteError> {
     map.insert("status".into(), item.status.clone().into());
     map.insert("source".into(), item.source.clone().into());
     map.insert("created".into(), item.created.clone().into());
+    if let Some(c) = &item.created_by {
+        map.insert("created_by".into(), c.clone().into());
+    }
+    if let Some(n) = &item.created_by_name {
+        map.insert("created_by_name".into(), n.clone().into());
+    }
     if let Some(r) = &item.resurface_on {
         map.insert("resurface_on".into(), r.clone().into());
     }
@@ -45,6 +51,8 @@ mod tests {
             kind: "fleeting".into(),
             status: "open".into(),
             source: "cli".into(),
+            created_by: Some("bot:7f1c".into()),
+            created_by_name: Some("Atlas".into()),
             created: "2026-05-31T09:00:00Z".into(),
             resurface_on: Some("2026-06-07".into()),
             processed_into: None,

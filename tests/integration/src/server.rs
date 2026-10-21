@@ -85,6 +85,25 @@ async fn open_auth(data: &Path, slug: &str) -> AuthState {
 /// `ArchitectAuth` accepts it.
 const SECRET: &str = "integration-suite-secret-at-least-32-bytes";
 
+/// How a test server keeps CardDAV passwords and whom it trusts.
+///
+/// The envelope rather than the keyring: a suite run must not write into
+/// the CI host's own keyring, and the envelope is the store a headless
+/// server really uses — keyed by the auth secret, so a restart reads back
+/// what the first boot sealed. And the fake CardDAV server's test CA as
+/// an extra root (`contacts::testing`), because the client is https-only
+/// and the fake has to be trusted to be reached at all.
+///
+/// # Safety
+///
+/// Called only under [`ENV`], like every other variable set here.
+unsafe fn contacts_env() {
+    unsafe {
+        std::env::set_var("TASK_CONTACTS_SECRETS", "envelope");
+        std::env::set_var("TASK_CARDDAV_EXTRA_CA", contacts::testing::ca_pem_path());
+    }
+}
+
 pub struct Server {
     pub name: &'static str,
     /// Kept so a restart can come back on the same endpoint id. A real
@@ -179,6 +198,7 @@ impl Server {
                 // suite whose servers swap orgs by directory order is
                 // not a suite.
                 std::env::set_var("TASK_SERVER_ORG", slug);
+                contacts_env();
             }
             let data_root = org_proto::DataRoot::from_env().expect("data root");
             data_root
@@ -321,6 +341,7 @@ impl Server {
                 std::env::set_var("TASK_DATA_ROOT", data.path());
                 std::env::set_var("TASK_ENFORCE_PERMISSIONS", "1");
                 std::env::set_var("TASK_SERVER_ORG", &slug);
+                contacts_env();
             }
             AppState::new_with_auth(auth.clone(), ServerKeypair::generate_ephemeral())
                 .await

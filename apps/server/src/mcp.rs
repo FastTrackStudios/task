@@ -210,6 +210,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "due_on_or_before": s_("ISO date (YYYY-MM-DD). Keeps tasks due or scheduled on/before it."),
                         "project": s_("Project UUID (from list_projects) — keeps tasks belonging to that project."),
                         "query": s_("Case-insensitive substring match on the title."),
+                        "created_by": s_("Keep tasks made by this account — a created_by ref from a listed task ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, or 'none' for tasks with no recorded creator."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -393,6 +394,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 obj(
                     json!({
                         "status": s_("Show every item with this status instead of today's review queue, e.g. 'suggested', 'open'."),
+                        "created_by": s_("Keep items captured by this account — a created_by ref from a listed item ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, or 'none'. Searches every item, not only today's queue, unless status narrows it."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -1876,6 +1878,25 @@ async fn mcp_dispatch(
                             // told to name an org; the other two have
                             // nothing to name it with.
                             let caller = classify_caller(&state, &headers).await;
+                            // …and a placed caller that belongs to
+                            // nothing still gets its (empty) answer to
+                            // `list_orgs`: a bot made with no orgs asks
+                            // exactly this before it is granted one.
+                            if matches!(caller, Caller::Known)
+                                && params.get("name").and_then(Value::as_str) == Some("list_orgs")
+                            {
+                                return Json(rpc_result(
+                                    id,
+                                    tool_ok(&json!({
+                                        "count": 0,
+                                        "orgs": [],
+                                        "default": Value::Null,
+                                        "note": "This account belongs to no organization on this \
+                                                 server yet. Ask its operator to grant one.",
+                                    })),
+                                ))
+                                .into_response();
+                            }
                             let msg = match caller {
                                 Caller::Known => concat!(
                                     "your account does not belong to any organization on this ",
@@ -1971,6 +1992,13 @@ async fn mcp_dispatch(
             // would lose it anyway), so the principal rides as a
             // value instead.
             let principal = mcp_principal(&org, &headers).await;
+            // …and who that is, for the records a tool creates
+            // (`created_by`, `crate::attribution`): a bot key's bot, a
+            // session's person. Never from the tool's arguments.
+            let creator = match principal.as_deref() {
+                Some(id) => Some(org.creators.resolve(id).await),
+                None => None,
+            };
             let called = name.to_string();
             // Email links live in the person's own org, never in the org
             // being acted on. That is what keeps them private: a project
@@ -1983,7 +2011,16 @@ async fn mcp_dispatch(
                 .and_then(|slug| state.org(&slug))
                 .unwrap_or_else(|| org.clone());
             let dispatched = tokio::task::spawn_blocking(move || {
-                call_tool(&org, &links_org, principal.as_deref(), &called, &args)
+                call_tool(
+                    &org,
+                    &links_org,
+                    ToolCaller {
+                        principal: principal.as_deref(),
+                        creator: creator.as_ref(),
+                    },
+                    &called,
+                    &args,
+                )
             })
             .await;
             let outcome = match dispatched {
@@ -2373,6 +2410,14 @@ async fn classify_caller(state: &AppState, headers: &HeaderMap) -> Caller {
     if !reachable.is_empty() {
         return Caller::Known;
     }
+    // A live bot key with no orgs yet (`admin bot create --no-orgs`) is
+    // a real account that belongs to nothing — not a dead token. Its
+    // key is checked against the home store; a revoked one fails here.
+    if let Some(home) = &state.home_identity
+        && crate::bots::resolve(&home.auth, &token).await.is_some()
+    {
+        return Caller::Known;
+    }
     // Empty. Either nobody knows this token, or the issuer does and the
     // account simply has no memberships. Only the issuer can tell us,
     // and a server with no issuer configured has already exhausted every
@@ -2743,6 +2788,15 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
 
 // ── Tool implementations ─────────────────────────────────────────
 
+/// Who a tool call is from: the principal's account id (the wiki lane
+/// checks it, email links record it), and that account as a creator —
+/// what the records a tool creates are attributed to.
+#[derive(Clone, Copy, Default)]
+struct ToolCaller<'a> {
+    principal: Option<&'a str>,
+    creator: Option<&'a crate::attribution::Creator>,
+}
+
 /// Dispatch one tool call. Synchronous on purpose — the backends
 /// are architect's blocking-dispatcher trait impls; the caller runs
 /// this on `spawn_blocking`.
@@ -2750,10 +2804,11 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
 fn call_tool(
     org: &crate::OrgAppState,
     links: &crate::OrgAppState,
-    principal: Option<&str>,
+    caller: ToolCaller<'_>,
     name: &str,
     args: &Value,
 ) -> Result<Value, ToolFailure> {
+    let ToolCaller { principal, creator } = caller;
     // Only the wiki lane is caller-sensitive today; a build without it
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
@@ -2820,6 +2875,9 @@ fn call_tool(
                 "tasks_due_or_scheduled_today": due_today,
                 "events_today": events_today,
                 "inbox_awaiting_review": inbox_open,
+                // The caller's own creator ref — what `created_by`
+                // filters take to mean "what I made".
+                "you": creator.map(|c| json!({ "created_by": c.r#ref, "name": c.name })),
             }))
         }
 
@@ -2836,6 +2894,7 @@ fn call_tool(
                 status,
                 project,
                 due_on_or_before: arg_str(args, "due_on_or_before"),
+                created_by: arg_str(args, "created_by"),
                 ..Default::default()
             };
             let query = arg_str(args, "query").map(|q| q.to_lowercase());
@@ -2868,6 +2927,7 @@ fn call_tool(
             if let Some(priority) = arg_str(args, "priority") {
                 draft.priority = priority;
             }
+            crate::attribution::attribute_task(&mut draft, creator);
             let created = org
                 .tasks
                 .create(draft)
@@ -3157,13 +3217,15 @@ fn call_tool(
             let mut item = inbox_proto::InboxItem::capture(
                 uuid::Uuid::new_v4().to_string(),
                 body,
-                "agent",
+                // The surface; who captured it is `created_by`.
+                "mcp",
                 now,
             );
             if !arg_bool(args, "accepted") {
                 item.status = inbox_proto::InboxItem::STATUS_SUGGESTED.to_string();
             }
             item.resurface_on = arg_str(args, "resurface_on");
+            crate::attribution::attribute_inbox(&mut item, creator);
             org.inbox
                 .upsert_inbox_item(&item)
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
@@ -3182,9 +3244,11 @@ fn call_tool(
         "list_inbox" => {
             // The review queue is "what surfaces today", which by
             // design excludes suggestions — so an agent couldn't see
-            // its own captures. `status` opens the full list.
-            let rows = match arg_str(args, "status") {
-                Some(status) => {
+            // its own captures. `status` opens the full list, and so
+            // does `created_by` (whose captures, whatever their state).
+            let created_by = arg_str(args, "created_by");
+            let rows: Vec<inbox_proto::InboxItem> = match (arg_str(args, "status"), &created_by) {
+                (Some(status), _) => {
                     let all = org
                         .inbox
                         .list_inbox()
@@ -3193,7 +3257,11 @@ fn call_tool(
                         .filter(|i| i.status.eq_ignore_ascii_case(&status))
                         .collect()
                 }
-                None => {
+                (None, Some(_)) => org
+                    .inbox
+                    .list_inbox()
+                    .map_err(|e| ToolFailure::Message(format!("{e:?}")))?,
+                (None, None) => {
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                     org.inbox
                         .review_queue(today)
@@ -3202,6 +3270,11 @@ fn call_tool(
             };
             let out: Vec<Value> = rows
                 .iter()
+                .filter(|i| {
+                    created_by
+                        .as_deref()
+                        .is_none_or(|who| i.created_by_matches(who))
+                })
                 .take(arg_limit(args))
                 .map(|i| {
                     json!({
@@ -3210,6 +3283,9 @@ fn call_tool(
                         "kind": i.kind,
                         "status": i.status,
                         "created": i.created,
+                        "source": i.source,
+                        "created_by": i.created_by,
+                        "created_by_name": i.created_by_name,
                     })
                 })
                 .collect();
@@ -3996,6 +4072,7 @@ fn call_tool(
                         .assignees = task::model::AgentRefList(vec![agent]);
                 }
             }
+            crate::attribution::attribute_task(&mut draft, creator);
             let created = org
                 .tasks
                 .create(draft)
@@ -5156,6 +5233,9 @@ fn task_json(t: &task::TaskInfo) -> Value {
             w.assignees.0.iter().map(|a| a.short_label()).collect::<Vec<_>>()
         }),
         "path": t.path,
+        // Who made it (`user:<uuid>` / `bot:<uuid>`), and their name.
+        "created_by": t.created_by,
+        "created_by_name": t.created_by_name,
     })
 }
 

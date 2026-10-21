@@ -139,6 +139,8 @@ pub fn capture(input: &str) -> TaskInfo {
         dispatched_agent_tasks: crate::model::StringList::default(),
         date_created: None,
         date_modified: None,
+        created_by: None,
+        created_by_name: None,
         details: String::new(),
         workflow: None,
     }

@@ -44,7 +44,11 @@ pub fn walk_vault(root: &Path, cfg: &ObsidianConfig) -> Vec<VaultEntry> {
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !is_hard_skip(e.path(), root))
+        .filter_entry(|e| {
+            !is_hard_skip(e.path(), root)
+                // t[impl vault.private.node-only]
+                && !(e.file_type().is_dir() && vault_live::private::is_private_dir(e.path()))
+        })
     {
         let entry = match entry {
             Ok(e) => e,

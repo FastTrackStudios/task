@@ -204,7 +204,7 @@ async fn inbox_capture(
     headers: HeaderMap,
     Json(body): Json<CaptureBody>,
 ) -> Response {
-    let (org, _org_id, _user_id) = match authenticate(&state, &slug, &headers).await {
+    let (org, _org_id, user_id) = match authenticate(&state, &slug, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -214,7 +214,10 @@ async fn inbox_capture(
     }
     let id = Uuid::new_v4().to_string();
     let created = chrono::Utc::now().to_rfc3339();
-    let item = InboxItem::capture(id.clone(), text, "watch", created.clone());
+    let mut item = InboxItem::capture(id.clone(), text, "watch", created.clone());
+    // The wearer captured it: the account the device authenticated as.
+    let creator = org.creators.resolve(&user_id.to_string()).await;
+    crate::attribution::attribute_inbox(&mut item, Some(&creator));
     match org.inbox.upsert_inbox_item(&item) {
         Ok(()) => (StatusCode::CREATED, Json(CaptureDto { id, created })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

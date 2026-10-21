@@ -23,24 +23,52 @@
 //! parsed for (href, etag, vcard) tuples and each vCard is mapped by the
 //! pure [`vcard_to_contact`] (unit-tested without network). Cards that
 //! fail to parse are logged and skipped.
+//!
+//! # Where the credential may go
+//!
+//! The password is sent to exactly one place: the account's
+//! **credential scope** ([`CredentialScope`]) — the configured origin,
+//! over https. For an iCloud account that is Apple's own `icloud.com`
+//! hosts on 443, because iCloud answers discovery on
+//! `contacts.icloud.com` and serves the addressbook from a numbered
+//! `pNN-contacts.icloud.com` partition. Everything else is refused
+//! *before* a request is made:
+//!
+//! - an `http:` origin, at save ([`validate_account`]) and at sync;
+//! - a redirect whose target is outside the scope — it is not followed
+//!   at all, with or without the header;
+//! - an href in a DAV response that points outside the scope.
+//!
+//! Redirects are followed by hand (the agent's own following is off),
+//! so no library default can carry the `Authorization` header across.
 
 use std::io::BufReader;
+use std::sync::Arc;
 use std::time::Duration;
 
 use contacts_proto::{CardDavAccount, CardDavProvider, Contact, ContactSource, ContactsError};
+use url::Url;
+
+/// iCloud's fixed discovery root.
+pub const ICLOUD_ROOT: &str = "https://contacts.icloud.com";
 
 /// Pull + map every vCard in the account's addressbook.
 ///
 /// One-way: this only *reads* the server. The caller reconciles the
-/// returned contacts against the vault by `uid` / `etag`.
-pub fn import(account: &CardDavAccount) -> Result<Vec<Contact>, ContactsError> {
-    let dav = Dav::new(account)?;
+/// returned contacts against the vault by `uid` / `etag`. `password`
+/// is the resolved credential — the account itself never carries it.
+pub fn import(
+    account: &CardDavAccount,
+    password: &str,
+    transport: &Transport,
+) -> Result<Vec<Contact>, ContactsError> {
+    let dav = Dav::new(account, password, transport)?;
     let source = source_for_provider(&account.provider);
 
-    // 2. If the addressbook URL is already resolved, use it directly and
-    //    skip discovery. Otherwise walk principal → home → collections.
+    // If the addressbook URL is already resolved, use it directly and
+    // skip discovery. Otherwise walk principal → home → collections.
     let addressbooks = match account.addressbook_url.as_deref() {
-        Some(url) if !url.trim().is_empty() => vec![dav.absolute(url.trim())],
+        Some(url) if !url.trim().is_empty() => vec![dav.absolute(url.trim())?],
         _ => dav.discover_addressbooks()?,
     };
 
@@ -60,7 +88,7 @@ pub fn import(account: &CardDavAccount) -> Result<Vec<Contact>, ContactsError> {
                 Some(mut c) => {
                     // UID is required for reconciliation; if the card has
                     // none, synthesize a stable one from its href.
-                    if c.uid.as_deref().map_or(true, str::is_empty) {
+                    if c.uid.as_deref().is_none_or(str::is_empty) {
                         c.uid = Some(format!("href:{}", card.href));
                     }
                     out.push(c);
@@ -83,6 +111,219 @@ fn source_for_provider(provider: &str) -> &'static str {
     }
 }
 
+// ── Transport policy ────────────────────────────────────────────────
+
+/// How the CardDAV client reaches a server: which certificate
+/// authorities it trusts beyond the public web roots.
+///
+/// The default trusts the public roots only. A self-hosted Nextcloud
+/// behind a private CA adds that CA — on a server through
+/// `TASK_CARDDAV_EXTRA_CA` (a PEM file), see [`Transport::from_env`].
+/// The scheme is never negotiable: there is no plain-http transport.
+#[derive(Clone, Default)]
+pub struct Transport {
+    extra_roots: Vec<rustls_pki_types::CertificateDer<'static>>,
+}
+
+impl std::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transport")
+            .field("extra_roots", &self.extra_roots.len())
+            .finish()
+    }
+}
+
+impl Transport {
+    /// Trust the certificates in `pem` as additional roots.
+    ///
+    /// # Errors
+    ///
+    /// The PEM holds no certificate, or one that does not parse.
+    pub fn with_extra_ca_pem(pem: &[u8]) -> Result<Self, ContactsError> {
+        let roots: Vec<_> = rustls_pemfile::certs(&mut BufReader::new(pem))
+            .collect::<Result<_, _>>()
+            .map_err(|e| ContactsError::Backend {
+                message: format!("reading the extra CardDAV CA: {e}"),
+            })?;
+        if roots.is_empty() {
+            return Err(ContactsError::Backend {
+                message: "the extra CardDAV CA file holds no certificate".into(),
+            });
+        }
+        Ok(Self { extra_roots: roots })
+    }
+
+    /// `TASK_CARDDAV_EXTRA_CA` (a PEM file path), or the public roots
+    /// only. A file that cannot be read is logged and ignored — the
+    /// public roots still apply, so the failure is a refused handshake
+    /// against the private server, never a weaker check.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let Some(path) = std::env::var_os("TASK_CARDDAV_EXTRA_CA") else {
+            return Self::default();
+        };
+        match std::fs::read(&path)
+            .map_err(|e| ContactsError::Backend {
+                message: e.to_string(),
+            })
+            .and_then(|pem| Self::with_extra_ca_pem(&pem))
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(?path, %e, "contacts: TASK_CARDDAV_EXTRA_CA ignored");
+                Self::default()
+            }
+        }
+    }
+
+    fn agent(&self) -> Result<ureq::Agent, ContactsError> {
+        let mut builder = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(30))
+            // Never let the agent follow a redirect: `Dav::send` decides
+            // each hop against the credential scope.
+            .redirects(0);
+        if !self.extra_roots.is_empty() {
+            let mut roots = rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            for cert in &self.extra_roots {
+                roots
+                    .add(cert.clone())
+                    .map_err(|e| ContactsError::Backend {
+                        message: format!("the extra CardDAV CA is not a usable root: {e}"),
+                    })?;
+            }
+            let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| ContactsError::Backend {
+                message: format!("tls config: {e}"),
+            })?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            builder = builder.tls_config(Arc::new(config));
+        }
+        Ok(builder.build())
+    }
+}
+
+/// Where an account's credential may be sent. See the module docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialScope {
+    host: String,
+    port: u16,
+    /// iCloud: any `icloud.com` host on 443 too.
+    icloud: bool,
+}
+
+impl CredentialScope {
+    /// Does `url` fall inside the scope — https, no userinfo, and the
+    /// configured origin (or, for iCloud, an `icloud.com` host)?
+    #[must_use]
+    pub fn allows(&self, url: &Url) -> bool {
+        if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+            return false;
+        }
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let port = url.port_or_known_default().unwrap_or(0);
+        if host.eq_ignore_ascii_case(&self.host) && port == self.port {
+            return true;
+        }
+        self.icloud && port == 443 && is_icloud_host(host)
+    }
+}
+
+fn is_icloud_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "icloud.com" || host.ends_with(".icloud.com")
+}
+
+/// Parse `raw` as an https URL with a host and no userinfo.
+fn https_url(field: &str, raw: &str) -> Result<Url, ContactsError> {
+    let invalid = |reason: String| ContactsError::Invalid {
+        field: field.into(),
+        reason,
+    };
+    let url = Url::parse(raw.trim()).map_err(|e| invalid(format!("not a URL ({e})")))?;
+    if url.scheme() != "https" {
+        return Err(invalid(format!(
+            "only https is allowed; refusing the '{}' scheme, which would send the password \
+             in the clear",
+            url.scheme()
+        )));
+    }
+    if url.host_str().is_none_or(str::is_empty) {
+        return Err(invalid("the URL has no host".into()));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(invalid(
+            "credentials do not belong in the URL; use the username and password fields".into(),
+        ));
+    }
+    Ok(url)
+}
+
+/// The base URL an account syncs from: its server URL, or iCloud's
+/// fixed root when an iCloud account leaves it blank.
+fn base_url(account: &CardDavAccount) -> Result<Url, ContactsError> {
+    let configured = account.server_url.trim();
+    if configured.is_empty() {
+        if account.provider == CardDavProvider::ICLOUD {
+            return https_url("account.server_url", ICLOUD_ROOT);
+        }
+        return Err(ContactsError::Invalid {
+            field: "account.server_url".into(),
+            reason: format!("account '{}' has no server URL", account.label),
+        });
+    }
+    https_url("account.server_url", configured)
+}
+
+/// The credential scope of an account (after [`validate_account`]).
+///
+/// # Errors
+///
+/// As [`validate_account`].
+pub fn credential_scope(account: &CardDavAccount) -> Result<CredentialScope, ContactsError> {
+    let base = base_url(account)?;
+    Ok(CredentialScope {
+        host: base.host_str().unwrap_or_default().to_ascii_lowercase(),
+        port: base.port_or_known_default().unwrap_or(443),
+        icloud: account.provider == CardDavProvider::ICLOUD,
+    })
+}
+
+// t[impl contacts.transport.https-only]
+/// Check an account's URLs before it is saved — and again before every
+/// sync, so a file edited by hand gets the same answer.
+///
+/// # Errors
+///
+/// [`ContactsError::Invalid`] naming the field: a non-https or
+/// malformed server URL, a missing one (iCloud excepted), or an
+/// addressbook URL outside the account's credential scope.
+pub fn validate_account(account: &CardDavAccount) -> Result<(), ContactsError> {
+    let scope = credential_scope(account)?;
+    if let Some(book) = account
+        .addressbook_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let url = https_url("account.addressbook_url", book)?;
+        if !scope.allows(&url) {
+            return Err(ContactsError::Invalid {
+                field: "account.addressbook_url".into(),
+                reason: "the addressbook must be on the account's own server".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 // ── DAV client ──────────────────────────────────────────────────────
 
 /// A raw (href, etag, vcard-text) tuple from a multistatus response.
@@ -95,116 +336,140 @@ struct Card {
 /// A minimal blocking WebDAV/CardDAV client scoped to one account.
 struct Dav {
     agent: ureq::Agent,
-    /// `scheme://host[:port]` — hrefs in DAV responses are usually paths
-    /// and are resolved against this.
-    origin: String,
-    /// The base URL to start discovery from.
-    base: String,
+    /// The base URL discovery starts from; relative hrefs resolve
+    /// against it.
+    base: Url,
+    /// Where the credential may be sent.
+    scope: CredentialScope,
     /// Pre-computed `Basic …` authorization header value.
-    auth: String,
+    auth: zeroize::Zeroizing<String>,
 }
 
 impl Dav {
-    fn new(account: &CardDavAccount) -> Result<Self, ContactsError> {
-        // iCloud has a fixed discovery root; everything else uses the
-        // configured server URL.
-        let base = {
-            let configured = account.server_url.trim();
-            if account.provider == CardDavProvider::ICLOUD && configured.is_empty() {
-                "https://contacts.icloud.com".to_string()
-            } else if configured.is_empty() {
-                return Err(ContactsError::Sync {
-                    message: format!("account '{}' has no server URL", account.label),
-                });
-            } else {
-                configured.trim_end_matches('/').to_string()
-            }
-        };
-        let origin = origin_of(&base).ok_or_else(|| ContactsError::Sync {
-            message: format!("malformed server URL: {base}"),
+    fn new(
+        account: &CardDavAccount,
+        password: &str,
+        transport: &Transport,
+    ) -> Result<Self, ContactsError> {
+        validate_account(account).map_err(|e| ContactsError::Sync {
+            message: e.to_string(),
         })?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(30))
-            .redirects(0) // we follow the well-known redirect by hand
-            .build();
-        let auth = format!(
+        let base = base_url(account)?;
+        let scope = credential_scope(account)?;
+        let auth = zeroize::Zeroizing::new(format!(
             "Basic {}",
-            base64_encode(format!("{}:{}", account.username, account.password).as_bytes())
-        );
+            base64_encode(format!("{}:{}", account.username, password).as_bytes())
+        ));
         Ok(Self {
-            agent,
-            origin,
+            agent: transport.agent()?,
             base,
+            scope,
             auth,
         })
     }
 
-    /// Resolve a (possibly relative) href against this account's origin.
-    fn absolute(&self, href: &str) -> String {
-        let h = href.trim();
-        if h.starts_with("http://") || h.starts_with("https://") {
-            h.to_string()
-        } else if h.starts_with('/') {
-            format!("{}{}", self.origin, h)
-        } else {
-            format!("{}/{}", self.origin, h)
+    /// Resolve a (possibly relative) href against the base URL, and
+    /// refuse it if it leaves the credential scope.
+    fn absolute(&self, href: &str) -> Result<Url, ContactsError> {
+        let url = self
+            .base
+            .join(href.trim())
+            .map_err(|e| ContactsError::Sync {
+                message: format!("bad href {href:?} from the server: {e}"),
+            })?;
+        if !self.scope.allows(&url) {
+            return Err(ContactsError::Sync {
+                message: format!(
+                    "refusing {}: outside this account's server, so its password is not sent there",
+                    redact(&url)
+                ),
+            });
         }
+        Ok(url)
     }
 
-    /// Issue a request with a body, returning the response body text. A
-    /// single redirect (well-known) is followed. Non-2xx → `Sync` error.
+    // t[impl contacts.transport.same-origin-credentials]
+    /// Issue a request with a body, returning the response body text.
+    /// Redirects are followed only while they stay inside the
+    /// credential scope; one that leaves it is an error and is never
+    /// requested. Non-2xx → `Sync` error.
     fn send(
         &self,
         method: &str,
-        url: &str,
+        url: &Url,
         depth: &str,
         body: &str,
     ) -> Result<String, ContactsError> {
-        let mut target = url.to_string();
-        for _ in 0..4 {
+        let mut target = url.clone();
+        for _ in 0..5 {
+            // The one gate every request passes, redirect hops included.
+            if !self.scope.allows(&target) {
+                return Err(ContactsError::Sync {
+                    message: format!(
+                        "refusing {method} {}: outside this account's server",
+                        redact(&target)
+                    ),
+                });
+            }
             let resp = self
                 .agent
-                .request(method, &target)
+                .request(method, target.as_str())
                 .set("Authorization", &self.auth)
                 .set("Depth", depth)
                 .set("Content-Type", "application/xml; charset=utf-8")
                 .send_string(body);
-            match resp {
-                Ok(r) => {
-                    return r.into_string().map_err(|e| ContactsError::Sync {
-                        message: format!("reading {method} {target}: {e}"),
-                    });
+            let (code, location, ok_body) = match resp {
+                Ok(r) if (300..400).contains(&r.status()) => {
+                    (r.status(), r.header("Location").map(str::to_owned), None)
                 }
+                Ok(r) => (r.status(), None, Some(r)),
                 Err(ureq::Error::Status(code, r)) => {
-                    // Follow one hop for the well-known redirect.
-                    if code == 301 || code == 302 || code == 307 || code == 308 {
-                        if let Some(loc) = r.header("Location") {
-                            target = self.absolute(loc);
-                            continue;
-                        }
-                    }
-                    return Err(ContactsError::Sync {
-                        message: format!("{method} {target} → HTTP {code}"),
-                    });
+                    (code, r.header("Location").map(str::to_owned), None)
                 }
                 Err(e) => {
                     return Err(ContactsError::Sync {
-                        message: format!("{method} {target}: {e}"),
+                        message: format!("{method} {}: {e}", redact(&target)),
                     });
                 }
+            };
+            if let Some(r) = ok_body {
+                return r.into_string().map_err(|e| ContactsError::Sync {
+                    message: format!("reading {method} {}: {e}", redact(&target)),
+                });
             }
+            if matches!(code, 301 | 302 | 303 | 307 | 308)
+                && let Some(loc) = location
+            {
+                let next = target.join(loc.trim()).map_err(|e| ContactsError::Sync {
+                    message: format!("bad redirect {loc:?}: {e}"),
+                })?;
+                if !self.scope.allows(&next) {
+                    return Err(ContactsError::Sync {
+                        message: format!(
+                            "refusing a redirect from {} to {}: outside this account's server",
+                            redact(&target),
+                            redact(&next)
+                        ),
+                    });
+                }
+                target = next;
+                continue;
+            }
+            return Err(ContactsError::Sync {
+                message: format!("{method} {} → HTTP {code}", redact(&target)),
+            });
         }
         Err(ContactsError::Sync {
-            message: format!("too many redirects for {method} {url}"),
+            message: format!("too many redirects for {method} {}", redact(url)),
         })
     }
 
     /// Walk principal → addressbook-home-set → addressbook collections.
-    fn discover_addressbooks(&self) -> Result<Vec<String>, ContactsError> {
+    fn discover_addressbooks(&self) -> Result<Vec<Url>, ContactsError> {
         // current-user-principal
         let principal_body = r#"<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>"#;
-        let well_known = self.absolute("/.well-known/carddav");
+        let well_known = self.absolute("/.well-known/carddav")?;
         let xml = self
             .send("PROPFIND", &well_known, "0", principal_body)
             .or_else(|_| self.send("PROPFIND", &self.base, "0", principal_body))?;
@@ -216,7 +481,7 @@ impl Dav {
         // addressbook-home-set
         let home_body = r#"<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav"><d:prop><c:addressbook-home-set/></d:prop></d:propfind>"#;
-        let xml = self.send("PROPFIND", &self.absolute(&principal), "0", home_body)?;
+        let xml = self.send("PROPFIND", &self.absolute(&principal)?, "0", home_body)?;
         let home =
             first_href_for(&xml, "addressbook-home-set").ok_or_else(|| ContactsError::Sync {
                 message: "no addressbook-home-set in server response".into(),
@@ -225,15 +490,20 @@ impl Dav {
         // list collections; keep the ones whose resourcetype is addressbook
         let list_body = r#"<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:displayname/></d:prop></d:propfind>"#;
-        let xml = self.send("PROPFIND", &self.absolute(&home), "1", list_body)?;
-        Ok(addressbook_hrefs(&xml)
+        let home = self.absolute(&home)?;
+        let xml = self.send("PROPFIND", &home, "1", list_body)?;
+        addressbook_hrefs(&xml)
             .into_iter()
-            .map(|h| self.absolute(&h))
-            .collect())
+            .map(|h| {
+                home.join(&h).map_err(|e| ContactsError::Sync {
+                    message: format!("bad addressbook href {h:?}: {e}"),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Drain one addressbook collection via `addressbook-query` REPORT.
-    fn fetch_cards(&self, addressbook_url: &str) -> Result<Vec<Card>, ContactsError> {
+    fn fetch_cards(&self, addressbook_url: &Url) -> Result<Vec<Card>, ContactsError> {
         let body = r#"<?xml version="1.0" encoding="utf-8"?>
 <c:addressbook-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">
   <d:prop><d:getetag/><c:address-data/></d:prop>
@@ -241,6 +511,18 @@ impl Dav {
         let xml = self.send("REPORT", addressbook_url, "1", body)?;
         Ok(parse_multistatus(&xml))
     }
+}
+
+/// A URL fit for an error message or a log line: scheme, host, port and
+/// path — never userinfo or a query.
+fn redact(url: &Url) -> String {
+    format!(
+        "{}://{}{}{}",
+        url.scheme(),
+        url.host_str().unwrap_or(""),
+        url.port().map(|p| format!(":{p}")).unwrap_or_default(),
+        url.path()
+    )
 }
 
 // ── XML helpers (roxmltree; matched by local name, namespace-lenient) ─
@@ -479,19 +761,6 @@ fn unescape(v: &str) -> String {
     out.trim().to_string()
 }
 
-/// The scheme + host + optional port of a URL, or `None` if malformed.
-fn origin_of(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme.is_empty() || rest.is_empty() {
-        return None;
-    }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    if authority.is_empty() {
-        return None;
-    }
-    Some(format!("{scheme}://{authority}"))
-}
-
 /// Minimal standard base64 encoder (avoids pulling in a crate just for
 /// the Basic-auth header).
 fn base64_encode(input: &[u8]) -> String {
@@ -611,17 +880,67 @@ END:VCARD\r\n";
         assert_eq!(base64_encode(b""), "");
     }
 
+    fn account(provider: &str, server_url: &str) -> CardDavAccount {
+        let mut a = CardDavAccount::create("a1", "Test", provider, "2026-10-20T00:00:00Z");
+        a.server_url = server_url.into();
+        a
+    }
+
+    // t[verify contacts.transport.https-only]
     #[test]
-    fn origin_extraction() {
-        assert_eq!(
-            origin_of("https://cloud.example.com/remote.php/dav").as_deref(),
-            Some("https://cloud.example.com")
+    fn only_https_origins_are_accepted() {
+        assert!(validate_account(&account("nextcloud", "https://cloud.example.com/dav")).is_ok());
+        for refused in [
+            "http://cloud.example.com/dav",
+            "ftp://cloud.example.com",
+            "cloud.example.com",
+            "https://user:pw@cloud.example.com",
+            "",
+        ] {
+            let err = validate_account(&account("nextcloud", refused)).unwrap_err();
+            assert!(
+                matches!(&err, ContactsError::Invalid { field, .. } if field == "account.server_url"),
+                "{refused:?} → {err:?}"
+            );
+        }
+        // iCloud may leave the URL blank: its root is fixed, and https.
+        assert!(validate_account(&account("icloud", "")).is_ok());
+        // An addressbook on another host is refused too.
+        let mut a = account("nextcloud", "https://cloud.example.com");
+        a.addressbook_url = Some("https://elsewhere.example.net/books/1/".into());
+        assert!(validate_account(&a).is_err());
+        a.addressbook_url = Some("https://cloud.example.com/books/1/".into());
+        assert!(validate_account(&a).is_ok());
+    }
+
+    // t[verify contacts.transport.same-origin-credentials]
+    #[test]
+    fn the_credential_scope_is_the_configured_origin() {
+        let scope =
+            credential_scope(&account("nextcloud", "https://cloud.example.com:8443/dav")).unwrap();
+        let ok = |s: &str| scope.allows(&Url::parse(s).unwrap());
+        assert!(ok("https://cloud.example.com:8443/remote.php/dav/"));
+        assert!(ok("https://CLOUD.example.com:8443/x"));
+        assert!(
+            !ok("https://cloud.example.com/x"),
+            "another port is another origin"
         );
-        assert_eq!(
-            origin_of("https://host:8443/x").as_deref(),
-            Some("https://host:8443")
+        assert!(
+            !ok("http://cloud.example.com:8443/x"),
+            "http is never in scope"
         );
-        assert_eq!(origin_of("not a url"), None);
+        assert!(!ok("https://evil.example.com:8443/x"));
+        assert!(!ok("https://cloud.example.com.evil.net:8443/x"));
+        assert!(!ok("https://u@cloud.example.com:8443/x"));
+
+        // iCloud: Apple's partition hosts, on 443, and nothing else.
+        let icloud = credential_scope(&account("icloud", "")).unwrap();
+        let ok = |s: &str| icloud.allows(&Url::parse(s).unwrap());
+        assert!(ok("https://contacts.icloud.com/"));
+        assert!(ok("https://p42-contacts.icloud.com/123/carddavhome/"));
+        assert!(!ok("https://icloud.com.evil.net/"));
+        assert!(!ok("https://p42-contacts.icloud.com:8443/"));
+        assert!(!ok("http://p42-contacts.icloud.com/"));
     }
 
     #[test]

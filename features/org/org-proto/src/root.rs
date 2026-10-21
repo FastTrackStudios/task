@@ -360,6 +360,13 @@ impl OrgRoot {
         self.path.join("prefs.sqlite")
     }
 
+    /// `<org>/sharing.sqlite` — the Sharing Grants this org has made to
+    /// people of other orgs, and their audit lines.
+    #[must_use]
+    pub fn sharing_db(&self) -> PathBuf {
+        self.path.join("sharing.sqlite")
+    }
+
     #[must_use]
     pub fn vault_dir(&self) -> PathBuf {
         self.path.join("vault")

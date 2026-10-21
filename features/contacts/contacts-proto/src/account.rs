@@ -3,10 +3,11 @@
 //! A [`CardDavAccount`] is one addressbook the app pulls contacts from
 //! — Nextcloud, iCloud, or any generic CardDAV server. It carries the
 //! connection details (URL + username + app-specific password) and the
-//! last-sync bookkeeping. The password is a **secret**: it lives only
-//! server-side, and `list_accounts` blanks it before it goes on the
-//! wire, so the UI can show/edit an account without ever reading the
-//! credential back.
+//! last-sync bookkeeping. The password is a **secret** and write-only:
+//! the backend never stores it in the vault (a credential store keeps
+//! it; the account file holds a reference), and `list_accounts` returns
+//! it blank, so the UI can show/edit an account without ever reading the
+//! credential back. The server URL must be https.
 //!
 //! The actual pull (principal discovery → addressbook-query → vCard
 //! parse → [`crate::Contact`]) lives in the native `contacts` crate;
@@ -50,8 +51,11 @@ pub struct CardDavAccount {
     pub server_url: String,
     /// Login user (often an email).
     pub username: String,
-    /// App-specific password. **Secret** — blanked by `list_accounts`;
-    /// only ever set, never read back over the wire.
+    /// App-specific password. **Write-only**: set it to save or replace
+    /// the credential; it is never persisted in the vault (the backend
+    /// hands it to a credential store and keeps a reference —
+    /// `contacts.secret.out-of-vault`) and always comes back blank.
+    /// A blank value on save keeps the stored credential.
     pub password: String,
     /// The resolved addressbook collection URL, filled in by discovery
     /// on the first successful sync.

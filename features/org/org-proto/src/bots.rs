@@ -35,8 +35,18 @@ pub struct BotInfo {
 pub struct CreateBotRequest {
     pub session_token: String,
     pub name: String,
-    /// Orgs the caller is a member of.
+    /// Orgs the caller is a member of. Empty only with `no_orgs`.
     pub orgs: Vec<String>,
+    /// Make the bot with no orgs at all, on purpose — an operator
+    /// grants them later (`task-server admin grant --principal <bot
+    /// id>`). Refused together with a non-empty `orgs`; an empty
+    /// `orgs` without it is refused too.
+    ///
+    /// Defaults to `false` so apps from before 0.2, which never send
+    /// it, can still make bots: vox refuses a field the caller's schema
+    /// lacks unless it has a default (tests/bots_wire_compat.rs).
+    #[facet(default)]
+    pub no_orgs: bool,
     pub tools: BotTools,
 }
 
@@ -70,7 +80,8 @@ pub enum BotError {
 /// A person's bots on this server.
 #[architect::rpc]
 pub trait BotService {
-    /// The bots the caller made, with the orgs each may reach.
+    /// The bots the caller made, with the orgs each may reach (possibly
+    /// none).
     fn list_bots(&self, session_token: String) -> Result<Vec<BotInfo>, BotError>;
 
     /// Make a bot: an account in the orgs given (only ones the caller is

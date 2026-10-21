@@ -395,6 +395,71 @@ without the person saying so.
 
 ---
 
+## Who made it
+
+Each bot that works for the people of an org (Atlas, Commander, a
+team's helper) has a Task identity of its own. So a capture or a task
+records who made it, as well as where it came from.
+
+### Every capture and task names its creator
+
+t[attribution.created-by]
+An inbox item and a task each carry `created_by`, the principal that
+made them: `user:<account uuid>` for a person, or `bot:<account uuid>`
+for a bot account (an address under the bot domain). They also carry
+`created_by_name`, the account's display name at that moment, so a
+surface can say who made it without a directory. `source` keeps its
+own meaning: the *surface* the item came in through (`ui`, `cli`,
+`watch`, `mcp`, `email`). An agent's capture says `mcp` there, never
+`agent`. Records made before attribution existed have no creator, and
+they stay valid.
+
+### The server says who, never the caller
+
+t[attribution.server-stamped]
+`created_by` is set by the server from the credentials behind the
+write, and never from the payload. On the RPC lanes that means the
+permission gate's caller. Over MCP it means the bearer's principal: a
+bot key's bot, or a session's person. On the watch bridge it means the
+device's account. Whatever creator a client sends is dropped first,
+so no caller can name someone else, and a write with no principal
+behind it records none.
+
+### A creator is written once
+
+t[attribution.immutable]
+Once a record has a creator, nothing changes it. That covers an
+update, a processing decision, a stale client copy, an upsert that
+leaves the field out, and a text version merged in from a folder edit
+or another replica (`vault_doc::merge_text` keeps `created_by` /
+`createdBy` from the first version that had one).
+
+### Lists filter by creator
+
+t[attribution.filter]
+`TaskListFilter::created_by`, `Inbox::list_inbox_by` and the
+`created_by` argument of the MCP `list_tasks` / `list_inbox` tools keep
+one creator's records. Each takes a full ref, a bare account uuid, or
+`none` for unattributed records. All of them share one rule,
+`workflows_proto::creator::creator_matches`.
+
+### Surfaces say who
+
+t[attribution.shown]
+An inbox row and a task's page say "from you" for the signed-in
+account's own records, and "from <name>" for anyone else's
+(`creator_label`). A record with no creator says nothing.
+
+### The seed shows every kind of creator
+
+t[attribution.seed]
+The planted world has a bot, Atlas (in acme-audio), and its captures
+and tasks mix three kinds of creator: Alice, Sam and Atlas each made
+some, and a few have none, standing for records from before
+attribution.
+
+---
+
 ## Where each rule is checked
 
 | rule | checked by |
@@ -407,6 +472,10 @@ without the person saying so.
 | `process.capture.marks`, `.people` | `people` unit tests (what is a mark; people by handle or name, first or full); `example_org::declared_tests::every_person_a_capture_names_has_a_profile`; `example_org::declared_tests::the_seeded_inbox_shows_people_tags_and_contexts`; `process.rs` serves the planted captures verbatim |
 | `process.suggested` | `task-proto::suggest` unit tests (the order, "Not now", what is running); `apps/server/tests/it/watch_suggested_e2e.rs::the_watch_suggests_and_acts_on_the_same_pick` — planned task, a template's maintenance hour opening a "Maintenance hour" session, the fall-through to overdue and captures, over the watch bridge |
 | `process.focus.*` (but `.everywhere`) | unit tests in `task-proto::relevance` and `scheduling-proto::focus`; `process.rs` over `TaskService::query`; the seed's maintenance hour in `example_org::declared_tests` |
+| `attribution.created-by`, `.server-stamped`, `.filter` | `apps/server/tests/it/attribution_e2e.rs`: a bot key and a person's session, each over MCP and the person also over the RPC lane, every call claiming someone else in its arguments; each record names its real creator, and the four filters each keep one creator's records. Also `attribution::tests`, and the filter rule in `workflows-proto::creator` |
+| `attribution.immutable` | `vault_inbox::tests::created_by_is_write_once`, `task::backend::tests::created_by_is_write_once_and_filters`, `vault_doc::doc::tests::a_creator_survives_every_later_text` (replica merges); `attribution_e2e.rs` edits over the wire |
+| `attribution.shown` | `workflows-proto::creator::tests::the_label_says_you_or_the_name` (the label both the inbox row and the task page render) |
+| `attribution.seed` | `example_org::declared_tests::the_seed_has_mixed_creators_from_its_own_org`; `demo_plant.rs::demo_plants_an_inbox_to_process_and_a_maintenance_hour` (a planted capture from Atlas, one from Alice, one unattributed, tasks from both, all surviving a replant) |
 
 The seeded world shows the whole loop to Alice: twelve captures in
 acme-audio's inbox (one suggested from mail, one snoozed two weeks out,

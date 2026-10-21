@@ -18,6 +18,11 @@ use facet::Facet;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Cross-org Sharing Grants — the owner's `sharing` service
+/// (`docs/spec/sharing.md`).
+pub mod grant;
+pub use grant::*;
+
 /// What a link points at.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(u8)]

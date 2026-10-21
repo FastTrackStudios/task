@@ -28,6 +28,7 @@
 
 pub mod activity;
 pub mod agent;
+pub mod creator;
 pub mod error;
 pub mod goal;
 pub mod handoff;

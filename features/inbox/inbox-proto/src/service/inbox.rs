@@ -50,6 +50,11 @@ pub trait Inbox {
     /// lives here so every surface — CLI brief, web inbox — gets the
     /// same queue without re-implementing the snooze filter.
     fn review_queue(&self, today: String) -> Result<Vec<InboxItem>, InboxError>;
+    /// Every item whose creator matches `created_by` — a ref
+    /// (`"bot:<uuid>"`), a bare account uuid, or `"none"` for items
+    /// with no recorded creator ([`crate::creator::creator_matches`]). Oldest
+    /// capture first, like [`Self::list_inbox`].
+    fn list_inbox_by(&self, created_by: String) -> Result<Vec<InboxItem>, InboxError>;
     /// One item by id.
     fn get_inbox_item(&self, id: &str) -> Result<InboxItem, InboxError>;
     /// Create or replace an item (keyed by `id`). Capture, snooze,
