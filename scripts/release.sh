@@ -203,7 +203,7 @@ cmd_promote() {
         echo "Promote \`$INTEGRATION_BRANCH\` → \`$PRODUCTION_BRANCH\`: **$ahead** change(s) that were verified on \`$INTEGRATION_BRANCH\` and are now FINISHED FEATURES waiting for the next release."
         echo
         echo "- **No deploy and no TestFlight on merge.** Production is the latest \`v*\` tag; a release is cut from \`$PRODUCTION_BRANCH\` later (\`just release-prepare\`)."
-        echo "- Full \`checks\` and the release guard run on this PR; the **Reviewer** agent reviews this diff (blocking / should-fix / nit) before merge."
+        echo "- Full \`checks\` and the release guard run on this PR; the **Reviewer** agent reviews this diff (blocking / should-fix / nit) and posts the review as a comment on this PR before merge."
         echo "- Merge with **Create a merge commit** (never squash or rebase)."
         echo
         echo "### Changes"

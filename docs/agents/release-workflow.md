@@ -8,7 +8,8 @@ one-screen version for an agent that owns a promotion or a release.
 
 - Cards squash into `dev`. **Dev never freezes.** No CI on card PRs.
 - **Promotion = `dev -> main`**: `just release-promote`. Full `checks` + the
-  release guard run; the **Reviewer** reviews the diff (code review happens
+  release guard run; the **Reviewer** reviews the diff and posts the review as a
+  comment on the PR (code review happens
   here: "review at promotion to main"). Merge commit. **A push to main
   deploys nothing and uploads nothing to TestFlight.** `main` = finished
   features waiting for a release. Promote whenever a feature set is verified.

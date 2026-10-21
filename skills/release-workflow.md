@@ -111,7 +111,28 @@ the branch affects, on the warm runner.
 read the PR's full diff (`gh pr diff <n>`), classify findings as blocking /
 should-fix / nit, and confirm `checks` and the release guard are green. A
 blocking finding is fixed by a squash PR into dev; the promotion PR picks it
-up. Approve in the Paperclip issue; the merge is a merge commit.
+up. The merge is a merge commit.
+
+**Post the review on the PR itself**, like Greptile or CodeRabbit, so it reads
+where the merge happens. One `COMMENT` review per pass, pinned to the head sha
+you read (`gh pr view <n> --json headRefOid`):
+
+```bash
+gh api repos/FastTrackStudios/task/pulls/<n>/reviews --input review.json
+# {"commit_id": "<sha>", "event": "COMMENT", "body": "...",
+#  "comments": [{"path": "...", "line": N, "side": "RIGHT", "body": "**should-fix** S1: ..."}]}
+```
+
+- Body: first line `Verdict: APPROVE` or `Verdict: CHANGES REQUESTED`, then `head: <sha>`,
+  the state of `checks` and the release guard, the counts, and numbered findings
+  (B1, S1, N1) with file:line and a fix. Say what you did not verify.
+- Inline comments only on changed lines (a path or line outside the diff makes the
+  whole call 422); findings about unchanged code or repo settings go in the body.
+- Use `COMMENT`, not `APPROVE` / `REQUEST_CHANGES`: the bot that opens the
+  promotion PR is the same identity as the reviewer's, and GitHub refuses to
+  approve your own PR (422). The verdict is the body's first line.
+- Re-review: a new review on the new head sha saying what each earlier finding
+  became. The Paperclip issue gets the verdict, counts and the review URL.
 
 ## Promoting dev to main (finished features)
 
