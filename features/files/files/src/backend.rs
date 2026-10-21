@@ -163,6 +163,12 @@ use crate::versions::VaultVersions;
 /// concurrent-writer guard `Backend::gc`'s own contract describes).
 const DEFAULT_GC_KEEP_NEWER_SECS: u64 = 60;
 
+/// How many commits [`FilesBackend::superseded_on_line`] walks behind a
+/// head before giving up. Giving up keeps the file (it is reported
+/// `kept_dirty`), so the bound trades only a refused replace for a
+/// bounded sweep — never data.
+const SUPERSEDE_WALK_LIMIT: usize = 10_000;
+
 /// One root's live jj state: the repo handle (reassigned after every
 /// `checkpoint_now`) and its current checkpoint head. `head` is tracked
 /// explicitly rather than re-derived from `repo.view().heads()` on
@@ -1158,13 +1164,21 @@ impl FilesBackend {
     fn head_of(repo: &Arc<ReadonlyRepo>, flavor: RootFlavor) -> Result<CommitId, Error> {
         match flavor {
             RootFlavor::Software => git_root::head_commit(repo),
-            RootFlavor::Media => Ok(repo
-                .view()
-                .heads()
-                .iter()
-                .next()
-                .cloned()
-                .unwrap_or_else(|| repo.store().root_commit_id().clone())),
+            // The root commit is only ever the answer when there is no
+            // other: a view that also holds real commits (an imported
+            // root head beside a snapshot, in the incident behind
+            // `files.peering.empty-replica-never-deletes`) must not
+            // resolve to the empty tree by the luck of set order.
+            RootFlavor::Media => {
+                let root_commit = repo.store().root_commit_id();
+                Ok(repo
+                    .view()
+                    .heads()
+                    .iter()
+                    .find(|h| *h != root_commit)
+                    .cloned()
+                    .unwrap_or_else(|| root_commit.clone()))
+            }
         }
     }
 
@@ -4002,6 +4016,93 @@ impl FilesBackend {
         heads
     }
 
+    /// Which of `current` (path → the content on disk now) the line
+    /// ending at `head` has *superseded*: some strict ancestor of `head`
+    /// held that path at exactly that content, so the line recorded
+    /// moving it on (an edit or a deletion) after having had it.
+    ///
+    /// This is what lets [`FilesBackend::materialize_head_inner`] tell a
+    /// recorded deletion from a line that simply never contained a file
+    /// — the difference between replicating a delete and erasing local
+    /// work (`files.peering.empty-replica-never-deletes`). Bounded:
+    /// past [`SUPERSEDE_WALK_LIMIT`] commits the walk stops, and
+    /// whatever is unresolved counts as not superseded, so the cost of
+    /// giving up is a kept file, never a lost one.
+    fn superseded_on_line(
+        backend: &dyn Backend,
+        repo: &Arc<ReadonlyRepo>,
+        head: &CommitId,
+        current: &BTreeMap<RepoPathBuf, jj_lib::backend::FileId>,
+    ) -> Result<BTreeSet<RepoPathBuf>, Error> {
+        let mut found: BTreeSet<RepoPathBuf> = BTreeSet::new();
+        if current.is_empty() {
+            return Ok(found);
+        }
+        let root_commit = repo.store().root_commit_id().clone();
+        pollster::block_on(async {
+            let mut trees: std::collections::HashMap<
+                jj_lib::backend::TreeId,
+                Arc<jj_lib::backend::Tree>,
+            > = std::collections::HashMap::new();
+            let mut seen: std::collections::HashSet<CommitId> = std::collections::HashSet::new();
+            let mut queue: std::collections::VecDeque<CommitId> = backend
+                .read_commit(head)
+                .await?
+                .parents
+                .iter()
+                .cloned()
+                .collect();
+            while let Some(id) = queue.pop_front() {
+                if found.len() == current.len() || seen.len() >= SUPERSEDE_WALK_LIMIT {
+                    break;
+                }
+                // The root commit's tree is empty: it holds nothing.
+                if id == root_commit || !seen.insert(id.clone()) {
+                    continue;
+                }
+                let commit = backend.read_commit(&id).await?;
+                queue.extend(commit.parents.iter().cloned());
+                let Ok(tree_id) = commit.root_tree.clone().into_resolved() else {
+                    continue;
+                };
+                'paths: for (path, cur) in current {
+                    if found.contains(path) {
+                        continue;
+                    }
+                    let mut tree_id = tree_id.clone();
+                    let mut dir = RepoPathBuf::root();
+                    let mut components = path.components().peekable();
+                    while let Some(name) = components.next() {
+                        let tree = match trees.get(&tree_id) {
+                            Some(t) => t.clone(),
+                            None => {
+                                let t = Arc::new(backend.read_tree(&dir, &tree_id).await?);
+                                trees.insert(tree_id.clone(), t.clone());
+                                t
+                            }
+                        };
+                        match (tree.value(name), components.peek().is_some()) {
+                            (Some(jj_lib::backend::TreeValue::Tree(sub)), true) => {
+                                tree_id = sub.clone();
+                                dir = dir.join(name);
+                            }
+                            (Some(jj_lib::backend::TreeValue::File { id, .. }), false) => {
+                                if id == cur {
+                                    found.insert(path.clone());
+                                }
+                                continue 'paths;
+                            }
+                            _ => continue 'paths,
+                        }
+                    }
+                }
+            }
+            Ok::<_, jj_lib::backend::BackendError>(())
+        })
+        .map_err(|e| Error::Repo(format!("walking the line behind {}: {e}", head.hex())))?;
+        Ok(found)
+    }
+
     /// Every file `path → FileId` in `commit`'s tree.
     fn tree_files_of(
         backend: &dyn Backend,
@@ -4469,9 +4570,15 @@ impl FilesBackend {
         let Some((repo, head)) = self.reload_existing_repo(&root).map_err(to_files_error)? else {
             return Ok(Vec::new());
         };
+        // A peer holding nothing offers nothing: the root commit is
+        // virtual on every store, so offering it says nothing a puller
+        // could use — and an old puller would import it as a head.
+        // t[impl files.peering.empty-replica-never-deletes]
+        let root_commit = repo.store().root_commit_id().clone();
         Ok(self
             .ordered_heads(&repo, &root, &head)
             .iter()
+            .filter(|h| **h != root_commit)
             .map(|h| h.hex())
             .collect())
     }
@@ -4848,6 +4955,14 @@ impl FilesBackend {
         let lock = self.root_lock(root_id);
         let _guard = lock.lock().expect("root lock poisoned");
         let (repo, _head) = self.reload_repo(&root).map_err(to_files_error)?;
+        // The root commit is what an EMPTY replica answers for its
+        // heads. It is never a line: making it a visible head is what
+        // let a pull resolve a never-checkpointed vault to the empty
+        // tree and delete every snapshotted file.
+        // t[impl files.peering.empty-replica-never-deletes]
+        if id == *repo.store().root_commit_id() {
+            return Ok(());
+        }
         if repo.view().heads().contains(&id) {
             return Ok(());
         }
@@ -4880,12 +4995,28 @@ impl FilesBackend {
         let lock = self.root_lock(root_id);
         let _guard = lock.lock().expect("root lock poisoned");
         let (repo, head) = self.reload_repo(&root)?;
+        // A line that has no commit yet has nothing to materialize. The
+        // root commit's tree is empty, and treating it as a target is
+        // treating every file on disk as deleted — the wipe behind
+        // `files.peering.empty-replica-never-deletes`. A vault that has
+        // only ever auto-snapshotted is exactly this case: its
+        // checkpoint line is still the root commit, while what it holds
+        // lives on the snapshot branch.
+        // t[impl files.peering.empty-replica-never-deletes]
+        if head == *repo.store().root_commit_id() {
+            return Ok(MaterializeReport::default());
+        }
         let backend = repo.store().backend();
         let target = Self::tree_files_of(backend, &head)?;
         let store_dir = repo_open::store_dir(&root_path);
         let policy = hydration::matcher(&store_dir)?;
         let content = crate::content::ContentStore::for_repo(&repo, backend)?;
         let mut report = MaterializeReport::default();
+        // Disk files the head would replace or remove, held until the
+        // line's history says whether it superseded them (below).
+        let mut superseding: Vec<(PathBuf, RepoPathBuf, Option<jj_lib::backend::FileId>)> =
+            Vec::new();
+        let mut current_of: BTreeMap<RepoPathBuf, jj_lib::backend::FileId> = BTreeMap::new();
 
         // Disk side: anything tracked-on-disk that the head no longer
         // has, or holds at different content.
@@ -4927,32 +5058,52 @@ impl FilesBackend {
                             .push(file.repo_path.as_internal_file_string().to_string());
                         continue;
                     }
-                    match want {
-                        Some(want_id) => {
-                            self.write_materialized(
-                                &root,
-                                &repo,
-                                &file.repo_path,
-                                want_id,
-                                &policy,
-                                &mut report,
-                            )?;
-                        }
-                        None => {
-                            if let Err(e) = std::fs::remove_file(&file.disk_path)
-                                && e.kind() != std::io::ErrorKind::NotFound
-                            {
-                                return Err(e.into());
-                            }
-                            report
-                                .removed
-                                .push(file.repo_path.as_internal_file_string().to_string());
-                        }
-                    }
+                    current_of.insert(file.repo_path.clone(), cur);
+                    superseding.push((
+                        file.disk_path.clone(),
+                        file.repo_path.clone(),
+                        want.cloned(),
+                    ));
                 }
                 (None, None) => {}
                 (Some(_), None) => {
                     // Unprobeable backend — already errored in probe.
+                }
+            }
+        }
+
+        // Known content is not enough to replace or remove a file: an
+        // auto-snapshot makes every local write "known" within minutes,
+        // and a line that never held that content has no say over it.
+        // Only a line that had THIS path at THIS content and moved on —
+        // an ancestor of the head held it — supersedes it. Anything else
+        // is local work and is kept, never deleted or reverted.
+        // t[impl files.peering.empty-replica-never-deletes]
+        let superseded = Self::superseded_on_line(backend, &repo, &head, &current_of)?;
+        for (disk_path, repo_path, want) in superseding {
+            let rel = repo_path.as_internal_file_string().to_string();
+            if !superseded.contains(&repo_path) {
+                report.kept_dirty.push(rel);
+                continue;
+            }
+            match want {
+                Some(want_id) => {
+                    self.write_materialized(
+                        &root,
+                        &repo,
+                        &repo_path,
+                        &want_id,
+                        &policy,
+                        &mut report,
+                    )?;
+                }
+                None => {
+                    if let Err(e) = std::fs::remove_file(&disk_path)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return Err(e.into());
+                    }
+                    report.removed.push(rel);
                 }
             }
         }
