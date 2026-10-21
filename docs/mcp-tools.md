@@ -124,6 +124,19 @@ Once a source is held, a reference resolves into the kind it is held as:
 `[[acme.test/songs::hallelujah]]` is the song on ACME's shelf for an org
 holding `acme.test/songs` as `assets`, and ACME's wiki `songs` otherwise.
 
+### Live sets (`fasttrackstudio` plugin)
+
+An agent in a set the band plays together (spec: `docs/spec/agents.md`
+§ "An agent in a live set"; the rules are `apps/server/src/live_docs.rs`).
+The docs are the very ones the band's apps sync over `DocSync`, so an apply
+is live the moment it returns.
+
+| tool | does | permit (checked in the tool, always enforced) |
+|---|---|---|
+| `live_observe` | a set's songs in order, each with its `doc_ref` (`live:<setlist>/<song>`), doc id and `version`; `read_only` says whether you may edit | read `live/<setlist>` |
+| `doc_read` | one song's doc as JSON, its `version`, and the latest applies (who, when, apply id, undone by) | read `live/<setlist>` |
+| `doc_apply` | `ops` (`set` / `insert` / `delete` / `splice`, or one `undo`) **applied at once**, as one commit attributed to the caller; `expected_version` refuses a stale edit; `mode: "propose"` checks and previews only. The batch is checked against the doc's shape first (a field keeps its kind; paths and indexes must exist) and one bad op refuses all of it | write `live/<setlist>`; refused to an observer (a library key) |
+
 ### Calendar & scheduling (`scheduling` plugin)
 
 | tool | does | wire permit |

@@ -60,6 +60,8 @@ pub mod device_enrollment;
 pub mod doc_guard;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live;
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub mod live_docs;
 pub mod node_cli;
 #[cfg(feature = "plugin-wiki")]
 pub mod node_homes;

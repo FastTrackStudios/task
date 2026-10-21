@@ -65,6 +65,8 @@ pub enum Tools {
     All,
     /// Notes and wikis — the vault and the wiki lane, read and write —
     /// and the orientation tools. No tasks, calendar, email or money.
+    /// It may watch a live set (`live_observe`, `doc_read`) but not edit
+    /// one: a library key is an observer there (spec §7 S1).
     Library,
 }
 
@@ -87,8 +89,11 @@ impl Tools {
                 const ORIENTATION: &[&str] = &["task_context", "api_reference", "list_orgs"];
                 // Reads of the notes that don't say `note` / `vault`.
                 const NOTES: &[&str] = &["query_base"];
+                // Watching a live set, never editing it.
+                const LIVE_WATCH: &[&str] = &["live_observe", "doc_read"];
                 ORIENTATION.contains(&tool)
                     || NOTES.contains(&tool)
+                    || LIVE_WATCH.contains(&tool)
                     || tool.contains("wiki")
                     || tool.contains("note")
                     || tool.contains("vault")
@@ -518,6 +523,12 @@ mod tests {
         assert!(Tools::Library.allows("read_wiki_page"));
         assert!(Tools::Library.allows("task_context"));
         assert!(Tools::Library.allows("query_base"));
+        assert!(Tools::Library.allows("live_observe"));
+        assert!(Tools::Library.allows("doc_read"));
+        assert!(
+            !Tools::Library.allows("doc_apply"),
+            "a library key only observes"
+        );
         assert!(!Tools::Library.allows("create_task"));
         assert!(!Tools::Library.allows("send_email"));
         assert!(Tools::All.allows("create_task"));

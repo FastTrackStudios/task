@@ -31,6 +31,11 @@
 //! refused (counted, logged, never applied or relayed). Presence is not
 //! gated: an observer shows up in the set like anyone. Members and bots
 //! with edit rights `join` and write live.
+//!
+//! **Agents over MCP.** An agent reaches the same docs as JSON through
+//! [`crate::live_docs`]: `live_observe` a set, `doc_read` a song's doc,
+//! `doc_apply` ops to it — applied to the served doc here, so every peer
+//! syncing it sees the edit at once, attributed and undoable.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
@@ -90,6 +95,8 @@ struct Inner {
     epochs: architect::PubSub<LiveEpoch>,
     collections: collection::Store,
     resources: resources::ResourcesBackend,
+    /// What agents applied to the docs over MCP (`crate::live_docs`).
+    edits: crate::live_docs::Edits,
 }
 
 /// An org's live sessions.
@@ -128,8 +135,30 @@ impl LiveHost {
                 epochs: architect::PubSub::sliding(16),
                 collections,
                 resources,
+                edits: crate::live_docs::Edits::default(),
             }),
         }
+    }
+
+    /// The applies agents made to this host's docs, and their undo.
+    #[must_use]
+    pub fn edits(&self) -> &crate::live_docs::Edits {
+        &self.inner.edits
+    }
+
+    /// The set and song a served song doc belongs to (its current
+    /// epoch's), or `None` for an id no set serves now — a presence
+    /// channel, an old epoch's doc, a stranger's id.
+    #[must_use]
+    pub fn locate(&self, doc_id: Uuid) -> Option<(String, String)> {
+        let setlist = lock(&self.inner.sets)
+            .iter()
+            .find(|(_, state)| state.ids.contains(&doc_id))
+            .map(|(setlist, _)| setlist.clone())?;
+        let set = self.join(&setlist, None).ok()?;
+        let wanted = doc_id.to_string();
+        let song = set.songs.into_iter().find(|s| s.doc_id == wanted)?;
+        Some((setlist, song.slug))
     }
 
     /// Whether `doc_id` is a live doc this host serves now.
@@ -368,9 +397,11 @@ impl LiveHost {
             let mut sets = lock(&self.inner.sets);
             let state = sets.get_mut(setlist)?;
             let mut admitted = lock(&self.inner.admitted);
-            for id in state.ids.drain(..) {
-                admitted.remove(&id);
+            let old: Vec<Uuid> = state.ids.drain(..).collect();
+            for id in &old {
+                admitted.remove(id);
             }
+            self.inner.edits.forget(&old);
             state.epoch += 1;
             state.started_at = now_micros();
             state.epoch
