@@ -155,10 +155,12 @@ release-desktop VERSION:
 # ── Releases ─────────────────────────────────────────────────────────────
 #
 # main = production, dev = integration (skills/release-workflow.md). Card
-# PRs squash into dev; a release is a `dev -> main` PR, merged with a merge
-# commit, which deploys and then tags `v<version>`. One version for
-# everything, `[workspace.package] version` in Cargo.toml; the changelog
-# is generated from dev's commit subjects by git-cliff (cliff.toml).
+# PRs squash into dev; a release is a `release/vX.Y.Z` branch cut from dev
+# (dev never freezes) and its PR into main, merged with a merge commit,
+# which deploys and then tags `v<version>`; then main is back-merged into
+# dev. One version for everything, `[workspace.package] version` in
+# Cargo.toml; the changelog is generated from commit subjects by git-cliff
+# (cliff.toml), one section per release, over the commits since the last tag.
 
 # The product version (server, web, iOS, macOS, desktop-v*).
 version:
@@ -169,20 +171,33 @@ version:
 release-plan:
     bash scripts/release.sh plan
 
-# Bump the version, regenerate CHANGELOG.md and commit
-# `chore(release): v<next>` on a fresh `release/v<next>` off origin/dev.
+# Cut `release/v<next>` from origin/dev: bump the version, write the
+# changelog section, commit `chore(release): v<next>`. Refuses until the
+# last release is back-merged into dev.
 # BUMP: patch (the default, whatever the commits say), minor or major (only
 # when the Captain or Commander calls one), auto (git-cliff decides from the
 # commits), or an exact X.Y.Z.
 release-prepare BUMP="patch":
     bash scripts/release.sh prepare {{BUMP}}
 
-# Open the release PR, dev -> main, with the changelog as its body.
+# On the release/v* (or hotfix/*) branch: push it and open its PR into
+# main, with the changelog and migrations as the body.
 release-pr:
     bash scripts/release.sh pr
 
-# On a hotfix/* branch cut from origin/main (fix already committed): the
-# patch bump + changelog + release commit the release guard requires.
+# On the release/v* branch, after a fix PR landed on it: regenerate the
+# changelog section and end the branch with the release commit again.
+release-refresh:
+    bash scripts/release.sh refresh
+
+# After a release or hotfix reached main: PR `backmerge/v<ver>` -> dev,
+# merge commit, auto-merge. A no-op when main is already in dev.
+release-backmerge:
+    bash scripts/release.sh backmerge
+
+# On a hotfix/* branch cut from origin/main (fix already committed), when
+# no release branch is open: the patch bump + changelog + release commit
+# the release guard requires.
 release-hotfix:
     bash scripts/release.sh hotfix
 

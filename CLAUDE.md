@@ -130,7 +130,8 @@ The check set lives in the `Justfile`, one recipe per check, and the
 gate's answer for the price of a local build. `checks` itself runs on
 THEBATTLESHIP (self-hosted, the `task`-labelled runners, which share the
 machine and its dev drive with a dozen other repos) only for release PRs
-`dev -> main`, nightly on dev, and by hand
+`release/vX.Y.Z -> main` (cut from dev, which never freezes), nightly on
+dev, and by hand
 (`gh workflow run checks.yml --ref <branch> -f base=dev`).
 
 Open the PR into dev with a conventional-commit title (it becomes the

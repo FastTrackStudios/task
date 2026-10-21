@@ -29,9 +29,11 @@ on the CLI for idempotence + audit.
 
 - [`release-workflow.md`](release-workflow.md) — how a change reaches
   production: card PRs squash into `dev` on the worker's `just ci`
-  evidence (no CI there), a `dev -> main` release PR runs the full
-  checks once and deploys, then `vX.Y.Z` + GitHub Release; versioning,
-  changelog, hotfix, rollback, and what the reviewer verifies.
+  evidence (no CI there), a release is a `release/vX.Y.Z` branch cut
+  from dev (dev never freezes) whose PR into main runs the full checks
+  once and deploys, then `vX.Y.Z` + GitHub Release and a back-merge
+  into dev; versioning, changelog, hotfix, rollback, and what the
+  reviewer verifies.
 - [`live-dev.md`](live-dev.md) — the local web app against the
   deployed server and the real issuer, signed in as the account in
   `.env` (`just live`); the CLI as that account; the traps that make
