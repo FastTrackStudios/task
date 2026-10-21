@@ -92,6 +92,7 @@ mod presence_relay;
 mod rename_org;
 mod rendition_route;
 mod scheduling_durability;
+mod schema_stamps_e2e;
 #[cfg(feature = "plugin-scripture")]
 mod scripture_install_e2e;
 mod sermon_resources_e2e;

@@ -3802,6 +3802,11 @@ fn build_org_permissions_gate(
 /// longer drift from each other (they used to be two hand-kept
 /// copies). `permits_cover_router` asserts it matches what
 /// [`org_layer_router`] actually mounts.
+///
+/// One entry per wire service NAME: same-named descriptors (the two
+/// `SyncService` lanes) fold into one stamp, since the well-known
+/// document is a map keyed by name — see
+/// `org_proto::schema_stamp::stamp_services`.
 #[must_use]
 pub fn schema_stamps() -> Vec<(&'static str, String)> {
     org_proto::schema_stamp::stamp_services(permits::mounted_descriptors())
