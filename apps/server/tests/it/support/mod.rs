@@ -143,6 +143,13 @@ const TEST_ENV: &[&str] = &[
 /// `TASK_ENFORCE_MEDIA_TOKEN`, `TASK_WATCH_TOKEN`): a test relying on one
 /// is only sound one-test-per-process — how nextest runs this binary, and
 /// what `just test` does (see the Justfile).
+///
+/// Clearing the environment does not clear process statics. One that
+/// bites: a `LocalNode` installs its random auth secret process-wide
+/// (`task_server::install_auth_secret`), so a later boot without
+/// `TASK_AUTH_SECRET` signs with it. A test that mints a token in a
+/// child process (`task-server admin …`) must set `TASK_AUTH_SECRET` for
+/// both its boot and the child (see `bots_e2e::ADMIN_AUTH_SECRET`).
 pub async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
     init_tracing();
     let guard = ENV_LOCK.lock().await;
