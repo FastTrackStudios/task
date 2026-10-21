@@ -853,6 +853,15 @@ impl FilesBackend {
         self.registry.list()
     }
 
+    /// Every registered root, unfiltered by any caller — for server-side
+    /// scope computation (the sharing subtree resolver), never for a
+    /// reply. A wire listing goes through `RootsService::list`, which
+    /// filters by what the caller may see.
+    #[must_use]
+    pub fn registered_roots(&self) -> Vec<FileRootInfo> {
+        self.registry_list()
+    }
+
     /// This backend's own data directory — what identifies one backend
     /// among several in a process.
     pub(crate) fn data_dir_path(&self) -> PathBuf {
