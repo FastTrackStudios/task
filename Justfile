@@ -171,8 +171,10 @@ release-plan:
 
 # Bump the version, regenerate CHANGELOG.md and commit
 # `chore(release): v<next>` on a fresh `release/v<next>` off origin/dev.
-# BUMP: auto (from the commits), patch, minor, major, or an exact X.Y.Z.
-release-prepare BUMP="auto":
+# BUMP: patch (the default, whatever the commits say), minor or major (only
+# when the Captain or Commander calls one), auto (git-cliff decides from the
+# commits), or an exact X.Y.Z.
+release-prepare BUMP="patch":
     bash scripts/release.sh prepare {{BUMP}}
 
 # Open the release PR, dev -> main, with the changelog as its body.
