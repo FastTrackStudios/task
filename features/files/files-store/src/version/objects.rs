@@ -86,6 +86,11 @@ impl ObjectStore {
         Ok(())
     }
 
+    /// Is the object on disk? A `stat`, not a read.
+    pub async fn has(&self, hash: &blake3::Hash) -> Result<bool> {
+        Ok(tokio::fs::try_exists(self.object_path(hash)).await?)
+    }
+
     pub async fn read(&self, hash: &blake3::Hash) -> Result<Vec<u8>> {
         let path = self.object_path(hash);
         match tokio::fs::read(&path).await {

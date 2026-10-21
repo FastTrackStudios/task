@@ -39,6 +39,7 @@
 //! reuses one change id per path-session (making jj's divergent-change
 //! machinery light up too) is deliberately out of scope for v1.
 
+use bytes::Bytes;
 use uuid::Uuid;
 
 pub use files::{FilesBackend, MaterializeReport};
@@ -473,7 +474,14 @@ impl SyncService for SyncHost {
 
     async fn object(&self, root_id: Uuid, id: String) -> Result<Vec<u8>, SyncError> {
         let b = self.backend.clone();
-        off_thread(move || b.sync_object(root_id, &id).map_err(from_files)).await
+        // The wire stays `Vec<u8>` (vox encoding unchanged); converting a
+        // uniquely owned `Bytes` hands its allocation over, no copy.
+        off_thread(move || {
+            b.sync_object(root_id, &id)
+                .map(Vec::from)
+                .map_err(from_files)
+        })
+        .await
     }
 
     async fn manifest(&self, root_id: Uuid, file_id: String) -> Result<WireManifest, SyncError> {
@@ -500,7 +508,10 @@ impl SyncService for SyncHost {
                 .into_iter()
                 .map(|hash| {
                     let bytes = b.sync_read_chunk(root_id, &hash).map_err(from_files)?;
-                    Ok(WireChunk { hash, bytes })
+                    Ok(WireChunk {
+                        hash,
+                        bytes: Vec::from(bytes),
+                    })
                 })
                 .collect()
         })
@@ -746,16 +757,21 @@ async fn import_commit_closure(
     // the store means its WHOLE closure is present — which is what
     // makes an interrupted pull re-runnable (PR #291 review). The
     // fetched-but-not-yet-imported commit bytes are cached between a
-    // node's two stack visits so the wire is hit once per commit.
-    let mut cached: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    // node's two stack visits so the wire is hit once per commit. Held
+    // as `Bytes`: decoding hands the commit to a blocking thread and the
+    // import hands it to another, and each takes a reference, not a copy.
+    let mut cached: std::collections::HashMap<String, Bytes> = std::collections::HashMap::new();
     let mut stack: Vec<(String, bool)> = vec![(head.to_string(), false)];
     while let Some((commit_hex, closure_done)) = stack.pop() {
         if closure_done {
             // Trees + parents are in; the commit object lands last.
             if let Some(bytes) = cached.remove(&commit_hex) {
-                let (l, c, b) = (local.clone(), commit_hex.clone(), bytes);
-                off_thread(move || l.sync_import_object(root_id, &c, b).map_err(from_files))
-                    .await?;
+                let (l, c) = (local.clone(), commit_hex.clone());
+                off_thread(move || {
+                    l.sync_import_object(root_id, &c, &bytes)
+                        .map_err(from_files)
+                })
+                .await?;
                 report.objects_imported += 1;
             }
             continue;
@@ -767,10 +783,12 @@ async fn import_commit_closure(
         if known || cached.contains_key(&commit_hex) {
             continue;
         }
-        let bytes = remote
-            .object(root_id, commit_hex.clone())
-            .await
-            .map_err(|e| SyncError::Io(format!("object rpc: {e}")))?;
+        let bytes = Bytes::from(
+            remote
+                .object(root_id, commit_hex.clone())
+                .await
+                .map_err(|e| SyncError::Io(format!("object rpc: {e}")))?,
+        );
         let (parents, tree) = {
             let (l, b) = (local.clone(), bytes.clone());
             off_thread(move || l.sync_decode_commit(&b).map_err(from_files)).await?
@@ -855,7 +873,7 @@ async fn fetch_object(
         .map_err(|e| SyncError::Io(format!("object rpc: {e}")))?;
     let (l, id) = (local.clone(), id.to_string());
     off_thread(move || {
-        l.sync_import_object(root_id, &id, bytes)
+        l.sync_import_object(root_id, &id, &bytes)
             .map_err(from_files)
     })
     .await?;
@@ -956,9 +974,8 @@ async fn import_file(
 
     // Large chunks are pulled as windows, small ones in batches. Both
     // paths exist because both are right somewhere — see [`WINDOW_ABOVE`].
-    let (large, small): (Vec<String>, Vec<String>) = missing
-        .iter()
-        .cloned()
+    let (large, mut small): (Vec<String>, Vec<String>) = missing
+        .into_iter()
         .partition(|h| chunk_len.get(h.as_str()).copied().unwrap_or(0) > WINDOW_ABOVE);
 
     // The window path. Every large chunk resumes from the first range
@@ -1015,9 +1032,13 @@ async fn import_file(
     // bounded response: the resumability seam (only misses are
     // requested) and the bounded-memory seam (no more than a batch in
     // flight).
-    for batch in small.chunks(CHUNK_BATCH) {
+    while !small.is_empty() {
+        // Each request owns its batch of hashes: split it off the front
+        // rather than copying a slice of them per request.
+        let rest = small.split_off(small.len().min(CHUNK_BATCH));
+        let batch = std::mem::replace(&mut small, rest);
         let wire = remote
-            .chunks(root_id, batch.to_vec())
+            .chunks(root_id, batch)
             .await
             .map_err(|e| SyncError::Io(format!("chunks rpc: {e}")))?;
         for chunk in wire {

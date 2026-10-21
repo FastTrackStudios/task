@@ -39,6 +39,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
 use chrono::Utc;
 use files_proto::service::FilesEvent;
 use files_proto::{
@@ -4594,8 +4595,9 @@ impl FilesBackend {
             .collect())
     }
 
-    /// Raw structural-object bytes (commit/tree/copy-history) by hex id.
-    pub fn sync_object(&self, root_id: Uuid, id_hex: &str) -> Result<Vec<u8>, FilesError> {
+    /// Raw structural-object bytes (commit/tree/copy-history) by hex id,
+    /// shareable: objects are immutable and content-addressed.
+    pub fn sync_object(&self, root_id: Uuid, id_hex: &str) -> Result<Bytes, FilesError> {
         let bytes = hex_bytes(id_hex)?;
         self.with_version_store(root_id, |vs| pollster::block_on(vs.read_raw_object(&bytes)))?
             .map_err(|e| to_files_error(Error::VersionStore(e)))
@@ -4609,7 +4611,7 @@ impl FilesBackend {
         }
         let bytes = hex_bytes(id_hex)?;
         self.with_version_store(root_id, |vs| {
-            pollster::block_on(vs.read_raw_object(&bytes)).is_ok()
+            pollster::block_on(vs.has_raw_object(&bytes)).unwrap_or(false)
         })
     }
 
@@ -4633,7 +4635,7 @@ impl FilesBackend {
         &self,
         root_id: Uuid,
         id_hex: &str,
-        bytes: Vec<u8>,
+        bytes: &[u8],
     ) -> Result<(), FilesError> {
         let id = hex_bytes(id_hex)?;
         self.with_version_store(root_id, |vs| {
@@ -4720,8 +4722,10 @@ impl FilesBackend {
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))
     }
 
-    /// One chunk's bytes.
-    pub fn sync_read_chunk(&self, root_id: Uuid, hash_hex: &str) -> Result<Vec<u8>, FilesError> {
+    /// One chunk's bytes, shareable: chunks are immutable and
+    /// content-addressed. Whole — so for a chunk above the sync window
+    /// (a file linked whole) use [`Self::sync_read_chunk_range`].
+    pub fn sync_read_chunk(&self, root_id: Uuid, hash_hex: &str) -> Result<Bytes, FilesError> {
         let hash = chunk_hash_from_hex(hash_hex)?;
         self.with_version_store(root_id, |vs| {
             pollster::block_on(vs.chunks().read_chunk(hash))
@@ -4839,7 +4843,7 @@ impl FilesBackend {
         &self,
         root_id: Uuid,
         hash_hex: &str,
-        bytes: Vec<u8>,
+        bytes: impl Into<Bytes>,
     ) -> Result<(), FilesError> {
         let hash = chunk_hash_from_hex(hash_hex)?;
         self.with_version_store(root_id, |vs| {

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use bytes::Bytes;
 use fastcdc::v2020::AsyncStreamCDC;
 use futures::StreamExt;
 use iroh_blobs::store::fs::options::Options;
@@ -756,6 +757,15 @@ impl ChunkStore {
         W: AsyncWrite + Unpin,
     {
         let manifest = self.read_manifest(file_id).await?;
+        self.copy_chunks(&manifest, dest).await
+    }
+
+    /// The chunk loop of [`ChunkStore::read_to`], over a manifest the
+    /// caller already holds (so [`ChunkStore::read_bytes`] reads it once).
+    async fn copy_chunks<W>(&self, manifest: &Manifest, dest: &mut W) -> Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
         for chunk in &manifest.chunks {
             // The whole tier first: a linked blob lives as a plain file
             // under `whole/`, not in iroh-blobs (see `write_path`).
@@ -790,14 +800,21 @@ impl ChunkStore {
         Ok(())
     }
 
-    /// Convenience wrapper over [`ChunkStore::read_to`] that collects the
-    /// whole file into memory. For tests and small files — large files
-    /// should use `read_to` against a sink (a file, a network stream)
-    /// directly.
-    pub async fn read_to_vec(&self, file_id: FileId) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.read_to(file_id, &mut buf).await?;
-        Ok(buf)
+    /// The whole file in memory, as immutable [`Bytes`]. For tests and
+    /// small files — a file's size is set by its user, so anything that
+    /// serves one streams it with [`ChunkStore::read_to`] or
+    /// [`ChunkStore::read_range`] against a sink instead.
+    ///
+    /// One allocation, sized from the manifest before any chunk is read
+    /// (the old `read_to_vec` grew a `Vec` by doubling, copying the file
+    /// up to twice on the way), and handed out as `Bytes` so a caller
+    /// that shares it clones a reference count, not the file.
+    pub async fn read_bytes(&self, file_id: FileId) -> Result<Bytes> {
+        let manifest = self.read_manifest(file_id).await?;
+        let total: u64 = manifest.chunks.iter().map(|c| c.len).sum();
+        let mut buf = Vec::with_capacity(usize::try_from(total).unwrap_or(0));
+        self.copy_chunks(&manifest, &mut buf).await?;
+        Ok(Bytes::from(buf))
     }
 
     /// Total byte length of a file's content — the sum of its chunk
@@ -974,21 +991,31 @@ impl ChunkStore {
         }
     }
 
-    /// Read one chunk's bytes. Chunks are bounded by the chunker's max
-    /// size, so a whole-chunk `Vec` is bounded memory by construction.
-    pub async fn read_chunk(&self, hash: blake3::Hash) -> Result<Vec<u8>> {
+    /// Read one chunk's bytes, as immutable [`Bytes`]: a chunk is
+    /// content-addressed and never changes, so every holder of it can
+    /// share one buffer.
+    ///
+    /// A chunked chunk is bounded by the chunker's max size. A
+    /// whole-tier chunk is not — it is the file (see `write_path`) — so a
+    /// caller that may meet a large one reads it by window
+    /// ([`ChunkStore::read_chunk_range`], [`ChunkStore::export_ranges`])
+    /// rather than whole; replica sync does exactly that above its
+    /// window size. A whole-tier read is sized from the file's length up
+    /// front, so it is one allocation rather than a doubling `Vec`.
+    pub async fn read_chunk(&self, hash: blake3::Hash) -> Result<Bytes> {
         if let Some(mut file) = self.open_whole(&hash).await? {
-            let mut buf = Vec::new();
+            let len = file.metadata().await.map_err(Error::Io)?.len();
+            let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
             tokio::io::AsyncReadExt::read_to_end(&mut file, &mut buf)
                 .await
                 .map_err(Error::Io)?;
-            return Ok(buf);
+            return Ok(Bytes::from(buf));
         }
         let hash_bytes = *hash.as_bytes();
         let mut reader = self.blobs.reader(hash_bytes);
         let mut buf = Vec::new();
         match tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf).await {
-            Ok(_) => Ok(buf),
+            Ok(_) => Ok(Bytes::from(buf)),
             Err(io_err) => {
                 let present = self.blobs.has(hash_bytes).await.unwrap_or(true);
                 if present {
@@ -1024,7 +1051,15 @@ impl ChunkStore {
     /// [`ChunkStore::gc_quiesce_guard`] across the whole file import
     /// (chunks + manifest) so nothing sweeps it before its manifest
     /// lands (PR #291 review).
-    pub async fn import_chunk(&self, expected: blake3::Hash, bytes: Vec<u8>) -> Result<()> {
+    ///
+    /// Takes anything that becomes [`Bytes`] without a copy: a `Vec`
+    /// fresh off the wire, or `Bytes` read from another store.
+    pub async fn import_chunk(
+        &self,
+        expected: blake3::Hash,
+        bytes: impl Into<Bytes>,
+    ) -> Result<()> {
+        let bytes: Bytes = bytes.into();
         let actual = blake3::hash(&bytes);
         if actual != expected {
             return Err(Error::Store(format!(
@@ -1404,7 +1439,7 @@ mod tests {
             store.has(file_id).await,
             "the manifest must survive a final write after the race"
         );
-        assert_eq!(store.read_to_vec(file_id).await.unwrap(), content);
+        assert_eq!(store.read_bytes(file_id).await.unwrap(), content);
     }
 
     #[tokio::test]
@@ -1468,7 +1503,7 @@ mod tests {
         // early-returning past the corruption.
         let repaired_id = store.write_stream(&content[..]).await.unwrap();
         assert_eq!(repaired_id, file_id);
-        assert_eq!(store.read_to_vec(file_id).await.unwrap(), content);
+        assert_eq!(store.read_bytes(file_id).await.unwrap(), &content[..]);
     }
 
     /// `content_len` + `read_range` (the `<video>` seek path): the total

@@ -61,7 +61,7 @@ async fn ten_stores_share_one_bounded_runtime() {
         // work have actually run on the runtime.
         let body = format!("store {i} says hello").into_bytes();
         let id = store.write_stream(&body[..]).await.unwrap();
-        assert_eq!(store.read_to_vec(id).await.unwrap(), body);
+        assert_eq!(store.read_bytes(id).await.unwrap(), body);
         stores.push(store);
     }
     // Let the GC loops run a pass or two.

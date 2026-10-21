@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Immutable, shared chunk/object bytes (zero-copy port, STA-305).
+bytes = "1"
 # chunk
 fastcdc.workspace = true
 iroh-blobs.workspace = true

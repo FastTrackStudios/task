@@ -251,12 +251,8 @@ async fn backend_gc_trait_method_never_sweeps_the_chunk_store() {
          commit's manifest must survive it regardless of index reachability"
     );
     assert_eq!(
-        backend
-            .chunks()
-            .read_to_vec(vault_only_chunk)
-            .await
-            .unwrap(),
-        b"a Named Version, index-unreachable, not passed to Backend::gc"
+        backend.chunks().read_bytes(vault_only_chunk).await.unwrap(),
+        &b"a Named Version, index-unreachable, not passed to Backend::gc"[..]
     );
 }
 

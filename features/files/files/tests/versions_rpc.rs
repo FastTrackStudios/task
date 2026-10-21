@@ -502,12 +502,12 @@ async fn gc_sweeps_the_unnamed_old_checkpoint_and_never_the_named_one() {
     let bytes = tokio::task::block_in_place(|| {
         fx.backend
             .with_version_store(root_id, |vs| {
-                pollster::block_on(vs.chunks().read_to_vec(kept_chunk))
+                pollster::block_on(vs.chunks().read_bytes(kept_chunk))
             })
             .expect("with_version_store")
     })
     .expect("read the protected content back");
-    assert_eq!(bytes, b"the deliverable");
+    assert_eq!(bytes, &b"the deliverable"[..]);
 
     // Drop the curation and the same pass now sweeps it: the protect
     // set really is read from the Vault every time, not baked in.
@@ -1057,13 +1057,13 @@ async fn a_checkpoint_written_behind_the_cache_survives_gc() {
     let present = tokio::task::block_in_place(|| {
         fx.backend
             .with_version_store(root_id, |vs| {
-                pollster::block_on(vs.chunks().read_to_vec(outside_chunk))
+                pollster::block_on(vs.chunks().read_bytes(outside_chunk))
             })
             .expect("with_version_store")
     });
     assert_eq!(
         present.expect("the outside checkpoint's content survived gc"),
-        b"laptop take",
+        &b"laptop take"[..],
         "a checkpoint this process never saw must not be swept as garbage"
     );
 
