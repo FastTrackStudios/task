@@ -14,6 +14,13 @@ mod updater;
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
+    // `--version`: the release's version (`[workspace.package]`), without
+    // opening a window, telemetry or the node — what a fleet checks after
+    // an update (`Task --version` = the release it pinned).
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!("task-app-desktop {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     // Before anything can open a TLS socket: the graph carries both rustls
     // backends, so it cannot pick one itself, and a TLS dial without one
     // panics (on the main thread, where it aborts). Err = already set.

@@ -325,6 +325,10 @@ jobs:
       # save nothing.
       - name: fmt
         run: ${NIX_DEV} just ci-fmt
+      # Ungated too: greps manifests and workflows, compiles nothing.
+      - name: One version everywhere
+        if: ${{ !cancelled() }}
+        run: ${NIX_DEV} just ci-versions
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} just ci-manifests

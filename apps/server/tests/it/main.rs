@@ -100,6 +100,7 @@ mod task_files_e2e;
 mod vault_collab_e2e;
 mod vault_graph_e2e;
 mod vault_sync_e2e;
+mod version_cli;
 mod watch_bridge_auth;
 mod watch_suggested_e2e;
 mod webdav_auth;

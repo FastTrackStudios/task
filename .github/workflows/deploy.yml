@@ -145,6 +145,9 @@ jobs:
           echo "server=$dir/release/task-server" >> "$GITHUB_OUTPUT"
           echo "web=$web" >> "$GITHUB_OUTPUT"
           ls -la "$dir/release/task-server"; du -sh "$web"
+          # The image's payload reports the version its `v<version>` tag
+          # names — and answering `--version` must not boot it.
+          bash scripts/check-versions.sh --bin "$dir/release/task-server"
 
       - name: Push images
         env:
@@ -258,3 +261,16 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/release.yml
+
+  # The release exists: attach the standalone headless node binaries
+  # (linux-x86_64, linux-aarch64, macos-aarch64 + SHA256SUMS) to it, for
+  # nodes outside the cluster and outside Nix (docs/headless-node.md).
+  # Hosted runners, so no deploy slot is held; a no-op when the release
+  # already carries them.
+  node-binaries:
+    name: Headless node binaries
+    needs: release
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/node-binaries.yml

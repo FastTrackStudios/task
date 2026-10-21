@@ -11,7 +11,7 @@
 # pipelines.
 { ... }:
 {
-  perSystem = { pkgs, config, ... }:
+  perSystem = { pkgs, lib, config, ... }:
     let
       # Reuse the toolchain's own GUI dep list (toolchain.nix already
       # assembled webkitgtk/gtk3/x11/vulkan for Linux, libiconv for
@@ -28,7 +28,8 @@
 
       task-desktop = config.fts.craneLib.buildPackage (config.fts.commonArgs // guiArgs // {
         pname = "task-app-desktop";
-        version = "0.1.0";
+        # The release's version, from `[workspace.package]`.
+        version = (lib.importTOML ../../../Cargo.toml).workspace.package.version;
         cargoArtifacts = null;
         cargoExtraArgs = "--package task-app-desktop";
         doCheck = false;

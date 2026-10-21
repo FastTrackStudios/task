@@ -60,6 +60,7 @@ pub mod device_enrollment;
 pub mod doc_guard;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live;
+pub mod node_cli;
 #[cfg(feature = "plugin-wiki")]
 pub mod node_homes;
 pub mod notifier;
@@ -69,7 +70,9 @@ pub mod otlp;
 pub mod peer_cli;
 pub mod permits;
 pub mod presence;
+pub mod self_update;
 pub mod server_mgmt;
+pub mod service_units;
 pub mod share;
 pub mod share_guest;
 pub mod sharing;
