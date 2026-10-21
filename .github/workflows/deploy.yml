@@ -125,9 +125,15 @@ jobs:
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           export CARGO_TARGET_DIR="$dir"
           echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
-          nix develop --accept-flake-config .#ci -c cargo build --release -p task-server
+          # Each build runs as a build kind (scripts/target-sweep.py): it
+          # records the units it used, and "Bound the target dir" keeps
+          # exactly the latest server + web builds.
+          nix develop --accept-flake-config .#ci -c \
+            python3 scripts/target-sweep.py run deploy-server -- \
+            cargo build --release -p task-server
           # tailwind first: dx reads assets/ before cargo runs.
-          nix develop --accept-flake-config .#default -c bash -c '
+          nix develop --accept-flake-config .#default -c \
+            python3 scripts/target-sweep.py run deploy-web -- bash -c '
             set -e
             (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
             cd apps/web
@@ -162,13 +168,14 @@ jobs:
           done
 
       # Same discipline as checks: a persistent release target dir grows
-      # without bound otherwise. Oldest artifacts go first; the current
-      # build stays warm.
+      # without bound otherwise. Keep the latest build of each kind
+      # (deploy-server, deploy-web) and nothing else — not a size cap,
+      # which evicts the warm set once the working set outgrows it.
       - name: Bound the target dir
         if: ${{ always() }}
         run: |
           rm -rf "${CARGO_TARGET_DIR}/release/incremental"
-          nix develop --accept-flake-config .#ci -c cargo sweep --maxsize 40GB || true
+          nix develop --accept-flake-config .#ci -c python3 scripts/target-sweep.py sweep --protect-hours 0 || true
           du -sh "${CARGO_TARGET_DIR}" || true
 
   # The GitHub Deployment goes Active only when the cluster serves this

@@ -54,6 +54,18 @@ echo "── the Rust half ─────────────────�
 # be a real one.
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 
+# This half runs outside the nix shell (Swift needs Xcode's own SDK), so
+# cargo comes from rustup. A login shell has rustup on PATH. The CI runner
+# doesn't (its PATH is nix + system only), and the desktop-release job died
+# here with "cargo: command not found". Fall back to rustup's usual home.
+if ! command -v cargo >/dev/null 2>&1; then
+    export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+    command -v cargo >/dev/null 2>&1 || {
+        echo "ERROR: no cargo on PATH or in ${CARGO_HOME:-$HOME/.cargo}/bin — install rustup" >&2
+        exit 1
+    }
+fi
+
 LIBS=()
 for target in $TARGETS; do
     rustup target add "$target" >/dev/null 2>&1 || true

@@ -135,10 +135,9 @@ async fn one_org_subscribes_to_anothers_song_library_and_resolves_a_song_from_it
     // ── the guest publishes two songs, through the ordinary lane ─────
     //
     // Nothing about publishing is a separate act. `upsert_song` writes
-    // the document onto `<org>/assets/songs/`, and that shelf is
-    // published because it exists — an org that does not want a group
-    // read does not put it under `assets/`, which is stated in
-    // `LocalOrgs::admits` and worth knowing here.
+    // the document onto `<org>/assets/songs/`, outside the vault, and
+    // that is what makes it subscribable at all. Who may subscribe is
+    // the owner's decision, made below.
     for (title, key) in [("Hosanna", "D"), ("Doxology", "G")] {
         guest_session
             .resources()
@@ -162,10 +161,26 @@ async fn one_org_subscribes_to_anothers_song_library_and_resolves_a_song_from_it
     );
 
     // ── the subscription ─────────────────────────────────────────────
+    //
+    // A shelf is private to its org until its owner opens it
+    // (`wiki.access.shelf-visibility`), so asking first is a refusal.
     let subs = alice.wiki_subscriptions().await;
     subs.subscribe(Subscriber::Vault, source(SONGS, Selection::All))
         .await
-        .expect("a song library is a shelf, and a shelf is subscribable");
+        .expect_err("a private song library refuses another org");
+    // The guest grants its library to ACME (`wiki.access.source-grant`).
+    wiki_live::source_access::AccessGrants::open(&guest.org_root())
+        .grant(
+            wiki_proto::subscription::SourceKind::Assets,
+            SONGS,
+            "acme-audio",
+            "alice",
+            0,
+        )
+        .expect("the guest grants its song library to ACME");
+    subs.subscribe(Subscriber::Vault, source(SONGS, Selection::All))
+        .await
+        .expect("a granted song library is subscribable");
 
     // ── and the bytes arrive ─────────────────────────────────────────
     //
@@ -243,6 +258,9 @@ async fn a_subscription_takes_part_of_a_shelf_and_says_what_it_left() {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(name), format!("---\ntitle: {name}\n---\n")).unwrap();
     }
+    // Open by reference (`wiki.access.shelf-visibility`).
+    wiki_live::source_access::set_visibility(&shelf, wiki_proto::config::Visibility::Unlisted)
+        .unwrap();
 
     let subs = alice.wiki_subscriptions().await;
     subs.subscribe(

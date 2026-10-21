@@ -321,9 +321,18 @@ async fn a_subscribed_project_resolves_and_its_subproject_stays_a_reference() {
     // a project IS the unit somebody publishes. A mix engineer is given
     // a song, not "the projects library".
     let subs = alice.wiki_subscriptions().await;
+    // A project is private to its org by default
+    // (`wiki.access.shelf-visibility`): the studio is refused until the
+    // guest grants it this one (`wiki.access.source-grant`).
     subs.subscribe(Subscriber::Vault, source("crescendum"))
         .await
-        .expect("a project is a shelf, and a shelf is subscribable");
+        .expect_err("a private project refuses another org");
+    wiki_live::source_access::AccessGrants::open(&guest.org_root())
+        .grant(SourceKind::Projects, "crescendum", "acme-audio", "alice", 0)
+        .expect("the guest grants the album to the studio");
+    subs.subscribe(Subscriber::Vault, source("crescendum"))
+        .await
+        .expect("a granted project is subscribable");
 
     let resolved = resolve(&alice, album_ref).await;
     assert_eq!(resolved.reach, Reach::Reachable);

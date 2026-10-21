@@ -94,6 +94,13 @@ env:
   # Swatinem/rust-cache sets this by default and dropping the action
   # inherited cargo's default of ON, which is how it went unnoticed.
   CARGO_INCREMENTAL: "0"
+  # Every build step runs through this, as its own build KIND
+  # (checks-tests, checks-clippy, …): it records which units of the target
+  # dir that step used, fresh or rebuilt, and the last step sweeps
+  # everything no kind's latest build used. See scripts/target-sweep.py
+  # and docs/agents/build-strategy.md. --record-failed: a red test run
+  # still compiled, and its artifacts are what the next run needs warm.
+  SWEEP_RUN: python3 scripts/target-sweep.py run --record-failed
 
 jobs:
   # GitHub applies `timeout-minutes` to EXECUTION, not to time spent
@@ -324,10 +331,10 @@ jobs:
 
       - name: Tests
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
-        run: ${NIX_DEV} just ci-tests
+        run: ${NIX_DEV} ${SWEEP_RUN} checks-tests -- just ci-tests
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
-        run: ${NIX_DEV} just ci-clippy
+        run: ${NIX_DEV} ${SWEEP_RUN} checks-clippy -- just ci-clippy
 
       # wasm32 target + ring's clang env come from the flake CI shell.
       #
@@ -340,14 +347,14 @@ jobs:
       # pulls both leaves in anyway, so coverage is unchanged.
       - name: wasm check (task-app-web)
         if: ${{ !cancelled() && needs.plan.outputs.wasm == 'true' }}
-        run: ${NIX_DEV} just ci-wasm
+        run: ${NIX_DEV} ${SWEEP_RUN} checks-wasm -- just ci-wasm
 
       # Release PRs only. It was gated on `github.ref == refs/heads/main`,
       # which no run has had since pushes to main stopped triggering this
       # workflow — so rustdoc -D warnings had silently not run at all.
       - name: Docs
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.base_ref == 'main' }}
-        run: ${NIX_DEV} just ci-docs
+        run: ${NIX_DEV} ${SWEEP_RUN} checks-docs -- just ci-docs
 
       # Cargo never collects stale artifacts: every rebuild leaves the old
       # one in deps/ forever. On a throwaway VM that is invisible; on a
@@ -355,11 +362,13 @@ jobs:
       # runs, because changing a flag (CARGO_INCREMENTAL) re-fingerprints
       # everything and orphans the previous full set beside the new one.
       #
-      # --maxsize, not --time: an age cutoff cleans nothing when every
-      # artifact is from today, which is exactly the CI case ("Cleaned
-      # nothing" from --time 7 against a 167 GB dir). This bounds the cache
-      # and evicts oldest-first, which is the behaviour we actually want —
-      # the current build stays warm, the sediment goes.
+      # Keep exactly the latest build of each kind (each step above), and
+      # nothing else. This replaced `cargo sweep --maxsize 60GB`, which
+      # evicts oldest-first: one full run here needs ~100 GB, so every
+      # sweep evicted the run's OWN first-built units (the test build's
+      # dependencies) and the next run recompiled all ~1300 of them from
+      # cold — measured on every release run, "Cleaned 52 GiB" each time.
+      # A size cap below the working set is a cache that never hits.
       #
       # always(): a red run has to give the disk back too.
       - name: Bound the target dir
@@ -368,6 +377,7 @@ jobs:
           # CARGO_INCREMENTAL=0 stops new incremental output but does not
           # remove what earlier runs left; nothing regenerates this now.
           rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
-          ${NIX_DEV} cargo sweep --maxsize 60GB || true
+          ${NIX_DEV} python3 scripts/target-sweep.py sweep --protect-hours 0 || true
+          ${NIX_DEV} python3 scripts/target-sweep.py status || true
           du -sh "${CARGO_TARGET_DIR}" || true
-          df -h /var/lib | tail -1
+          df -h "${CARGO_TARGET_DIR}" | tail -1

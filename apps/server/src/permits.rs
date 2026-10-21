@@ -247,6 +247,11 @@ table!(SHARE, "share", "shares/**", [
 // everyone out (see the module docs). Every grant change audits.
 table!(SHARING, "sharing", "sharing/**", [
     rd "preview_grant", wa "create_grant", wa "revoke_grant", rd "list_grants",
+    // Who outside the org may subscribe to an asset shelf or a project
+    // (`wiki.access.shelf-visibility`, `wiki.access.source-grant`).
+    // Owner- and admin-only inside the impl, like the rest of the table.
+    wa "set_source_visibility", wa "grant_source", wa "revoke_source_grant",
+    rd "list_source_grants",
 ]);
 
 // Per-file CRDT: `sync` mutates the doc; presence is ephemeral and never
@@ -929,9 +934,10 @@ table!(WIKI_EDITS, "wiki-edits", "wiki/edits/**", [
 // the backend by the same `Upstream::admits` that decides it for a
 // subscriber on this data root (`wiki.access.visibility`). A private wiki
 // is refused. An unlisted one is served to a caller that names it, which
-// is what unlisted means. An asset shelf or a project is served because
-// publishing it *is* putting it on the tier — already recorded in
-// `admits` as "world-readable to anyone who can name it".
+// is what unlisted means. An asset shelf or a project is private by
+// default and served only when it declares itself unlisted or public, or
+// when the secret presented is an access grant the publisher's owner
+// minted for one subscriber (`wiki.access.source-grant`).
 //
 // The permit says "this is a read". The source says "by whom". Putting
 // the second half in the permit table instead would mean two rules for

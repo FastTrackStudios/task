@@ -31,6 +31,7 @@
 //! the permits module docs on `admin`), so the decision is made here,
 //! from the membership row, where it can be.
 
+pub mod sources;
 pub mod store;
 pub mod subtree;
 
@@ -38,8 +39,9 @@ use std::sync::Arc;
 
 use architect_permissions::Principal;
 use share_proto::{
-    GrantCapabilities, GrantPreview, NOT_SHARED, NewSharingGrant, SharingError, SharingGrantInfo,
-    SharingService,
+    GrantCapabilities, GrantPreview, MintedSourceGrant, NOT_SHARED, NewSharingGrant,
+    NewSourceGrant, SharingError, SharingGrantInfo, SharingService, SourceGrantInfo, SourceTier,
+    SourceVisibility,
 };
 use uuid::Uuid;
 
@@ -62,6 +64,10 @@ pub struct Sharing {
     /// shown to be an owner, so every call is refused.
     pub home: Option<crate::HomeIdentity>,
     pub subtree: Arc<dyn Subtree>,
+    /// The owning org's root: where its asset shelves and projects are,
+    /// and the access-grant log that opens them to another org
+    /// (`wiki_live::source_access`).
+    pub org_root: std::path::PathBuf,
 }
 
 impl Sharing {
@@ -350,6 +356,130 @@ impl SharingService for SharingServiceImpl {
         let grants = self.sharing.store.list().await.map_err(|e| storage(&e))?;
         self.note_expiries(&grants, now).await;
         Ok(grants.iter().map(|g| g.info(now)).collect())
+    }
+
+    // t[impl wiki.access.shelf-visibility]
+    async fn set_source_visibility(
+        &self,
+        tier: SourceTier,
+        slug: String,
+        visibility: SourceVisibility,
+    ) -> Result<(), SharingError> {
+        let actor = self.admin("set_source_visibility").await?;
+        let dir = sources::source_dir(&self.sharing.org_root, tier, &slug)?;
+        #[cfg(feature = "plugin-wiki")]
+        {
+            wiki_live::source_access::set_visibility(&dir, sources::visibility_of(visibility))
+                .map_err(|e| sources::access_err(e.into()))?;
+            sources::grants(&self.sharing.org_root)
+                .record_visibility(
+                    sources::kind_of(tier),
+                    &slug,
+                    sources::visibility_of(visibility),
+                    &actor.to_string(),
+                    now_unix(),
+                )
+                .map_err(sources::access_err)?;
+            sources::audit(
+                self.org(),
+                "source.visibility",
+                tier,
+                &slug,
+                visibility.as_str(),
+                &actor.to_string(),
+            );
+            Ok(())
+        }
+        #[cfg(not(feature = "plugin-wiki"))]
+        {
+            let _ = (actor, dir, visibility);
+            Err(SharingError::NotFound)
+        }
+    }
+
+    // t[impl wiki.access.source-grant]
+    async fn grant_source(&self, grant: NewSourceGrant) -> Result<MintedSourceGrant, SharingError> {
+        let actor = self.admin("grant_source").await?;
+        let org = self.org().to_owned();
+        if grant.subscriber == org {
+            return Err(SharingError::Invalid(
+                "this org reads its own sources already; a grant is to another org".into(),
+            ));
+        }
+        sources::source_dir(&self.sharing.org_root, grant.tier, &grant.slug)?;
+        #[cfg(feature = "plugin-wiki")]
+        {
+            let minted = sources::grants(&self.sharing.org_root)
+                .grant(
+                    sources::kind_of(grant.tier),
+                    &grant.slug,
+                    &grant.subscriber,
+                    &actor.to_string(),
+                    now_unix(),
+                )
+                .map_err(sources::access_err)?;
+            sources::audit(
+                &org,
+                "source.granted",
+                grant.tier,
+                &grant.slug,
+                &format!("{} to {}", minted.grant.id, minted.grant.subscriber),
+                &actor.to_string(),
+            );
+            Ok(MintedSourceGrant {
+                grant: sources::info(&org, &minted.grant),
+                secret: minted.secret,
+            })
+        }
+        #[cfg(not(feature = "plugin-wiki"))]
+        {
+            let _ = (actor, org);
+            Err(SharingError::NotFound)
+        }
+    }
+
+    // t[impl wiki.access.source-grant]
+    async fn revoke_source_grant(&self, grant_id: Uuid) -> Result<SourceGrantInfo, SharingError> {
+        let actor = self.admin("revoke_source_grant").await?;
+        #[cfg(feature = "plugin-wiki")]
+        {
+            let revoked = sources::grants(&self.sharing.org_root)
+                .revoke(grant_id, &actor.to_string(), now_unix())
+                .map_err(sources::access_err)?
+                .ok_or(SharingError::NotFound)?;
+            let info = sources::info(self.org(), &revoked.grant);
+            if revoked.newly {
+                sources::audit(
+                    self.org(),
+                    "source.revoked",
+                    info.tier,
+                    &info.slug,
+                    &format!("{} from {}", info.id, info.subscriber),
+                    &actor.to_string(),
+                );
+            }
+            Ok(info)
+        }
+        #[cfg(not(feature = "plugin-wiki"))]
+        {
+            let _ = (actor, grant_id);
+            Err(SharingError::NotFound)
+        }
+    }
+
+    async fn list_source_grants(&self) -> Result<Vec<SourceGrantInfo>, SharingError> {
+        self.admin("list_source_grants").await?;
+        #[cfg(feature = "plugin-wiki")]
+        {
+            let all = sources::grants(&self.sharing.org_root)
+                .list()
+                .map_err(sources::access_err)?;
+            Ok(all.iter().map(|g| sources::info(self.org(), g)).collect())
+        }
+        #[cfg(not(feature = "plugin-wiki"))]
+        {
+            Ok(Vec::new())
+        }
     }
 }
 

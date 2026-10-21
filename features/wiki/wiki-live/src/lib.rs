@@ -49,6 +49,7 @@ pub mod repo_source;
 pub mod reviews;
 mod snapshot;
 pub mod source;
+pub mod source_access;
 pub mod source_grants;
 pub mod source_peers;
 mod source_watcher;

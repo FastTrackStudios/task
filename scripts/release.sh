@@ -17,8 +17,10 @@
 #   scripts/release.sh version            the current version
 #   scripts/release.sh plan               what the next release would be
 #   scripts/release.sh prepare [BUMP]     bump + changelog + release commit
-#                                          on release/v<next> (BUMP: auto,
-#                                          patch, minor, major or X.Y.Z)
+#                                          on release/v<next> (BUMP: patch
+#                                          (default), minor, major, auto or
+#                                          X.Y.Z; minor/major only when the
+#                                          Captain or Commander calls one)
 #   scripts/release.sh notes [VERSION]    one version's changelog section
 #   scripts/release.sh pr                 open the dev -> main release PR
 #   scripts/release.sh hotfix             on hotfix/* (from main): patch bump
@@ -125,11 +127,14 @@ cmd_notes() {
 cmd_plan() {
     local cur tag next
     cur="$(version_at)"; tag="$(last_tag)"
-    next="$(cliff --bumped-version 2>/dev/null | sed 's/^v//' || true)"
+    local cliff_next
+    next="$(bump "$cur" patch)"
+    cliff_next="$(cliff --bumped-version 2>/dev/null | sed 's/^v//' || true)"
     echo "version (Cargo.toml):  $cur"
     echo "last release tag:      ${tag:-none}"
     echo "commits since tag:     $(git rev-list --count ${tag:+$tag..}HEAD)"
-    echo "git-cliff suggests:    ${next:-?} (override with: just release-prepare minor|patch|major|X.Y.Z)"
+    echo "next release:          $next (patch, the default; minor/major only when the Captain or Commander calls one)"
+    echo "git-cliff would bump:  ${cliff_next:-?} (informational; opt in with: just release-prepare auto)"
     echo
     echo "── unreleased changelog ──"
     cliff --unreleased --strip header ${next:+--tag "v$next"} || true
@@ -144,7 +149,10 @@ cmd_plan() {
 }
 
 cmd_prepare() {
-    local want="${1:-auto}" cur next branch
+    # Patch by default, whatever the commits say: minor and major bumps
+    # are a decision (the Captain or Commander calls them), not something
+    # a feat commit triggers. `auto` asks git-cliff instead.
+    local want="${1:-patch}" cur next branch
     [ -z "$(git status --porcelain --untracked-files=no)" ] || die "working tree is dirty"
     git fetch --quiet --tags origin "$INTEGRATION_BRANCH"
     cur="$(version_at "origin/$INTEGRATION_BRANCH")"

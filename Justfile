@@ -171,8 +171,10 @@ release-plan:
 
 # Bump the version, regenerate CHANGELOG.md and commit
 # `chore(release): v<next>` on a fresh `release/v<next>` off origin/dev.
-# BUMP: auto (from the commits), patch, minor, major, or an exact X.Y.Z.
-release-prepare BUMP="auto":
+# BUMP: patch (the default, whatever the commits say), minor or major (only
+# when the Captain or Commander calls one), auto (git-cliff decides from the
+# commits), or an exact X.Y.Z.
+release-prepare BUMP="patch":
     bash scripts/release.sh prepare {{BUMP}}
 
 # Open the release PR, dev -> main, with the changelog as its body.
@@ -384,6 +386,33 @@ ci-docs: css
 # its output is the evidence the reviewer checks on the card. (`ci-docs`
 # runs only on release PRs; `just ci-release` adds it.)
 ci: ci-fmt ci-manifests ci-tests ci-clippy ci-wasm
+
+# ── Target dir: keep the latest build of each kind ───────────────────────
+#
+# A shared target dir only ever grows: every new dependency graph (a
+# lockfile bump, another branch's features) leaves a whole new set of
+# units beside the old. `build-kind` runs ANY build — cargo, a `just`
+# recipe, dx — and records which units it used, fresh or rebuilt, as the
+# latest build of <kind>; `sweep` deletes what no kind's latest build
+# used. See scripts/target-sweep.py and docs/agents/build-strategy.md.
+#
+#   just build-kind check cargo check --workspace --all-targets
+#   just build-kind desktop just desktop
+#   just sweep --dry-run
+build-kind kind +cmd:
+    python3 scripts/target-sweep.py run {{kind}} -- {{cmd}}
+
+sweep *args:
+    python3 scripts/target-sweep.py sweep {{args}}
+
+# The local/canonical policy: recorded kinds + anything any build (dx
+# serve, the IDE, a bare cargo run) used in the last 7 days; rust-analyzer's
+# flycheck dir goes whole past 40 GB. Safe to run from a timer.
+sweep-local *args:
+    python3 scripts/target-sweep.py sweep --keep-days 7 --flycheck-max-gb 40 {{args}}
+
+sweep-status:
+    python3 scripts/target-sweep.py status
 
 # ── Git hooks (capn) ─────────────────────────────────────────────────────
 

@@ -2159,6 +2159,7 @@ pub(crate) async fn build_org_state(
             ),
             home: home_identity.cloned(),
             subtree: Arc::new(sharing::ProjectTreeStub::new(projects.clone())),
+            org_root: org_root.path().to_path_buf(),
         };
         sqlite_conns.push(sharing.store.conn().clone());
         #[cfg(feature = "plugin-fasttrackstudio")]
