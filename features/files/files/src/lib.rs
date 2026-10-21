@@ -1,6 +1,14 @@
 // architect's HasDispatcher/rpc derives emit cfg-gated blocks; allow at
 // crate scope (same convention as `milestone` / `task`).
 #![allow(unexpected_cfgs)]
+// Zero-copy port (docs/perf/zero-copy-audit.md): this crate is clean of
+// the four copy lints, and keeps them out.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
 
 //! Server-side half of the Files feature (issue #259, ADR 0001 —
 //! `apps/task/docs/adr/0001-files-version-store-jj-cas.md`). The

@@ -232,9 +232,9 @@ impl FilesBackend {
             }
             let declared = IngestSource {
                 id: Uuid::new_v4(),
-                source: source.clone(),
+                source,
                 root_id,
-                dest: dest.clone(),
+                dest,
             };
             state.sources.push(declared.clone());
             declared

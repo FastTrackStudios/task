@@ -335,11 +335,9 @@ fn parse_sidecar(text: &str) -> Vec<Segment> {
     segments
 }
 
-fn finish(region: Region, text: String) -> Segment {
-    Segment {
-        region,
-        text: text.trim_end_matches('\n').to_string(),
-    }
+fn finish(region: Region, mut text: String) -> Segment {
+    text.truncate(text.trim_end_matches('\n').len());
+    Segment { region, text }
 }
 
 /// `@ 0 41` or `@ whole`, and nothing else — a body line that merely

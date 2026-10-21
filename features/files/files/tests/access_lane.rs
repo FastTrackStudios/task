@@ -285,7 +285,7 @@ async fn a_grantee_may_pass_on_only_what_they_hold() {
             &sam,
             dev.clone(),
             root,
-            p("Sessions/Song"),
+            &p("Sessions/Song"),
             vec![Capability::Read],
         )
         .expect("a subset of what Sam holds, inside Sam's subtree");
@@ -295,7 +295,7 @@ async fn a_grantee_may_pass_on_only_what_they_hold() {
             &sam,
             dev.clone(),
             root,
-            p("Sessions"),
+            &p("Sessions"),
             vec![Capability::Write],
         )
         .expect_err("Sam cannot hand out a write they do not have")
@@ -308,7 +308,7 @@ async fn a_grantee_may_pass_on_only_what_they_hold() {
     // address, let alone grant over.
     assert!(matches!(
         backend
-            .grant_as(&sam, dev, root, p("Renders"), vec![Capability::Read])
+            .grant_as(&sam, dev, root, &p("Renders"), vec![Capability::Read])
             .expect_err("outside Sam's grant"),
         FilesFault::PathNotFound(_)
     ));

@@ -355,7 +355,7 @@ impl FederationService for FilesBackend {
             root_id,
             path: path.clone(),
             name: if path.is_root() {
-                root.name.clone()
+                root.name
             } else {
                 path.name().unwrap_or(&root.name).to_string()
             },

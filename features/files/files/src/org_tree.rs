@@ -34,11 +34,11 @@ impl From<RouteError> for Error {
 }
 
 impl FilesBackend {
-    pub(crate) fn tree_browse_inner(&self, path: String) -> Result<TreeNode, Error> {
+    pub(crate) fn tree_browse_inner(&self, path: &str) -> Result<TreeNode, Error> {
         // The grammar — areas, confinement, where a project's remainder
         // starts — is `files_domain::tree`, shared with the WebDAV
         // mount so both always show one tree.
-        match tree::route(&path)? {
+        match tree::route(path)? {
             Route::Areas => Ok(TreeNode::Listing(
                 Area::ALL.iter().map(|a| virtual_dir(a.as_str())).collect(),
             )),

@@ -289,11 +289,12 @@ impl FilesBackend {
     fn mint(&self, grant: Grant) -> ByteTicket {
         let token = mint_token();
         let now = Utc::now();
+        let ticket = grant.ticket(token.clone());
         TICKETS.write(self, |book| {
             book.0.retain(|_, g| g.expires_at > now);
-            book.0.insert(token.clone(), grant.clone());
+            book.0.insert(token, grant);
         });
-        grant.ticket(token)
+        ticket
     }
 
     /// The ticket a token stands for — what an HTTP route needs to build

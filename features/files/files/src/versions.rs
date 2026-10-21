@@ -123,7 +123,7 @@ impl VaultVersions {
                         Ok(r) => {
                             reviews_root.insert(r.id, r.root_id);
                         }
-                        Err(e) if owned => return Err(strict_parse_err(page, e)),
+                        Err(e) if owned => return Err(strict_parse_err(page, &e)),
                         Err(e) => {
                             tracing::warn!(page = %page.rel_path, ?e, "unreadable review page");
                         }
@@ -138,7 +138,7 @@ impl VaultVersions {
                         Ok(c) => {
                             comment_pins.push((page.rel_path.clone(), c.review_id, c.commit_id));
                         }
-                        Err(e) if owned => return Err(strict_parse_err(page, e)),
+                        Err(e) if owned => return Err(strict_parse_err(page, &e)),
                         Err(e) => {
                             tracing::warn!(page = %page.rel_path, ?e, "unreadable review comment");
                         }
@@ -155,7 +155,7 @@ impl VaultVersions {
                 let (page_root_id, commit_id) = match parsed {
                     Ok(v) => v,
                     Err(e) if owned => {
-                        return Err(strict_parse_err(page, e));
+                        return Err(strict_parse_err(page, &e));
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -504,7 +504,7 @@ fn root_folder(root_name: &str, sub: &str) -> String {
     )
 }
 
-fn strict_parse_err(page: &vault::VaultPage, e: vault_entity::ParseError) -> Error {
+fn strict_parse_err(page: &vault::VaultPage, e: &vault_entity::ParseError) -> Error {
     Error::BadRequest(format!(
         "{}: unreadable Files version page ({e}) — refusing to compute a GC protect set that \
          might silently forfeit the version it references; fix or remove the page",

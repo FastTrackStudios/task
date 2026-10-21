@@ -805,7 +805,7 @@ impl FilesBackend {
     /// one.
     pub(crate) fn create_root_in_place(
         &self,
-        path: String,
+        path: &str,
         name: String,
         flavor: RootFlavor,
     ) -> Result<FileRootInfo, Error> {
@@ -847,7 +847,7 @@ impl FilesBackend {
         }
         std::fs::create_dir_all(&dir)?;
         let canonical = self.confine(&dir)?;
-        Ok(Ok((self.register_root(canonical, name, flavor)?, true)))
+        Ok(Ok((self.register_root(&canonical, name, flavor)?, true)))
     }
 
     pub(crate) fn registry_list(&self) -> Vec<FileRootInfo> {
@@ -1433,11 +1433,11 @@ impl FilesBackend {
 
     pub(crate) fn create_root_inner(
         &self,
-        path: String,
+        path: &str,
         name: String,
         flavor: RootFlavor,
     ) -> Result<FileRootInfo, Error> {
-        let requested = PathBuf::from(&path);
+        let requested = PathBuf::from(path);
         let metadata =
             std::fs::metadata(&requested).map_err(|e| Error::BadRequest(format!("{path}: {e}")))?;
         if !metadata.is_dir() {
@@ -1447,7 +1447,7 @@ impl FilesBackend {
         // a rejected path never even reaches the marker/registry
         // checks below.
         let canonical = self.confine(&requested)?;
-        self.register_root(canonical, name, flavor)
+        self.register_root(&canonical, name, flavor)
     }
 
     /// The half of [`FilesBackend::create_root_inner`] after confinement:
@@ -1458,7 +1458,7 @@ impl FilesBackend {
     /// boundary.
     pub(crate) fn register_root(
         &self,
-        canonical: PathBuf,
+        canonical: &Path,
         name: String,
         flavor: RootFlavor,
     ) -> Result<FileRootInfo, Error> {
@@ -1753,8 +1753,8 @@ impl FilesBackend {
         Ok(entries)
     }
 
-    pub(crate) fn drive_browse_inner(&self, path: String) -> Result<Vec<BrowseEntry>, Error> {
-        let confined = self.confine(Path::new(&path))?;
+    pub(crate) fn drive_browse_inner(&self, path: &str) -> Result<Vec<BrowseEntry>, Error> {
+        let confined = self.confine(Path::new(path))?;
         let metadata = std::fs::metadata(&confined)?;
         if !metadata.is_dir() {
             return Err(Error::BadRequest(format!("{path}: not a directory")));
@@ -1762,11 +1762,7 @@ impl FilesBackend {
         Self::list_dir(&confined, false, false)
     }
 
-    pub(crate) fn chain_inner(
-        &self,
-        root_id: Uuid,
-        path: String,
-    ) -> Result<Vec<ChainEntry>, Error> {
+    pub(crate) fn chain_inner(&self, root_id: Uuid, path: &str) -> Result<Vec<ChainEntry>, Error> {
         let root = self.get_root_info(root_id)?;
         let (repo, head) = self.ensure_repo(&root)?;
         // Both flavors derive chains through the same DAG walk, against
@@ -1774,7 +1770,7 @@ impl FilesBackend {
         // that is what "the chain/history RPC works identically on a
         // software root" means in code (issue #273).
         let backend = repo.store().backend();
-        let repo_path = RepoPathBuf::from_internal_string(&path)
+        let repo_path = RepoPathBuf::from_internal_string(path)
             .map_err(|e| Error::BadRequest(format!("{path:?}: {e}")))?;
         let entries = pollster::block_on(files_store::version::chain::version_chain(
             backend, &head, &repo_path,
@@ -1908,8 +1904,8 @@ impl FilesBackend {
     pub(crate) fn name_version_inner(
         &self,
         root_id: Uuid,
-        commit_id: String,
-        name: String,
+        commit_id: &str,
+        name: &str,
     ) -> Result<NamedVersion, Error> {
         let name = name.trim().to_string();
         if name.is_empty() {
@@ -1922,7 +1918,7 @@ impl FilesBackend {
         // inside a sweep that has already snapshotted its protect set.
         let lock = self.root_lock(root_id);
         let _guard = lock.lock().expect("root lock poisoned");
-        let (commit_id, change_id) = self.resolve_commit(&root, &commit_id)?;
+        let (commit_id, change_id) = self.resolve_commit(&root, commit_id)?;
         self.versions.create_named_version(
             root_id,
             &root.name,
@@ -1961,9 +1957,7 @@ impl FilesBackend {
         }
         // The chain already follows copy records back through renames —
         // an untracked path simply has no chain (and so no review).
-        let chain = self
-            .chain_inner(root_id, file_path.to_string())
-            .unwrap_or_default();
+        let chain = self.chain_inner(root_id, file_path).unwrap_or_default();
         for entry in &chain {
             if entry.path != file_path
                 && let Some(review) = self.versions.review_by_file(root_id, &entry.path)?
@@ -2336,13 +2330,9 @@ impl FilesBackend {
         };
 
         let parent_commit = pollster::block_on(backend.read_commit(&parent_id))?;
-        let base_tree_id = parent_commit
-            .root_tree
-            .clone()
-            .into_resolved()
-            .map_err(|_| {
-                Error::Repo("capturing onto a conflicted tree is unsupported (v1)".into())
-            })?;
+        let base_tree_id = parent_commit.root_tree.into_resolved().map_err(|_| {
+            Error::Repo("capturing onto a conflicted tree is unsupported (v1)".into())
+        })?;
         let base_tree = pollster::block_on(backend.read_tree(RepoPath::root(), &base_tree_id))?;
         let mut base_paths: BTreeSet<RepoPathBuf> = BTreeSet::new();
         pollster::block_on(scan::walk_tree_paths(
@@ -2412,7 +2402,7 @@ impl FilesBackend {
                 // see (issue #273).
                 let repo = match root.flavor {
                     RootFlavor::Software => {
-                        git_root::publish_checkpoint(result.repo, &result.commit_id)?
+                        git_root::publish_checkpoint(&result.repo, &result.commit_id)?
                     }
                     RootFlavor::Media => result.repo,
                 };
@@ -2519,9 +2509,9 @@ impl FilesBackend {
     pub(crate) fn hint_activity_inner(
         &self,
         root_id: Uuid,
-        paths: Vec<String>,
+        paths: &[String],
     ) -> Result<u32, Error> {
-        self.hints().note(root_id, &paths)
+        self.hints().note(root_id, paths)
     }
 
     pub(crate) fn ignore_set_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
@@ -2629,12 +2619,8 @@ impl FilesBackend {
         Ok(())
     }
 
-    pub(crate) fn dehydrate_inner(
-        &self,
-        root_id: Uuid,
-        path: String,
-    ) -> Result<BrowseEntry, Error> {
-        match self.try_dehydrate_inner(root_id, &path)? {
+    pub(crate) fn dehydrate_inner(&self, root_id: Uuid, path: &str) -> Result<BrowseEntry, Error> {
+        match self.try_dehydrate_inner(root_id, path)? {
             DehydrateOutcome::Done(entry) => Ok(entry),
             DehydrateOutcome::Dirty => Err(Error::BadRequest(format!(
                 "{path}: on-disk content differs from the checkpoint head — checkpoint first, then dehydrate"
@@ -2731,10 +2717,10 @@ impl FilesBackend {
         Ok(DehydrateOutcome::Done(Self::entry_for(&disk_path, path)?))
     }
 
-    pub(crate) fn hydrate_inner(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, Error> {
+    pub(crate) fn hydrate_inner(&self, root_id: Uuid, path: &str) -> Result<BrowseEntry, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydrate")?;
-        let (disk_path, repo_path) = self.resolve_root_file(&root, &path)?;
+        let (disk_path, repo_path) = self.resolve_root_file(&root, path)?;
         let lock = self.root_lock(root_id);
         let _guard = lock.lock().expect("root lock poisoned");
 
@@ -2749,7 +2735,7 @@ impl FilesBackend {
         };
         // Idempotent: already resident — report it, touch nothing.
         let Some(recorded) = on_disk else {
-            return Self::entry_for(&disk_path, &path);
+            return Self::entry_for(&disk_path, path);
         };
 
         // The id to restore: the checkpoint head's when it tracks the
@@ -2768,7 +2754,7 @@ impl FilesBackend {
             path: repo_path.as_internal_file_string().to_string(),
             stub: false,
         }));
-        Self::entry_for(&disk_path, &path)
+        Self::entry_for(&disk_path, path)
     }
 
     /// Stream `target_id`'s content from the store to a temp file in
@@ -2889,7 +2875,7 @@ impl FilesBackend {
             let keep = hydration::keeps_hydrated(&policy, &rel);
             if file.stub.is_some() {
                 if keep {
-                    match self.hydrate_inner(root_id, rel.clone()) {
+                    match self.hydrate_inner(root_id, &rel) {
                         Ok(_) => report.hydrated.push(rel),
                         Err(err) => {
                             tracing::warn!(%root_id, path = %rel, %err, "policy hydrate failed");
@@ -3197,7 +3183,7 @@ impl FilesBackend {
         if pending.is_empty() {
             return;
         }
-        match RootWatcher::spawn_many(pending, self.hints()) {
+        match RootWatcher::spawn_many(&pending, self.hints()) {
             Ok(started) => {
                 let mut watchers = self.watchers.lock().expect("watcher map poisoned");
                 for w in started {
@@ -3245,7 +3231,7 @@ impl FilesBackend {
     pub(crate) fn restart_inner(
         &self,
         root_id: Uuid,
-        mode: files_proto::RestartMode,
+        mode: &files_proto::RestartMode,
         label: Option<String>,
     ) -> Result<ProjectVersion, Error> {
         use files_proto::RestartMode;
@@ -3255,7 +3241,7 @@ impl FilesBackend {
 
         // Validate the mode's inputs BEFORE the checkpoint mutates
         // anything — a restart that fails validation must be a no-op.
-        let template = match &mode {
+        let template = match mode {
             RestartMode::Template { source_path } => {
                 let source = self.confine(Path::new(source_path))?;
                 crate::restart::validate_template(&source)?;
@@ -3273,7 +3259,7 @@ impl FilesBackend {
             }
             _ => None,
         };
-        let carry: Option<BTreeSet<RepoPathBuf>> = match &mode {
+        let carry: Option<BTreeSet<RepoPathBuf>> = match mode {
             RestartMode::CarryForward { paths } if !paths.is_empty() => {
                 let mut set = BTreeSet::new();
                 for p in paths {
@@ -3311,10 +3297,10 @@ impl FilesBackend {
         let (repo, head) = self.reload_repo(&root)?;
         let backend = repo.store().backend();
         let head_commit = pollster::block_on(backend.read_commit(&head))?;
-        let head_tree_id =
-            head_commit.root_tree.clone().into_resolved().map_err(|_| {
-                Error::Repo("restarting a conflicted tree is unsupported (v1)".into())
-            })?;
+        let head_tree_id = head_commit
+            .root_tree
+            .into_resolved()
+            .map_err(|_| Error::Repo("restarting a conflicted tree is unsupported (v1)".into()))?;
         let head_tree = pollster::block_on(backend.read_tree(RepoPath::root(), &head_tree_id))?;
         let mut head_paths: BTreeSet<RepoPathBuf> = BTreeSet::new();
         pollster::block_on(scan::walk_tree_paths(
@@ -3527,8 +3513,8 @@ impl FilesBackend {
         let result = crate::checkpoint::write_checkpoint(Capture {
             repo: &flip_repo,
             backend,
-            parent_id: head.clone(),
-            base_tree_id: head_tree_id.clone(),
+            parent_id: head,
+            base_tree_id: head_tree_id,
             base_tree: &head_tree,
             disk_files: &disk_files,
             base_paths: &head_paths,
@@ -3581,8 +3567,8 @@ impl FilesBackend {
     pub(crate) fn browse_at_inner(
         &self,
         root_id: Uuid,
-        commit_ref: String,
-        subpath: String,
+        commit_ref: &str,
+        subpath: &str,
     ) -> Result<Vec<BrowseEntry>, Error> {
         let root = self.get_root_info(root_id)?;
         // Read path: open-only, reloaded to head — time-travel browsing
@@ -3594,8 +3580,8 @@ impl FilesBackend {
                 "{root_id}: no version store (never checkpointed, or its volume is not mounted)"
             )));
         };
-        let (commit_id, _) = Self::resolve_commit_in(&repo, &root, &commit_ref)?;
-        let dir = badges::repo_dir(&subpath)?;
+        let (commit_id, _) = Self::resolve_commit_in(&repo, &root, commit_ref)?;
+        let dir = badges::repo_dir(subpath)?;
         let backend = repo.store().backend();
         let listed = pollster::block_on(badges::listing(backend, &commit_id, &dir))?;
         if listed.is_empty() && !subpath.is_empty() {
@@ -3622,8 +3608,8 @@ impl FilesBackend {
     pub(crate) fn copy_forward_inner(
         &self,
         root_id: Uuid,
-        commit_ref: String,
-        paths: Vec<String>,
+        commit_ref: &str,
+        paths: &[String],
     ) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
         // Media-only like every other verb that mutates the live tree
@@ -3639,20 +3625,15 @@ impl FilesBackend {
         let _guard = lock.lock().expect("root lock poisoned");
         let (repo, head) = self.reload_repo(&root)?;
         let backend = repo.store().backend();
-        let (commit_id, _) = self.resolve_commit(&root, &commit_ref)?;
+        let (commit_id, _) = self.resolve_commit(&root, commit_ref)?;
         let source_commit = pollster::block_on(backend.read_commit(&commit_id))?;
-        let source_tree_id = source_commit
-            .root_tree
-            .clone()
-            .into_resolved()
-            .map_err(|_| {
-                Error::Repo("copying forward from a conflicted tree is unsupported (v1)".into())
-            })?;
+        let source_tree_id = source_commit.root_tree.into_resolved().map_err(|_| {
+            Error::Repo("copying forward from a conflicted tree is unsupported (v1)".into())
+        })?;
         let source_tree = pollster::block_on(backend.read_tree(RepoPath::root(), &source_tree_id))?;
         let head_commit = pollster::block_on(backend.read_commit(&head))?;
         let head_tree_id = head_commit
             .root_tree
-            .clone()
             .into_resolved()
             .map_err(|_| Error::Repo("conflicted head tree".into()))?;
         let head_tree = pollster::block_on(backend.read_tree(RepoPath::root(), &head_tree_id))?;
@@ -3668,7 +3649,7 @@ impl FilesBackend {
         }
         let mut planned = Vec::new();
         let mut dirty = Vec::new();
-        for p in &paths {
+        for p in paths {
             let (disk, repo_path) = self.resolve_root_file(&root, p)?;
             let Some(jj_lib::backend::TreeValue::File { id, executable, .. }) = pollster::block_on(
                 files_store::version::chain::lookup_dyn(backend, &source_tree, &repo_path),
@@ -3842,10 +3823,10 @@ impl FilesBackend {
         }
 
         let head_commit = pollster::block_on(backend.read_commit(&head))?;
-        let tree_id =
-            head_commit.root_tree.clone().into_resolved().map_err(|_| {
-                Error::Repo("settling a conflicted head tree is unsupported".into())
-            })?;
+        let tree_id = head_commit
+            .root_tree
+            .into_resolved()
+            .map_err(|_| Error::Repo("settling a conflicted head tree is unsupported".into()))?;
         let merged = jj_lib::merged_tree::MergedTree::resolved(repo.store().clone(), tree_id);
         let mut tx = repo.start_transaction();
         let commit = pollster::block_on(async {
@@ -3950,13 +3931,11 @@ impl FilesBackend {
         let head_commit = pollster::block_on(backend.read_commit(&ours_head))?;
         let base_tree_id = head_commit
             .root_tree
-            .clone()
             .into_resolved()
             .map_err(|_| Error::Repo("merging a conflicted head tree is unsupported".into()))?;
         let their_commit = pollster::block_on(backend.read_commit(&theirs_head))?;
         let their_tree_id = their_commit
             .root_tree
-            .clone()
             .into_resolved()
             .map_err(|_| Error::Repo("merging a conflicted head tree is unsupported".into()))?;
         let their_tree = pollster::block_on(backend.read_tree(RepoPath::root(), &their_tree_id))?;
@@ -4185,13 +4164,13 @@ impl FilesBackend {
     pub(crate) fn resolve_divergence_inner(
         &self,
         root_id: Uuid,
-        path: String,
-        choice: files_proto::DivergenceChoice,
+        path: &str,
+        choice: &files_proto::DivergenceChoice,
     ) -> Result<CheckpointInfo, Error> {
         use files_proto::DivergenceChoice;
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "resolve_divergence")?;
-        let (_, repo_path) = self.resolve_root_file(&root, &path)?;
+        let (_, repo_path) = self.resolve_root_file(&root, path)?;
         let lock = self.root_lock(root_id);
         let _guard = lock.lock().expect("root lock poisoned");
 
@@ -4225,7 +4204,6 @@ impl FilesBackend {
         let head_commit = pollster::block_on(backend.read_commit(&head))?;
         let base_tree_id = head_commit
             .root_tree
-            .clone()
             .into_resolved()
             .map_err(|_| Error::Repo("conflicted head tree".into()))?;
         let store = repo.store().clone();
@@ -4242,7 +4220,6 @@ impl FilesBackend {
             let commit = pollster::block_on(backend.read_commit(commit_id))?;
             let tree_id = commit
                 .root_tree
-                .clone()
                 .into_resolved()
                 .map_err(|_| Error::Repo("conflicted tree".into()))?;
             let tree = pollster::block_on(backend.read_tree(RepoPath::root(), &tree_id))?;
@@ -4272,7 +4249,7 @@ impl FilesBackend {
         };
 
         // 1. The named path, per the choice.
-        match &choice {
+        match choice {
             DivergenceChoice::Pick { commit_id } => {
                 // An empty or ambiguous id must never silently resolve
                 // to side A (PR #291 review): require an exact match or
@@ -4311,7 +4288,7 @@ impl FilesBackend {
                         materialize.push((repo_path.clone(), None));
                     }
                 }
-                changed_paths.push(path.clone());
+                changed_paths.push(path.to_owned());
             }
             DivergenceChoice::KeepBoth => {
                 // Side A already sits in the base tree; each other
@@ -4325,7 +4302,7 @@ impl FilesBackend {
                         continue;
                     }
                     if let Some(id) = side {
-                        let (sibling, sibling_path) = sibling_name(&path, n)?;
+                        let (sibling, sibling_path) = sibling_name(path, n)?;
                         n += 1;
                         let value = tree_value_of(h, &repo_path)?.ok_or_else(|| {
                             Error::Repo(format!("{path}: side vanished mid-resolve"))
@@ -5217,7 +5194,7 @@ impl FilesBackend {
             ));
         }
         let (head, snapshot_head) = Self::heads_of(&self.data_dir, &new_repo, &root)?;
-        self.set_heads(root_id, new_repo.clone(), head, snapshot_head);
+        self.set_heads(root_id, new_repo, head, snapshot_head);
 
         // Now the old chain is unreachable; sweep it.
         let keep_newer = std::time::SystemTime::now()
@@ -5807,11 +5784,7 @@ impl FilesBackend {
                     .and_then(Result::ok)
                 })
                 .map_or(0, |m| m.chunks.iter().map(|c| c.len).sum());
-            out.push((
-                path.as_internal_file_string().to_owned(),
-                id.hex().to_string(),
-                size,
-            ));
+            out.push((path.as_internal_file_string().to_owned(), id.hex(), size));
         }
         Ok(out)
     }
@@ -6145,7 +6118,7 @@ impl FilesBackend {
         path: String,
     ) -> Result<BrowseEntry, FilesError> {
         let this = self.clone();
-        blocking(move || this.dehydrate_inner(root_id, path)).await
+        blocking(move || this.dehydrate_inner(root_id, &path)).await
     }
 
     pub(crate) async fn hydrate_path(
@@ -6154,7 +6127,7 @@ impl FilesBackend {
         path: String,
     ) -> Result<BrowseEntry, FilesError> {
         let this = self.clone();
-        blocking(move || this.hydrate_inner(root_id, path)).await
+        blocking(move || this.hydrate_inner(root_id, &path)).await
     }
 
     pub(crate) async fn hydration_policy(&self, root_id: Uuid) -> Result<Vec<String>, FilesError> {
@@ -6184,7 +6157,7 @@ impl FilesBackend {
         path: String,
     ) -> Result<files_proto::TreeNode, FilesError> {
         let this = self.clone();
-        blocking(move || this.tree_browse_inner(path)).await
+        blocking(move || this.tree_browse_inner(&path)).await
     }
 
     pub(crate) async fn chain_of(
@@ -6193,7 +6166,7 @@ impl FilesBackend {
         path: String,
     ) -> Result<Vec<ChainEntry>, FilesError> {
         let this = self.clone();
-        blocking(move || this.chain_inner(root_id, path)).await
+        blocking(move || this.chain_inner(root_id, &path)).await
     }
 
     pub(crate) async fn checkpoint_now(
@@ -6213,7 +6186,7 @@ impl FilesBackend {
         // On the blocking pool like its neighbours: the first hint for a
         // root compiles (and may seed) its Ignore set off disk.
         let this = self.clone();
-        blocking(move || this.hint_activity_inner(root_id, paths)).await
+        blocking(move || this.hint_activity_inner(root_id, &paths)).await
     }
 
     pub(crate) async fn snapshots_of(
@@ -6245,7 +6218,7 @@ impl FilesBackend {
         name: String,
     ) -> Result<NamedVersion, FilesError> {
         let this = self.clone();
-        let named = blocking(move || this.name_version_inner(root_id, commit_id, name)).await?;
+        let named = blocking(move || this.name_version_inner(root_id, &commit_id, &name)).await?;
         self.publish(ev::version_named(named.clone()));
         Ok(named)
     }
@@ -6369,7 +6342,7 @@ impl FilesBackend {
         label: Option<String>,
     ) -> Result<ProjectVersion, FilesError> {
         let this = self.clone();
-        blocking(move || this.restart_inner(root_id, mode, label)).await
+        blocking(move || this.restart_inner(root_id, &mode, label)).await
     }
 
     pub(crate) async fn browse_commit(
@@ -6379,7 +6352,7 @@ impl FilesBackend {
         subpath: String,
     ) -> Result<Vec<BrowseEntry>, FilesError> {
         let this = self.clone();
-        blocking(move || this.browse_at_inner(root_id, commit_id, subpath)).await
+        blocking(move || this.browse_at_inner(root_id, &commit_id, &subpath)).await
     }
 
     pub(crate) async fn copy_forward_commit(
@@ -6389,7 +6362,7 @@ impl FilesBackend {
         paths: Vec<String>,
     ) -> Result<Vec<String>, FilesError> {
         let this = self.clone();
-        blocking(move || this.copy_forward_inner(root_id, commit_id, paths)).await
+        blocking(move || this.copy_forward_inner(root_id, &commit_id, &paths)).await
     }
 
     pub(crate) async fn divergences_of(
@@ -6407,7 +6380,7 @@ impl FilesBackend {
         choice: files_proto::DivergenceChoice,
     ) -> Result<CheckpointInfo, FilesError> {
         let this = self.clone();
-        blocking(move || this.resolve_divergence_inner(root_id, path, choice)).await
+        blocking(move || this.resolve_divergence_inner(root_id, &path, &choice)).await
     }
 
     pub(crate) async fn gc_root(

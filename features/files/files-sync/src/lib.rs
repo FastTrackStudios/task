@@ -1,6 +1,14 @@
 // architect's rpc derives emit cfg-gated blocks; allow at crate scope
 // (same convention as the sibling files crates).
 #![allow(unexpected_cfgs)]
+// Zero-copy port (docs/perf/zero-copy-audit.md): this crate is clean of
+// the four copy lints, and keeps them out.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
 
 //! Replica sync engine (issue #264, spec: "Reconcile = commit graphs +
 //! missing chunks ... resumable at chunk level; divergence surfaces per
