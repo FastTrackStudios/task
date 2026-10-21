@@ -4845,7 +4845,10 @@ fn split_qualified(
 }
 
 /// The account an MCP call carries, handed to the wiki backend in
-/// place of the gate's task-local (see [`mcp_principal`]).
+/// place of the gate's task-local (see [`mcp_principal`]). Whether that
+/// account is an org admin is not this caller's to say: the backend's
+/// org roles (`memberships::WikiRoles`) answer for the principal, so a
+/// bot is an admin only when its own membership row says so.
 #[cfg(feature = "plugin-wiki")]
 struct McpCaller(Option<String>);
 

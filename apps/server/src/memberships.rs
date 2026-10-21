@@ -609,9 +609,94 @@ impl files::lane::caller::Memberships for FilesRoles {
     }
 }
 
+/// Whether a membership row's role is one that runs the org: `owner` or
+/// `admin`, and nothing else. A row with no role is a member; a bot's
+/// row says `member` ([`crate::bots::BOT_ROLE`]) unless someone wrote
+/// `admin` into it on purpose.
+#[must_use]
+pub fn is_admin_role(role: Option<&str>) -> bool {
+    matches!(role.map(str::trim), Some("owner" | "admin"))
+}
+
+/// One org's membership rows, as the wiki lane asks about them: is this
+/// account an owner or admin of the org, who may grant Editor
+/// (`wiki.edit.editor`)?
+///
+/// Read fresh on every question, not cached: granting Editor is rare,
+/// and a demoted admin must stop granting at once. The wiki lane asks
+/// synchronously from inside the call it is serving, so the read is
+/// made in place on the multi-thread runtime the server runs on; off
+/// one there is no safe way to wait, and the answer is no.
+#[cfg(feature = "plugin-wiki")]
+pub struct WikiRoles {
+    memberships: std::sync::Arc<Memberships>,
+    slug: String,
+}
+
+#[cfg(feature = "plugin-wiki")]
+impl WikiRoles {
+    #[must_use]
+    pub fn new(memberships: std::sync::Arc<Memberships>, slug: impl Into<String>) -> Self {
+        Self {
+            memberships,
+            slug: slug.into(),
+        }
+    }
+}
+
+#[cfg(feature = "plugin-wiki")]
+impl wiki_live::backend::OrgRoles for WikiRoles {
+    fn is_admin(&self, principal: &str) -> bool {
+        let Ok(id) = principal.parse::<Uuid>() else {
+            return false;
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return false;
+        };
+        if handle.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+            tracing::warn!(
+                org.slug = %self.slug,
+                "wiki roles: not on a multi-thread runtime; nobody is an org admin"
+            );
+            return false;
+        }
+        let row = tokio::task::block_in_place(|| {
+            handle.block_on(self.memberships.role_for(id, &self.slug))
+        });
+        match row {
+            Ok(Some(m)) => is_admin_role(m.role.as_deref()),
+            Ok(None) => false,
+            Err(e) => {
+                // Fail closed: an unreadable table is not a yes.
+                tracing::warn!(
+                    org.slug = %self.slug,
+                    error = %e,
+                    "wiki roles: membership lookup failed — not an admin"
+                );
+                false
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_owner_and_admin_run_the_org() {
+        assert!(is_admin_role(Some("owner")));
+        assert!(is_admin_role(Some("admin")));
+        assert!(is_admin_role(Some(" admin ")));
+        assert!(!is_admin_role(None), "a row with no role is a member");
+        assert!(!is_admin_role(Some("member")));
+        assert!(!is_admin_role(Some(crate::bots::BOT_ROLE)));
+        assert!(!is_admin_role(Some("viewer")));
+        assert!(
+            !is_admin_role(Some("Admin")),
+            "roles are written lower-case"
+        );
+    }
 
     async fn store() -> (tempfile::TempDir, Memberships) {
         let dir = tempfile::tempdir().unwrap();

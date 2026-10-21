@@ -1145,6 +1145,20 @@ pub(crate) async fn build_org_state(
                     // pull request (`wiki.source.editable`); the
                     // server holds the forge clients.
                     .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
+            // Who runs this org, from its membership rows: an owner or
+            // admin grants Editor (`wiki.edit.editor`) on the vox lane
+            // and the MCP lane alike, since both clone this backend.
+            // Without a home identity there are no rows, and only an
+            // Editor grants.
+            let backend = match home_identity {
+                Some(home) => {
+                    backend.with_org_roles(std::sync::Arc::new(crate::memberships::WikiRoles::new(
+                        Arc::clone(&home.memberships),
+                        org_root.slug(),
+                    )))
+                }
+                None => backend,
+            };
             // Each wiki root is a shelf like any other (`wiki:<slug>`):
             // the editor's sync / collab / graph / live-changes path
             // over the same files the `Pages` service writes. Attaching
