@@ -1,3 +1,14 @@
+
+  Task dev shell
+  ─────────────────────────────────────────────
+  just css   # generated tailwind sheets
+  cargo check --workspace
+  cargo run -p task-server        # the server
+  (cd apps/web && dx serve --web --hot-patch false)
+
+  Rust: rustc 1.98.1 (48a229cea 2026-09-01)
+  dx:   dioxus 0.8.0-alpha.0 (was built without git repository)
+
 # Task API reference
 
 <!-- GENERATED — do not edit by hand. Regenerate with:
@@ -6,16 +17,18 @@
      the single registry the router, permit gate, and schema stamps derive from.
      Served live at `GET /org/{slug}/api`. -->
 
-113 services mounted: 90 plain RPC, 23 `#[subscribe]` streams. Every method lists its permit — the `<action>` on `<resource>` the permissions gate checks (see `apps/server/src/permits.rs`). `audited` methods emit an audit line even when allowed. A `stream` method takes a `Tx` sink and pushes to the caller instead of returning once.
+119 services mounted: 94 plain RPC, 25 `#[subscribe]` streams. Every method lists its permit — the `<action>` on `<resource>` the permissions gate checks (see `apps/server/src/permits.rs`). `audited` methods emit an audit line even when allowed. A `stream` method takes a `Tx` sink and pushes to the caller instead of returning once.
 
 ## `auth` (AuthService)
 
-Plugin: `core` — schema stamp: `14f9a4c8473bda45`
+Plugin: `core` — schema stamp: `29f9728d30031641`
 
 | method | args | permit | notes |
 |---|---|---|---|
 | `sign_up_email_password` | `input` | `write` on `auth/signup` | audited |
 | `sign_in_email_password` | `input` | `read` on `public/auth` | — |
+| `start_device_sign_in` | `client_id` | `read` on `public/auth` | — |
+| `poll_device_sign_in` | `device_code`, `user_agent` | `read` on `public/auth` | — |
 | `current_session` | `token` | `read` on `public/auth` | — |
 | `refresh_session` | `token` | `read` on `public/auth` | — |
 | `whoami` | `token` | `read` on `public/auth` | — |
@@ -58,7 +71,7 @@ Plugin: `core` — schema stamp: `08b88215b65bcc4d`
 
 ## `vault-sync` (VaultSyncRpc)
 
-Plugin: `core` — schema stamp: `ba3389e731b79eb8`
+Plugin: `core` — schema stamp: `321b50bd950bc6df`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -66,10 +79,12 @@ Plugin: `core` — schema stamp: `ba3389e731b79eb8`
 | `get_file` | `vault_id`, `path` | `read` on `vault/{path}` | — |
 | `put_file` | `vault_id`, `path`, `bytes`, `if_match` | `write` on `vault/{path}` | — |
 | `delete_file` | `vault_id`, `path`, `if_match` | `write` on `vault/{path}` | — |
+| `move_file` | `vault_id`, `from`, `to`, `if_match` | `write` on `vault/**` | — |
 | `folder_index` | `vault_id` | `read` on `vault/**` | — |
 | `set_folder` | `vault_id`, `path`, `parent`, `if_match` | `write` on `vault/{path}` | — |
 | `open_collab` | `vault_id`, `path` | `read` on `vault/{path}` | — |
 | `base_views` | `vault_id`, `base_path` | `read` on `vault/{path}` | — |
+| `search_text` | `vault_id`, `query`, `limit` | `read` on `vault/**` | — |
 
 ## `vault-sync-stream` (VaultSyncStream) — stream
 
@@ -110,6 +125,21 @@ Plugin: `core` — schema stamp: `3a0a14f7bd088962`
 | `list_incoming` | `token` | `read` on `shares/**` | — |
 | `promote_incoming` | `token`, `name`, `dest_path` | `write` on `shares/**` | audited |
 
+## `sharing` (SharingService)
+
+Plugin: `core` — schema stamp: `e775585c5a7395b5`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `preview_grant` | `root_id`, `subject` | `read` on `sharing/**` | — |
+| `create_grant` | `grant` | `write` on `sharing/**` | audited |
+| `revoke_grant` | `grant_id` | `write` on `sharing/**` | audited |
+| `list_grants` | — | `read` on `sharing/**` | — |
+| `set_source_visibility` | `tier`, `slug`, `visibility` | `write` on `sharing/**` | audited |
+| `grant_source` | `grant` | `write` on `sharing/**` | audited |
+| `revoke_source_grant` | `grant_id` | `write` on `sharing/**` | audited |
+| `list_source_grants` | — | `read` on `sharing/**` | — |
+
 ## `doc-sync` (DocSync) — stream
 
 Plugin: `core` — schema stamp: `adb32a8efbc4b061`
@@ -117,6 +147,15 @@ Plugin: `core` — schema stamp: `adb32a8efbc4b061`
 | method | args | permit | notes |
 |---|---|---|---|
 | `sync` | `doc_id`, `from`, `up`, `down` | `write` on `doc/**` | stream |
+
+## `doc-peer` (DocPeer)
+
+Plugin: `core` — schema stamp: `aa013a9fbebb91bb`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `list` | — | `read` on `docs/replica` | — |
+| `sync` | `at`, `from`, `up`, `down` | `write` on `docs/replica` | stream |
 
 ## `doc-presence` (DocPresence) — stream
 
@@ -464,7 +503,7 @@ Plugin: `core` — schema stamp: `578176a115cfe9b9`
 
 ## `files-sync` (SyncService)
 
-Plugin: `core` — schema stamp: `2df8d6e56abc4d0d`
+Plugin: `core` — schema stamp: `5f412dcb4809521f`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -472,9 +511,9 @@ Plugin: `core` — schema stamp: `2df8d6e56abc4d0d`
 | `map_facet` | `root_id`, `path`, `facet` | `write` on `files/**` | — |
 | `ignore_set` | `root_id` | `read` on `files/**` | — |
 | `set_project_ignores` | `root_id`, `patterns` | `write` on `files/**` | — |
-| `subscription` | `root_id` | `read` on `files/**` | — |
-| `subscribe` | `root_id`, `facets` | `write` on `files/**` | — |
-| `pin` | `root_id`, `paths`, `pinned` | `write` on `files/**` | — |
+| `subscription` | `root_id` | `read` on `files/device-sync` | — |
+| `subscribe` | `root_id`, `facets` | `write` on `files/device-sync` | — |
+| `pin` | `root_id`, `paths`, `pinned` | `write` on `files/device-sync` | — |
 | `hydrate` | `root_id`, `paths`, `resident` | `write` on `files/**` | audited |
 | `residency` | `root_id` | `read` on `files/**` | — |
 | `set_residency` | `root_id`, `patterns` | `write` on `files/**` | — |
@@ -487,7 +526,7 @@ Plugin: `core` — schema stamp: `2df8d6e56abc4d0d`
 
 ## `files-replica` (SyncService)
 
-Plugin: `core` — schema stamp: `72b9fb2e22b51f12`
+Plugin: `core` — schema stamp: `5f412dcb4809521f`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -787,12 +826,13 @@ Plugin: `scheduling` — schema stamp: `aacb88fceb226e1d`
 
 ## `inbox` (InboxRpc)
 
-Plugin: `core` — schema stamp: `e3309d34aacd2f4b`
+Plugin: `core` — schema stamp: `e9a4c1aa9011ba7f`
 
 | method | args | permit | notes |
 |---|---|---|---|
 | `list_inbox` | — | `read` on `inbox/**` | — |
 | `review_queue` | `today` | `read` on `inbox/**` | — |
+| `list_inbox_by` | `created_by` | `read` on `inbox/**` | — |
 | `get_inbox_item` | `id` | `read` on `inbox/**` | — |
 | `upsert_inbox_item` | `item` | `write` on `inbox/**` | — |
 | `delete_inbox_item` | `id` | `write` on `inbox/**` | audited |
@@ -823,6 +863,22 @@ Plugin: `core` — schema stamp: `f61bff918b362048`
 | method | args | permit | notes |
 |---|---|---|---|
 | `events` | `sink` | `read` on `notifications/**` | stream |
+
+## `activity-feed` (ActivityFeed)
+
+Plugin: `core` — schema stamp: `acaf761bcc9e8d18`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `list` | `filter` | `read` on `notifications/activity/**` | — |
+
+## `activity-feed-stream` (ActivityFeedStream) — stream
+
+Plugin: `core` — schema stamp: `8618108bb337a696`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `events` | `sink` | `read` on `notifications/activity/**` | stream |
 
 ## `recall` (RecallRpc)
 
@@ -913,16 +969,37 @@ Plugin: `core` — schema stamp: `2ade4f3a49e25a76`
 
 ## `collection` (CollectionServiceRpc)
 
-Plugin: `fasttrackstudio` — schema stamp: `0ce252dab5a62852`
+Plugin: `fasttrackstudio` — schema stamp: `cf55da895599ee45`
 
 | method | args | permit | notes |
 |---|---|---|---|
 | `create` | `org`, `title`, `kind` | `write` on `collections/**` | — |
 | `get` | `id` | `read` on `collections/**` | — |
+| `rename` | `id`, `title` | `write` on `collections/**` | — |
+| `delete` | `id` | `write` on `collections/**` | audited |
 | `list` | `org`, `kind` | `read` on `collections/**` | — |
 | `add_item` | `placement` | `write` on `collections/**` | — |
 | `remove_item` | `collection_id`, `node` | `write` on `collections/**` | — |
 | `reorder` | `placement` | `write` on `collections/**` | — |
+| `save` | `edit` | `write` on `collections/**` | — |
+
+## `live-sessions` (LiveSessions)
+
+Plugin: `fasttrackstudio` — schema stamp: `5c09b630864a7b26`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `join` | `setlist` | `read` on `live/**` | — |
+| `now` | — | `read` on `live/**` | — |
+| `observe` | `setlist` | `read` on `live/**` | — |
+
+## `live-sessions-stream` (LiveSessionsStream) — stream
+
+Plugin: `fasttrackstudio` — schema stamp: `e01eea9e84a60c3e`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `epochs` | `sink` | `read` on `live/**` | stream |
 
 ## `resources` (ResourcesServiceRpc)
 
@@ -1047,7 +1124,7 @@ Plugin: `wiki` — schema stamp: `f3e7b11714a44bd6`
 
 ## `wiki-subscriptions` (SubscriptionsRpc)
 
-Plugin: `wiki` — schema stamp: `a19833a0e7dc98f1`
+Plugin: `wiki` — schema stamp: `0051cb3551bb1d65`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -1064,6 +1141,7 @@ Plugin: `wiki` — schema stamp: `a19833a0e7dc98f1`
 | `trust_source` | `grant` | `write` on `wiki/subscriptions/**` | audited |
 | `distrust_source` | `domain`, `kind`, `slug` | `write` on `wiki/subscriptions/**` | audited |
 | `trusted_sources` | — | `read` on `wiki/subscriptions/**` | — |
+| `resolve_reference` | `reference` | `read` on `wiki/subscriptions/**` | — |
 
 ## `wiki-registry` (RegistryRpc)
 
