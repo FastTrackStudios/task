@@ -169,6 +169,7 @@ members = [
     "features/scripture/scripture-proto",
     "features/scripture/scripture-ui",
     "features/share/share-proto",
+    "features/sharing/sharing-guest",
     "features/ssg/ssg",
     "features/ssg/ssg-build",
     "features/ssg/ssg-ui",
@@ -407,6 +408,7 @@ scripture = { path = "features/scripture/scripture" }
 scripture-proto = { path = "features/scripture/scripture-proto", default-features = false }
 scripture-ui = { path = "features/scripture/scripture-ui" }
 share-proto = { path = "features/share/share-proto" }
+sharing-guest = { path = "features/sharing/sharing-guest" }
 tag = { path = "features/tag/tag" }
 tag-proto = { path = "features/tag/tag-proto" }
 task = { path = "features/task/task", default-features = false }
