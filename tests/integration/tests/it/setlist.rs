@@ -270,6 +270,15 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     );
 
     // ── the subscription, taken on the way a person takes one ────────
+    //
+    // The guest's song library is open by reference: unlisted
+    // (`wiki.access.shelf-visibility`). Private, the default, would
+    // refuse the studio.
+    wiki_live::source_access::set_visibility(
+        &guest.org_root().join("assets").join(SONG_LIBRARY),
+        wiki_proto::config::Visibility::Unlisted,
+    )
+    .expect("the guest opens its song library by reference");
     alice
         .wiki_subscriptions()
         .await
@@ -317,6 +326,11 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
         "the songs subscription admitted a chart — one shelf, one \
          subscription, and a reference never authorises on its own"
     );
+    wiki_live::source_access::set_visibility(
+        &guest.org_root().join("assets").join(CHART_LIBRARY),
+        wiki_proto::config::Visibility::Unlisted,
+    )
+    .expect("the guest opens its chart library by reference too");
     alice
         .wiki_subscriptions()
         .await

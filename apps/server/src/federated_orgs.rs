@@ -296,9 +296,12 @@ impl SourceVault for RemoteSource {
 /// which route they take instead (see the module docs).
 ///
 /// Local first, always. A domain that names an org on this data root is
-/// served from disk — no dial, no secret, and the publisher's own
-/// visibility check in the same process. Only a domain this disk does not
-/// hold is looked up in the peer table.
+/// served from disk — no dial, no secret — and admitted by the
+/// publisher's own `LocalOrgs::admits` in the same process: same org,
+/// or a visibility that admits outsiders, or a live access grant from
+/// the publisher to this org (`wiki.access.source-grant`). Only a source
+/// this disk does not hold is looked up in the peer table, and then the
+/// publisher on the far side decides, by the same rule.
 pub struct FederatedOrgs {
     local: LocalOrgs,
     /// The subscriber's own org root: where its peer table lives. One

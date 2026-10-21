@@ -142,7 +142,21 @@ impl SubscriptionsBackend {
         // the answer to "is there an unlisted wiki called X" is not one
         // an unauthenticated caller should be able to collect by asking
         // repeatedly.
-        if !self.grants().admits(kind, slug, secret) {
+        //
+        // t[impl wiki.access.source-grant] — two kinds of secret open
+        // this door. The per-source one (`grant_source_read`) says only
+        // that the caller was handed it, so the source's visibility
+        // still decides, judged for an outsider. An access grant's
+        // secret names the subscriber it was minted for, so the caller is
+        // judged as that subscriber, and the same `admits` that checks a
+        // grant on this disk finds it. Revoking the grant ends both.
+        let granted_to = if crate::source_access::governs(kind) {
+            crate::source_access::AccessGrants::open(&self.org_root)
+                .subscriber_by_secret(kind, slug, secret)
+        } else {
+            None
+        };
+        if granted_to.is_none() && !self.grants().admits(kind, slug, secret) {
             return Err(WikiError::Io(
                 "no grant for that source: a subscriber on another server reads it only with \
                  a secret the publisher minted for it"
@@ -165,7 +179,10 @@ impl SubscriptionsBackend {
             declined: false,
             selection: Default::default(),
         };
-        match self.upstream.admits(REMOTE_CALLER, &asked) {
+        match self
+            .upstream
+            .admits(granted_to.as_deref().unwrap_or(REMOTE_CALLER), &asked)
+        {
             Admission::Admitted => {}
             Admission::Refused(why) => return Err(WikiError::Io(why)),
             // This resolver does not serve the domain we just asked it
@@ -302,6 +319,46 @@ impl LocalOrgs {
         }
         Some(root)
     }
+
+    /// Whether an outsider is admitted to a shelf or a project of `org`:
+    /// its visibility admits outsiders, or `org` has granted
+    /// `subscriber_org` this source.
+    ///
+    /// A source that does not exist has no visibility to admit by, and
+    /// the answer is no, which is the same answer a private one gets.
+    fn admits_outsider(
+        &self,
+        org: &str,
+        subscriber_org: &str,
+        subscription: &Subscription,
+        root: &Path,
+    ) -> bool {
+        let tier = self.org_dir(org).join(subscription.kind.tier_dir());
+        let open =
+            root.is_dir() && crate::source_access::visibility(&tier, root).admits_outsiders();
+        open || crate::source_access::AccessGrants::open(&self.org_dir(org)).admits(
+            subscription.kind,
+            &subscription.slug,
+            subscriber_org,
+        )
+    }
+}
+
+/// The one refusal an outsider gets for a shelf or a project, whether it
+/// is private or does not exist (`wiki.access.no-existence-leak`).
+fn not_open_to(subscription: &Subscription, subscriber_org: &str) -> String {
+    let who = if subscriber_org.is_empty() {
+        "a caller from another server".to_owned()
+    } else {
+        format!("`{subscriber_org}`")
+    };
+    format!(
+        "`{}` is not open to {who}: no {} by that name admits you. Shelves and \
+         projects are private to their own org unless they are unlisted, public, or \
+         granted to you; ask the owner for a grant.",
+        subscription.qualified(),
+        subscription.kind.noun()
+    )
 }
 
 impl LocalOrgs {
@@ -362,6 +419,25 @@ impl Upstream for LocalOrgs {
                 subscription.slug, org
             ));
         };
+        // t[impl wiki.access.shelf-visibility] — an asset shelf and a
+        // project are private to their own org unless they declare
+        // otherwise (`.shelf.toml`) or the org has granted this
+        // subscriber (`wiki.access.source-grant`). This used to admit
+        // every shelf and every project to anyone on the server who
+        // could name one, on the grounds that a shelf had nowhere to
+        // declare a visibility. It has one now.
+        //
+        // t[impl wiki.access.no-existence-leak] — and the question is
+        // asked *before* whether the source exists. An outsider who is
+        // not admitted gets one answer whether or not there is anything
+        // by that name, so a private org's shelf and project names
+        // cannot be collected by guessing.
+        if crate::source_access::governs(subscription.kind)
+            && org != subscriber_org
+            && !self.admits_outsider(org, subscriber_org, subscription, &root)
+        {
+            return Admission::Refused(not_open_to(subscription, subscriber_org));
+        }
         if !root.is_dir() {
             return Admission::Refused(format!(
                 "`{}` has no {} `{}`",
@@ -370,31 +446,10 @@ impl Upstream for LocalOrgs {
                 subscription.slug
             ));
         }
-        // t[impl wiki.resource.rights] applies to an asset shelf too,
-        // by a different argument that lands in the same place: a shelf
-        // is *published* — it is the thing ADR 0004 moved out of the
-        // vault precisely so another org could reach it — and it
-        // carries no `wiki.toml` to state a visibility in. An org that
-        // does not want a shelf read does not put it under `assets/`,
-        // the way an org that does not want a wiki read marks it
-        // private. That is a real difference from a wiki and it is
-        // recorded here rather than discovered: **every asset shelf an
-        // org holds is world-readable to anyone who can name it.**
-        // Narrowing that is a `wiki.toml`-shaped follow-up, and until
-        // it exists the vault is the private tree and `assets/` is not.
         if subscription.kind == SourceKind::Assets {
             return Admission::Admitted;
         }
-        // A project admits on the same terms as an asset shelf, and the
-        // paragraph above applies to it word for word: it is published
-        // by existing on the tier, it carries no `wiki.toml` to state a
-        // visibility in, and **every project an org holds is
-        // world-readable to anyone who can name it**. Recorded here
-        // rather than discovered.
-        //
-        // One thing is different and it is the reason this arm is
-        // separate rather than folded into the one above: the slug is
-        // the project's own tier-relative path, so
+        // A project's slug is its own tier-relative path, so
         // `crescendum/track-two` is a name a stranger may hold and
         // `crescendum` is another. `source_root` is what confines it —
         // a slug that is not a path inside this org's tier was refused
@@ -498,13 +553,17 @@ impl Upstream for LocalOrgs {
                     selection: Default::default(),
                 });
             }
-            // t[impl wiki.access.directory] for the Assets tier. Every
-            // asset shelf an org holds is listed, with no visibility
-            // filter, because there is nowhere for one to be declared
-            // — see the note in `admits`. Listing them is therefore not
-            // a widening: it says out loud what naming one already
-            // reaches.
-            if let Ok(shelves) = std::fs::read_dir(org.path().join("assets")) {
+            // t[impl wiki.access.directory] for the Assets tier: a public
+            // shelf is listed to everyone, a private or unlisted one only
+            // to its own org and to a subscriber it was granted to. Its
+            // own org sees every shelf, private included, because a
+            // shelf is private by default and the same org is always
+            // admitted. It used to list every shelf to everyone, which
+            // was honest while naming one reached it. Naming one no
+            // longer does.
+            let tier = org.path().join("assets");
+            let grants = crate::source_access::AccessGrants::open(&org.path());
+            if let Ok(shelves) = std::fs::read_dir(&tier) {
                 for shelf in shelves.flatten() {
                     if !shelf.path().is_dir() {
                         continue;
@@ -513,6 +572,12 @@ impl Upstream for LocalOrgs {
                         continue;
                     };
                     if kind.starts_with('.') || kind != org_proto::wiki_slug(&kind) {
+                        continue;
+                    }
+                    let visible = slug == subscriber_org
+                        || crate::source_access::visibility(&tier, &shelf.path()).is_listed()
+                        || grants.admits(SourceKind::Assets, &kind, subscriber_org);
+                    if !visible {
                         continue;
                     }
                     out.push(Subscription {
@@ -1145,9 +1210,17 @@ mod tests {
             upstream.local_root(&project("crescendum/track-two")),
             Some(song)
         );
+        // Private by default: an outsider is turned away until the
+        // project says otherwise.
+        assert!(matches!(
+            upstream.admits("alice", &project("crescendum/track-two")),
+            Admission::Refused(_)
+        ));
+        crate::source_access::set_visibility(&album, Visibility::Unlisted).unwrap();
         assert_eq!(
             upstream.admits("alice", &project("crescendum/track-two")),
-            Admission::Admitted
+            Admission::Admitted,
+            "a sub-project takes its parent's declaration"
         );
 
         // A directory on the tier that declares no project is not one,
@@ -1338,5 +1411,213 @@ mod tests {
         };
         assert_eq!(upstream.admits("alice", &remote), Admission::Unknown);
         alice.subscribe(Subscriber::Vault, remote).unwrap();
+    }
+
+    /// `acme` with a song shelf holding one song, and a project.
+    fn shelves() -> (tempfile::TempDir, Arc<LocalOrgs>) {
+        let (dir, upstream) = world();
+        let songs = dir.path().join("orgs/acme/assets/songs");
+        std::fs::create_dir_all(&songs).unwrap();
+        std::fs::write(songs.join("hallelujah.md"), "# Hallelujah\n").unwrap();
+        let album = dir.path().join("orgs/acme/projects/crescendum");
+        std::fs::create_dir_all(&album).unwrap();
+        std::fs::write(
+            album.join(org_proto::PROJECT_PAGE),
+            "---\ntype: project\n---\n",
+        )
+        .unwrap();
+        (dir, upstream)
+    }
+
+    fn shelf(slug: &str) -> Subscription {
+        Subscription {
+            kind: SourceKind::Assets,
+            ..sub(slug)
+        }
+    }
+
+    fn project(slug: &str) -> Subscription {
+        Subscription {
+            kind: SourceKind::Projects,
+            ..sub(slug)
+        }
+    }
+
+    fn refused(a: Admission) -> String {
+        match a {
+            Admission::Refused(m) => m,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// t[verify wiki.access.shelf-visibility] — a shelf and a project
+    /// with no declaration are private: an outsider is refused.
+    /// t[verify wiki.access.no-existence-leak] — and the refusal for one
+    /// that exists reads exactly like the refusal for one that does not.
+    #[test]
+    fn a_private_shelf_or_project_is_refused_to_an_outsider_without_saying_it_exists() {
+        let (_dir, upstream) = shelves();
+        for (real, ghost) in [
+            (shelf("songs"), shelf("nonesuch")),
+            (project("crescendum"), project("nonesuch")),
+        ] {
+            let there = refused(upstream.admits("alice", &real));
+            let not_there = refused(upstream.admits("alice", &ghost));
+            assert_eq!(
+                there.replace(&real.slug, "X"),
+                not_there.replace(&ghost.slug, "X"),
+                "a private source and a missing one must be indistinguishable"
+            );
+            assert!(!there.contains("has no"), "{there}");
+        }
+        // And through the service an outsider calls.
+        let (dir, upstream) = shelves();
+        let alice = SubscriptionsBackend::new(dir.path().join("orgs/alice"), vec![], upstream);
+        let err = alice
+            .subscribe(Subscriber::Vault, shelf("songs"))
+            .expect_err("private by default");
+        assert!(matches!(err, WikiError::Refused(_)), "{err:?}");
+        assert!(alice.discover().unwrap().iter().all(|s| s.slug != "songs"));
+    }
+
+    /// t[verify wiki.access.shelf-visibility] — unlisted admits whoever
+    /// holds the reference and lists to nobody; public lists too.
+    #[test]
+    fn an_unlisted_shelf_is_admitted_by_reference_and_listed_only_when_public() {
+        let (dir, upstream) = shelves();
+        let songs = dir.path().join("orgs/acme/assets/songs");
+        crate::source_access::set_visibility(&songs, Visibility::Unlisted).unwrap();
+        assert_eq!(
+            upstream.admits("alice", &shelf("songs")),
+            Admission::Admitted
+        );
+        let alice =
+            SubscriptionsBackend::new(dir.path().join("orgs/alice"), vec![], upstream.clone());
+        alice.subscribe(Subscriber::Vault, shelf("songs")).unwrap();
+        assert!(alice.discover().unwrap().iter().all(|s| s.slug != "songs"));
+
+        crate::source_access::set_visibility(&songs, Visibility::Public).unwrap();
+        assert!(
+            alice
+                .discover()
+                .unwrap()
+                .iter()
+                .any(|s| s.slug == "songs" && s.kind == SourceKind::Assets)
+        );
+    }
+
+    /// t[verify wiki.access.shelf-visibility] — the owning org is never an
+    /// outsider to its own shelf or project, private or not.
+    #[test]
+    fn the_same_org_is_always_admitted() {
+        let (dir, upstream) = shelves();
+        assert_eq!(
+            upstream.admits("acme", &shelf("songs")),
+            Admission::Admitted
+        );
+        assert_eq!(
+            upstream.admits("acme", &project("crescendum")),
+            Admission::Admitted
+        );
+        let acme = SubscriptionsBackend::new(dir.path().join("orgs/acme"), vec![], upstream);
+        acme.subscribe(Subscriber::Wiki("theory".into()), shelf("songs"))
+            .unwrap();
+        assert!(acme.discover().unwrap().iter().any(|s| s.slug == "songs"));
+        // Same org, but the source genuinely is not there: that is said.
+        assert!(refused(acme.upstream.admits("acme", &shelf("nonesuch"))).contains("has no"));
+    }
+
+    /// t[verify wiki.access.source-grant] — on one disk: a grant admits
+    /// the org it names and no other; revoking it stops the next refresh
+    /// and keeps the copy already held.
+    #[test]
+    fn a_grant_admits_on_the_same_disk_and_a_revoke_binds_on_the_next_refresh() {
+        let (dir, upstream) = shelves();
+        let grants = crate::source_access::AccessGrants::open(&dir.path().join("orgs/acme"));
+        let minted = grants
+            .grant(SourceKind::Assets, "songs", "alice", "owner", 1)
+            .unwrap();
+        assert_eq!(
+            upstream.admits("alice", &shelf("songs")),
+            Admission::Admitted
+        );
+        assert!(matches!(
+            upstream.admits("mallory", &shelf("songs")),
+            Admission::Refused(_)
+        ));
+        assert!(matches!(
+            upstream.admits("alice", &project("crescendum")),
+            Admission::Refused(_)
+        ));
+
+        let alice_root = dir.path().join("orgs/alice");
+        let alice = SubscriptionsBackend::new(alice_root.clone(), vec![], upstream);
+        assert!(
+            alice.discover().unwrap().iter().any(|s| s.slug == "songs"),
+            "a grant lists the shelf to the org it was granted to"
+        );
+        alice.subscribe(Subscriber::Vault, shelf("songs")).unwrap();
+        let report = alice
+            .refresh_subscription(Subscriber::Vault, "acme.test/songs")
+            .unwrap();
+        assert_eq!(report.pulled, 1);
+        let copy = materialize::assets_copy_dir(&alice_root, "acme.test", "songs");
+        assert!(copy.join("hallelujah.md").is_file());
+
+        grants.revoke(minted.grant.id, "owner", 2).unwrap();
+        let err = alice
+            .refresh_subscription(Subscriber::Vault, "acme.test/songs")
+            .expect_err("revoked");
+        assert!(matches!(err, WikiError::Refused(_)), "{err:?}");
+        assert!(
+            copy.join("hallelujah.md").is_file(),
+            "the held copy is kept"
+        );
+        assert_eq!(
+            alice.list_subscriptions(Subscriber::Vault).unwrap().len(),
+            1
+        );
+    }
+
+    /// t[verify wiki.access.source-grant] — on the remote path. The
+    /// per-source secret no longer opens a private shelf; an access
+    /// grant's secret does, until it is revoked.
+    #[test]
+    fn a_grant_secret_admits_on_the_remote_path_and_a_read_secret_alone_does_not() {
+        let (dir, upstream) = shelves();
+        let acme_root = dir.path().join("orgs/acme");
+        let acme = SubscriptionsBackend::new(acme_root.clone(), vec![], upstream);
+
+        let err = acme
+            .grant_source_read(SourceKind::Assets, "songs")
+            .expect_err("a private shelf cannot be opened by a read secret");
+        assert!(err.to_string().contains("not open to"), "{err}");
+
+        let grants = crate::source_access::AccessGrants::open(&acme_root);
+        let minted = grants
+            .grant(SourceKind::Assets, "songs", "vnt.test", "owner", 1)
+            .unwrap();
+        let manifest = acme
+            .source_manifest(SourceKind::Assets, "songs", &minted.secret)
+            .expect("the grant's secret reads the shelf");
+        assert!(!manifest.files.is_empty());
+        assert!(
+            acme.source_manifest(SourceKind::Projects, "crescendum", &minted.secret)
+                .is_err(),
+            "a grant's secret reads its own source and no other"
+        );
+
+        grants.revoke(minted.grant.id, "owner", 2).unwrap();
+        assert!(
+            acme.source_manifest(SourceKind::Assets, "songs", &minted.secret)
+                .is_err()
+        );
+
+        // Unlisted, the read secret works as it always did.
+        crate::source_access::set_visibility(&acme_root.join("assets/songs"), Visibility::Unlisted)
+            .unwrap();
+        let secret = acme.grant_source_read(SourceKind::Assets, "songs").unwrap();
+        acme.source_manifest(SourceKind::Assets, "songs", &secret)
+            .unwrap();
     }
 }

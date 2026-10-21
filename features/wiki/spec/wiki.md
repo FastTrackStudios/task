@@ -717,6 +717,46 @@ wiki.
 
 ---
 
+### Shelves and projects are private by default
+
+t[wiki.access.shelf-visibility]
+An asset shelf and a project have the same three visibilities a wiki has, and
+the default is private: readable by the owning org only. A shelf or project
+declares otherwise in a `.shelf.toml` at its root (`visibility = "unlisted"`).
+A sub-project with no declaration takes its nearest ancestor's, because
+subscribing to the parent carries it anyway. A declaration that cannot be read
+counts as private. The owning org is always admitted to its own sources.
+Discovery lists a shelf to its own org, to an org it is granted to, and to
+everyone only when it is public. Only an owner or admin of the org may change
+a shelf's or project's visibility, and every change is audited.
+
+---
+
+### An outsider learns nothing from a refusal
+
+t[wiki.access.no-existence-leak]
+An outsider refused a shelf or a project gets the same answer whether the
+source is private or does not exist, so the names of an org's private shelves
+and projects cannot be collected by guessing. The question "may you read this"
+is answered before "is it there".
+
+---
+
+### Explicit grants
+
+t[wiki.access.source-grant]
+An owner or admin of the publishing org may grant one shelf or project to one
+subscriber org, keyed by kind, slug and subscriber. Nobody else may mint or
+revoke one. Grants are rows in an append-only log: a revoke is a new row, never
+an edit or a delete, and every mint and revoke is audited. A grant on a project
+reaches its sub-projects. The same grant is checked on both paths. On one disk
+the subscriber is admitted by its org. On another server it presents the
+grant's secret, which is shown once at minting and stored only as a hash, and
+it is judged as the org the grant names. A revoke binds on the subscriber's
+next refresh. The copy they already hold is kept (`wiki.life.orphan`).
+
+---
+
 ### Discovery is a peer, not a gatekeeper
 
 t[wiki.access.directory]

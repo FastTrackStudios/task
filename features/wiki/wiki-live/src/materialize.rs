@@ -450,7 +450,14 @@ fn save_base(path: &Path, base: &Base, id: &str) -> Result<(), MaterializeError>
 /// rather than a page: anything under `_state/`, at the root or nested.
 fn is_source_bookkeeping(path: &str) -> bool {
     let state = wiki_proto::paths::STATE_DIR;
-    path == state || path.starts_with(&format!("{state}/")) || path.contains(&format!("/{state}/"))
+    path == state
+        || path.starts_with(&format!("{state}/"))
+        || path.contains(&format!("/{state}/"))
+        // A shelf's or a project's own visibility, at its root or a
+        // sub-project's: the publisher's decision about who may read,
+        // not content (`wiki.access.shelf-visibility`).
+        || path == crate::source_access::SHELF_CONFIG
+        || path.ends_with(&format!("/{}", crate::source_access::SHELF_CONFIG))
 }
 
 /// Refresh one held subscription into its place under `org_root`.
@@ -739,6 +746,9 @@ fn refresh_tree(
     let mut out = Refreshed::default();
     let mut upstream_files = std::collections::BTreeSet::new();
     for rel in walk_files(upstream_root).map_err(|(p, e)| io(&p, e))? {
+        if is_source_bookkeeping(&rel) {
+            continue;
+        }
         if !selection.admits(org_proto::facet_of(&rel)) {
             out.skipped += 1;
             continue;

@@ -173,7 +173,54 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     tracing::info_span!("plant.repo_wikis").in_scope(|| plant_repo_wikis(org_root, slug));
     #[cfg(feature = "plugin-wiki")]
     declare_wiki_configs(org_root, slug)?;
+    #[cfg(feature = "plugin-wiki")]
+    declare_shared_sources(org_root, slug)?;
     Ok(planted)
+}
+
+/// The example's asset shelves and projects that are open to other orgs,
+/// and how (`wiki.access.shelf-visibility`).
+///
+/// Every other shelf and project in the example is private, which is the
+/// default: these are the ones the story shares. ACME's song library is
+/// public, so it is in the directory a demo user browses
+/// (`demo_plant::the_planted_song_shelf_is_subscribable_across_orgs`).
+/// VNT's Shared Project is two orgs on one project, and unlisted: open by
+/// reference, listed to nobody.
+#[cfg(feature = "plugin-wiki")]
+pub const SHARED_SOURCES: &[(&str, &str, &str, wiki_proto::config::Visibility)] = &[
+    (
+        "acme-audio",
+        "assets",
+        "songs",
+        wiki_proto::config::Visibility::Public,
+    ),
+    (
+        "vnt-video",
+        "projects",
+        "shared-project",
+        wiki_proto::config::Visibility::Unlisted,
+    ),
+];
+
+/// Write each shared source's `.shelf.toml` where none exists yet.
+///
+/// Only where none exists, for the reason [`declare_wiki_configs`] gives:
+/// somebody who made a planted shelf private again must not find it open
+/// after a replant.
+#[cfg(feature = "plugin-wiki")]
+fn declare_shared_sources(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<()> {
+    for (org, tier, source, visibility) in SHARED_SOURCES {
+        if *org != slug {
+            continue;
+        }
+        let root = org_root.path().join(tier).join(source);
+        if !root.is_dir() || wiki_live::source_access::config_path(&root).exists() {
+            continue;
+        }
+        wiki_live::source_access::set_visibility(&root, *visibility)?;
+    }
+    Ok(())
 }
 
 /// Write each declared wiki's `_state/wiki.json` — its title and

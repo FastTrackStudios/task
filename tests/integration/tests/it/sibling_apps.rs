@@ -100,12 +100,23 @@ async fn take_library(
     kind: SourceKind,
     slug: &str,
 ) {
-    let secret = guest
-        .wiki_subscriptions()
-        .await
-        .grant_source_read(kind, slug.to_owned())
-        .await
-        .unwrap_or_else(|e| panic!("the guest grants read on `{slug}`: {e:?}"));
+    // A shelf is private to its org by default, so the guest grants this
+    // one to the studio, and the grant's secret is what the studio
+    // presents across the boundary (`wiki.access.source-grant`). A
+    // Resource is public by licence and keeps the per-source read secret.
+    let secret = if kind == SourceKind::Assets {
+        wiki_live::source_access::AccessGrants::open(&s.orgs.vnt.org_root())
+            .grant(kind, slug, "acme.test", "the guest", 0)
+            .unwrap_or_else(|e| panic!("the guest grants `{slug}` to the studio: {e}"))
+            .secret
+    } else {
+        guest
+            .wiki_subscriptions()
+            .await
+            .grant_source_read(kind, slug.to_owned())
+            .await
+            .unwrap_or_else(|e| panic!("the guest grants read on `{slug}`: {e:?}"))
+    };
     let subs = studio.wiki_subscriptions().await;
     subs.trust_source(SourceGrant {
         domain: GUEST.to_owned(),

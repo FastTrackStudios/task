@@ -29,6 +29,8 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 # `block_in_place` for the heavy calls of an inline-dispatched backend.
 tokio = { workspace = true }
+# `.shelf.toml`, the visibility an asset shelf or a project declares.
+toml = "0.8"
 tracing = { workspace = true }
 uuid = { workspace = true }
 vault-live = { workspace = true }
