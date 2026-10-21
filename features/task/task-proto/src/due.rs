@@ -175,6 +175,9 @@ mod tests {
 
     fn task(title: &str, status: &str, due: Option<&str>, contexts: &[&str]) -> TaskInfo {
         let mut t = crate::capture(title);
+        // Quick-add reads "today" / "tomorrow" in a title as a date;
+        // these rows name themselves, so keep the words as given.
+        t.title = title.to_owned();
         t.status = status.to_owned();
         t.due = due.map(str::to_owned);
         t.contexts = contexts.iter().map(ToString::to_string).collect();
