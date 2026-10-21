@@ -4963,7 +4963,14 @@ impl FilesBackend {
         if id == *repo.store().root_commit_id() {
             return Ok(());
         }
-        if repo.view().heads().contains(&id) {
+        // A pull that changes nothing writes nothing. The ordinary case
+        // is a peer that is BEHIND us: its head is an ancestor of one of
+        // ours, `add_head` leaves the view exactly as it was, and
+        // committing that transaction anyway wrote a jj operation (plus
+        // its index link) on every sweep — 76k no-op operations per root
+        // on prod, one per pass, and a reload behind each.
+        // t[impl files.peering.idempotent-import]
+        if Self::view_reaches(&repo, &id).map_err(to_files_error)? {
             return Ok(());
         }
         let commit = pollster::block_on(repo.store().get_commit_async(&id))
@@ -4971,12 +4978,253 @@ impl FilesBackend {
         let mut tx = repo.start_transaction();
         pollster::block_on(tx.repo_mut().add_head(&commit))
             .map_err(|e| FilesError::Io(format!("adding head: {e}")))?;
+        // Whatever the reachability check above could not see, jj can:
+        // a transaction whose view did not move is not an operation.
+        // t[impl files.peering.idempotent-import]
+        if !tx.repo().has_changes() {
+            return Ok(());
+        }
         let new_repo = pollster::block_on(tx.commit("sync: import remote head"))
             .map_err(|e| FilesError::Io(e.to_string()))?;
         let (head, snapshot_head) =
             Self::heads_of(&self.data_dir, &new_repo, &root).map_err(to_files_error)?;
         self.set_heads(root_id, new_repo, head, snapshot_head);
         Ok(())
+    }
+
+    /// Is `id` already a visible head, or an ancestor of one? Then
+    /// making it a head again is no change at all: jj keeps only the
+    /// tips of the visible set, so `add_head` would leave the view as it
+    /// was.
+    fn view_reaches(repo: &Arc<ReadonlyRepo>, id: &CommitId) -> Result<bool, Error> {
+        let heads = repo.view().heads();
+        if heads.contains(id) {
+            return Ok(true);
+        }
+        let index = repo.index();
+        if !index
+            .has_id(id)
+            .map_err(|e| Error::Repo(format!("index lookup: {e}")))?
+        {
+            return Ok(false);
+        }
+        for head in heads {
+            if pollster::block_on(index.is_ancestor(id, head))
+                .map_err(|e| Error::Repo(format!("index ancestry: {e}")))?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Drop the operations that changed nothing from a root's op log.
+    ///
+    /// Before `files.peering.idempotent-import`, every device-sync pass
+    /// that pulled from a peer behind this host wrote one operation
+    /// whose view was its parent's view — ~2,900 a day per root, 76k on
+    /// the oldest prod roots. They hold no state: a view is the whole
+    /// of what an operation records, and theirs is the same view as the
+    /// operation before. This rewrites the log without them, the way
+    /// `jj op abandon` does — every operation that remains keeps its
+    /// view and metadata and is re-parented onto the nearest kept
+    /// ancestor — moves the op head to the rewritten head under the op
+    /// heads lock, and only then sweeps the unreachable operation files
+    /// (and their index links) older than `keep_newer_secs` (default 60).
+    ///
+    /// Refuses, changing nothing, when the log has more than one head
+    /// (a concurrent writer is mid-flight) or when the rewritten head's
+    /// view is not the old head's. Media roots only, like GC.
+    // t[impl files.peering.idempotent-import]
+    pub fn compact_op_log(
+        &self,
+        root_id: Uuid,
+        keep_newer_secs: Option<u64>,
+    ) -> Result<OpLogCompaction, FilesError> {
+        self.compact_op_log_inner(root_id, keep_newer_secs)
+            .map_err(to_files_error)
+    }
+
+    fn compact_op_log_inner(
+        &self,
+        root_id: Uuid,
+        keep_newer_secs: Option<u64>,
+    ) -> Result<OpLogCompaction, Error> {
+        use jj_lib::op_store::{OpStore, OperationId};
+
+        let root = self.get_root_info(root_id)?;
+        if root.flavor != RootFlavor::Media {
+            return Ok(OpLogCompaction::default());
+        }
+        let lock = self.root_lock(root_id);
+        let _guard = lock.lock().expect("root lock poisoned");
+        let Some((repo, _head)) = self.reload_existing_repo(&root)? else {
+            return Ok(OpLogCompaction::default());
+        };
+        let loader = repo.loader();
+        let op_store: &Arc<dyn OpStore> = loader.op_store();
+        let op_heads_store = loader.op_heads_store();
+        let root_op_id = op_store.root_operation_id().clone();
+
+        let heads = pollster::block_on(op_heads_store.get_op_heads())
+            .map_err(|e| op_log_err("op heads", e))?;
+        let [head_id] = heads.as_slice() else {
+            return Ok(OpLogCompaction {
+                skipped: Some(format!("{} op heads; a writer is mid-flight", heads.len())),
+                ..OpLogCompaction::default()
+            });
+        };
+        let head_id = head_id.clone();
+
+        // Every operation reachable from the head, then oldest-first.
+        let mut ops: HashMap<OperationId, jj_lib::op_store::Operation> = HashMap::new();
+        let mut pending = vec![head_id.clone()];
+        while let Some(id) = pending.pop() {
+            if ops.contains_key(&id) {
+                continue;
+            }
+            let data = pollster::block_on(op_store.read_operation(&id))
+                .map_err(|e| op_log_err("reading an operation", e))?;
+            pending.extend(data.parents.iter().cloned());
+            ops.insert(id, data);
+        }
+        let ops_before = ops.len();
+        let mut order: Vec<OperationId> = Vec::with_capacity(ops.len());
+        {
+            let mut done: std::collections::HashSet<OperationId> =
+                std::collections::HashSet::with_capacity(ops.len());
+            let mut stack: Vec<(OperationId, bool)> = vec![(head_id.clone(), false)];
+            while let Some((id, expanded)) = stack.pop() {
+                if done.contains(&id) {
+                    continue;
+                }
+                if expanded {
+                    done.insert(id.clone());
+                    order.push(id);
+                    continue;
+                }
+                stack.push((id.clone(), true));
+                for parent in &ops[&id].parents {
+                    if !done.contains(parent) {
+                        stack.push((parent.clone(), false));
+                    }
+                }
+            }
+        }
+
+        // An operation records nothing when it has one parent, the
+        // parent's view, and no rewritten commits.
+        let records_nothing = |id: &OperationId| -> bool {
+            let data = &ops[id];
+            *id != root_op_id
+                && data.parents.len() == 1
+                && ops[&data.parents[0]].view_id == data.view_id
+                && data
+                    .commit_predecessors
+                    .as_ref()
+                    .is_none_or(BTreeMap::is_empty)
+        };
+        let dropped = order.iter().filter(|id| records_nothing(id)).count();
+        if dropped == 0 {
+            return Ok(OpLogCompaction {
+                ops_before,
+                ops_after: ops_before,
+                ..OpLogCompaction::default()
+            });
+        }
+
+        let mut mapped: HashMap<OperationId, OperationId> = HashMap::with_capacity(ops.len());
+        let mut rewritten = 0usize;
+        for id in &order {
+            let data = &ops[id];
+            if records_nothing(id) {
+                let to = mapped[&data.parents[0]].clone();
+                mapped.insert(id.clone(), to);
+                continue;
+            }
+            let mut parents: Vec<OperationId> = Vec::with_capacity(data.parents.len());
+            for p in &data.parents {
+                let to = mapped[p].clone();
+                if !parents.contains(&to) {
+                    parents.push(to);
+                }
+            }
+            if parents == data.parents {
+                mapped.insert(id.clone(), id.clone());
+                continue;
+            }
+            let mut new_data = data.clone();
+            new_data.parents = parents;
+            let new_id = pollster::block_on(op_store.write_operation(&new_data))
+                .map_err(|e| op_log_err("writing an operation", e))?;
+            rewritten += 1;
+            mapped.insert(id.clone(), new_id);
+        }
+        let new_head = mapped[&head_id].clone();
+        let new_head_view = pollster::block_on(op_store.read_operation(&new_head))
+            .map_err(|e| op_log_err("reading the new head", e))?
+            .view_id;
+        if new_head_view != ops[&head_id].view_id {
+            return Err(Error::Repo(format!(
+                "compacting op log: the rewritten head {} does not hold the head's view; \
+                 leaving the log as it was",
+                new_head.hex()
+            )));
+        }
+
+        // Swap the head, unless someone wrote while we rewrote.
+        {
+            let _op_lock = pollster::block_on(op_heads_store.lock())
+                .map_err(|e| op_log_err("locking op heads", e))?;
+            let now_heads = pollster::block_on(op_heads_store.get_op_heads())
+                .map_err(|e| op_log_err("op heads", e))?;
+            if now_heads != [head_id.clone()] {
+                return Ok(OpLogCompaction {
+                    ops_before,
+                    ops_after: ops_before,
+                    skipped: Some("the op log moved while it was being rewritten".into()),
+                    ..OpLogCompaction::default()
+                });
+            }
+            pollster::block_on(
+                op_heads_store.update_op_heads(std::slice::from_ref(&head_id), &new_head),
+            )
+            .map_err(|e| op_log_err("moving the op head", e))?;
+        }
+
+        // Load at the new head: jj indexes it from the nearest indexed
+        // ancestor, and the view must be the one we started from.
+        let new_repo = pollster::block_on(repo.reload_at_head())
+            .map_err(|e| Error::Repo(format!("reloading after compaction: {e}")))?;
+        if new_repo.view().store_view() != repo.view().store_view() {
+            return Err(Error::Repo(
+                "compacting op log: the view changed across the rewrite".into(),
+            ));
+        }
+        let (head, snapshot_head) = Self::heads_of(&self.data_dir, &new_repo, &root)?;
+        self.set_heads(root_id, new_repo.clone(), head, snapshot_head);
+
+        // Now the old chain is unreachable; sweep it.
+        let keep_newer = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(
+                keep_newer_secs.unwrap_or(DEFAULT_GC_KEEP_NEWER_SECS),
+            ))
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let live_heads = pollster::block_on(op_heads_store.get_op_heads())
+            .map_err(|e| op_log_err("op heads", e))?;
+        pollster::block_on(op_store.gc(&live_heads, keep_newer))
+            .map_err(|e| op_log_err("sweeping operations", e))?;
+        let repo_dir = self.store_of(&root);
+        let index_links_swept = sweep_index_op_links(&repo_dir, keep_newer)?;
+
+        Ok(OpLogCompaction {
+            ops_before,
+            ops_after: ops_before - dropped,
+            ops_dropped: dropped,
+            ops_rewritten: rewritten,
+            index_links_swept,
+            skipped: None,
+        })
     }
 
     /// Bring the live tree in line with the (journal-line) head —
@@ -5200,6 +5448,63 @@ pub struct MaterializeReport {
     /// Left untouched: on-disk content the store holds nowhere —
     /// unversioned work materialization must never destroy.
     pub kept_dirty: Vec<String>,
+}
+
+/// What one [`FilesBackend::compact_op_log`] pass did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct OpLogCompaction {
+    /// Operations reachable from the op head before the pass.
+    pub ops_before: usize,
+    /// Operations reachable from the op head after it.
+    pub ops_after: usize,
+    /// Operations that recorded nothing (their parent's view) and are
+    /// no longer in the log.
+    pub ops_dropped: usize,
+    /// Kept operations written again under a new parent.
+    pub ops_rewritten: usize,
+    /// Index op links swept with the operations they named.
+    pub index_links_swept: usize,
+    /// Why the pass changed nothing, when it refused.
+    pub skipped: Option<String>,
+}
+
+fn op_log_err(what: &str, e: impl std::fmt::Display) -> Error {
+    Error::Repo(format!("compacting op log ({what}): {e}"))
+}
+
+/// Remove `index/op_links/<op>` files whose operation is gone from
+/// `op_store/operations` — what jj's own op GC leaves behind. A link
+/// is only ever looked up by the id of an operation being loaded, so a
+/// link to an operation that no longer exists is never read again.
+/// Links newer than `keep_newer` stay, like the operations they name.
+fn sweep_index_op_links(
+    repo_dir: &Path,
+    keep_newer: std::time::SystemTime,
+) -> Result<usize, Error> {
+    let links = repo_dir.join("index").join("op_links");
+    let ops = repo_dir.join("op_store").join("operations");
+    if !links.is_dir() || !ops.is_dir() {
+        return Ok(0);
+    }
+    let mut swept = 0;
+    for entry in std::fs::read_dir(&links)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if jj_lib::op_store::OperationId::try_from_hex(name).is_none() {
+            continue;
+        }
+        if ops.join(name).exists() {
+            continue;
+        }
+        let modified = entry.metadata()?.modified()?;
+        if modified > keep_newer {
+            continue;
+        }
+        std::fs::remove_file(entry.path())?;
+        swept += 1;
+    }
+    Ok(swept)
 }
 
 /// One tree level, decoded for the replica-sync walk (issue #264/#265):

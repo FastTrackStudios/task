@@ -148,6 +148,14 @@ A laptop that should feel closer to continuous wants both much lower;
 On the server, `TASK_DEVICE_SYNC_SECS` sets the sweep interval (`0`
 disables the sweep and leaves admission alone).
 
+A pull that changes nothing writes nothing
+(`files.peering.idempotent-import`). Before that rule, every pass against a
+device behind the server wrote one empty jj operation per root, so old roots
+carry tens of thousands of them. When the sweep starts it drops those from
+each root's op log once (logged as "dropped operations that recorded
+nothing"). Every version and head stays. `TASK_FILES_COMPACT_OPS=0` skips the
+pass.
+
 ## Run the server with `TASK_ENFORCE_PERMISSIONS=1`
 
 Admission and revocation only *bite* when the org's permission gate is
