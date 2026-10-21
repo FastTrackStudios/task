@@ -220,7 +220,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 # The floor clippy already lints against. These two disagreed — 1.87
 # here, 1.90 in clippy.toml — and clippy reports the disagreement as a
