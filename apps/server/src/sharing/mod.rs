@@ -46,7 +46,7 @@ use share_proto::{
 use uuid::Uuid;
 
 pub use store::{GrantEvent, GrantEventKind, GrantStore, Revoked, SharingGrant, is_live};
-pub use subtree::{ProjectTreeStub, Subtree, digest};
+pub use subtree::{InScope, ObjectRef, OwnerStore, Subtree, digest, resolve};
 
 /// Unix seconds, now.
 #[must_use]

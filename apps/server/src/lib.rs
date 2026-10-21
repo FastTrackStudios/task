@@ -2177,7 +2177,16 @@ pub(crate) async fn build_org_state(
                 sharing::GrantStore::open(&org_root.sharing_db(), org_root.slug()).await?,
             ),
             home: home_identity.cloned(),
-            subtree: Arc::new(sharing::ProjectTreeStub::new(projects.clone())),
+            // t[impl sharing.grant.subtree] — read live on every call:
+            // the preview and the grant lane resolve through this one
+            // adapter, with no snapshot taken at grant time.
+            subtree: Arc::new(
+                sharing::OwnerStore::new(projects.clone(), org_root.projects_dir())
+                    .with_tasks(tasks.clone())
+                    .with_milestones(milestones.clone())
+                    .with_workstreams(workstreams.clone())
+                    .with_files(files.clone()),
+            ),
             org_root: org_root.path().to_path_buf(),
         };
         sqlite_conns.push(sharing.store.conn().clone());
