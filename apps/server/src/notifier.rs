@@ -76,7 +76,7 @@ pub fn spawn(state: &AppState) {
 /// in-process link, and start one pump per subscribed hub. The pumps
 /// live until `scope` closes (their LocalServer acceptors are
 /// deferred on it).
-fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
+fn spawn_org(org: Arc<OrgAppState>, scope: Arc<architect::Scope>) {
     let deliver = Arc::new(Deliverer::new(&org));
     let local = Arc::new(architect::LocalServer::serve(
         crate::org_layer_router(&org),
@@ -174,7 +174,7 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
     // Email rule — new mail in any configured mailbox.
     #[cfg(feature = "plugin-email")]
     if org.plugins.contains("email") {
-        spawn_email(org.clone(), Arc::clone(&deliver));
+        spawn_email(Arc::clone(&org), Arc::clone(&deliver));
     }
 
     // Agent rule — only when the agent plugin is mounted.
@@ -590,7 +590,7 @@ fn spawn_project_feed(
 /// right way round: a duplicate is noise, a silent drop is a missed
 /// email.
 #[cfg(feature = "plugin-email")]
-fn spawn_email(org: OrgAppState, deliver: Arc<Deliverer>) {
+fn spawn_email(org: Arc<OrgAppState>, deliver: Arc<Deliverer>) {
     use email_proto::{EmailProduct, EmailSync, SeqRange};
 
     /// Matches `email-product`'s own poller, so a new message waits at

@@ -118,7 +118,7 @@ impl vox::Handler<vox::DriverReplySink> for GatedRouter {
 /// consistent in WAL mode — it just won't contain the un-checkpointed
 /// tail).
 async fn checkpoint_all(state: &AppState) {
-    let orgs: Vec<OrgAppState> = state
+    let orgs: Vec<Arc<OrgAppState>> = state
         .orgs
         .read()
         .map(|g| g.values().cloned().collect())

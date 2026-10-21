@@ -699,7 +699,7 @@ fn gate(
     token: &str,
     pw: Option<&str>,
     interactive: bool,
-) -> Result<(crate::OrgAppState, StoredLink), Box<Response>> {
+) -> Result<(std::sync::Arc<crate::OrgAppState>, StoredLink), Box<Response>> {
     // Wide-event enrichment (see the logging skill): the span is the
     // wide event; every share hit records what it resolved to. Shape
     // only — the token itself never lands in a field.

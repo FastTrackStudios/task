@@ -139,8 +139,8 @@ const TEST_ENV: &[&str] = &[
 /// settings. Hold it while setting variables and constructing the
 /// `AppState` that reads them.
 ///
-/// Some variables are read per request, not at boot (`TASK_MCP_TOKEN`,
-/// `TASK_ENFORCE_MEDIA_TOKEN`, `TASK_WATCH_TOKEN`): a test relying on one
+/// Some variables are read per request, not at boot
+/// (`TASK_ENFORCE_MEDIA_TOKEN`, `TASK_WATCH_TOKEN`): a test relying on one
 /// is only sound one-test-per-process — how nextest runs this binary, and
 /// what `just test` does (see the Justfile).
 ///

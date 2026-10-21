@@ -492,9 +492,12 @@ pub struct AppState {
     /// to satisfy axum's / tokio's `Send` bound). A `tokio::RwLock`
     /// here would only make these accessors async and infect the sync
     /// `#[architect::rpc]` backends that call them. Callers must keep
-    /// it that way: clone the `OrgAppState` (see [`AppState::org`])
+    /// it that way: take the org's `Arc` (see [`AppState::org`])
     /// rather than working under the guard.
-    pub orgs: Arc<std::sync::RwLock<std::collections::HashMap<String, OrgAppState>>>,
+    ///
+    /// Each org is held behind an `Arc` so a request takes a reference
+    /// count, not a copy of the struct (zero-copy audit S1).
+    pub orgs: Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<OrgAppState>>>>,
     /// The Files placement layer's coordinator (issue #262): the
     /// deployment's Storage Location registry, its grants, its
     /// placements, and the in-server Storage agent enrolled against
@@ -538,15 +541,20 @@ pub struct AppState {
     /// never across an `.await` (the cycle is awaited *before* the
     /// guard is taken).
     pub snapshot_status: Arc<std::sync::RwLock<snapshot::SnapshotStatus>>,
+    /// The static `TASK_MCP_TOKEN`, read once when this state is built
+    /// (zero-copy audit S3). The MCP lanes and the operator gate compare
+    /// a presented bearer against it.
+    pub static_token: operator::StaticToken,
 }
 
 impl AppState {
     /// Look up an org by slug. Convenience for routes that
-    /// have extracted the slug from the URL path. Clones the
-    /// matched [`OrgAppState`] (`Clone` is cheap — all fields
-    /// are `Arc`/`Database` handles).
+    /// have extracted the slug from the URL path. Hands out the
+    /// org's shared [`OrgAppState`]: one reference-count bump per
+    /// request, where cloning the struct copied its strings, roots
+    /// and every handle (zero-copy audit S1).
     #[must_use]
-    pub fn org(&self, slug: &str) -> Option<OrgAppState> {
+    pub fn org(&self, slug: &str) -> Option<Arc<OrgAppState>> {
         self.orgs.read().ok()?.get(slug).cloned()
     }
 
@@ -654,7 +662,7 @@ impl AppState {
         self.orgs
             .write()
             .map_err(|_| "orgs lock poisoned")?
-            .insert(slug, state);
+            .insert(slug, Arc::new(state));
         Ok(())
     }
 }
@@ -737,7 +745,7 @@ impl AppState {
                 &blob_root,
             )
             .await?;
-            orgs.insert(slug, org_state);
+            orgs.insert(slug, Arc::new(org_state));
         }
 
         let state = Self {
@@ -750,6 +758,7 @@ impl AppState {
             write_gate: snapshot::WriteGate::new(),
             snapshot_cycle: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_status: Arc::new(std::sync::RwLock::new(snapshot::SnapshotStatus::default())),
+            static_token: operator::StaticToken::from_env(),
         };
         // Per-org notifier: subscribes to the org's event hubs
         // in-process and materializes notifications by rule
@@ -779,7 +788,7 @@ impl AppState {
         let org_state =
             build_org_state(auth, &keypair, org_root, &scope, &storage, None, &blob_root).await?;
         let mut orgs = std::collections::HashMap::new();
-        orgs.insert(slug, org_state);
+        orgs.insert(slug, Arc::new(org_state));
         Ok(Self {
             keypair,
             orgs: Arc::new(std::sync::RwLock::new(orgs)),
@@ -791,6 +800,7 @@ impl AppState {
             write_gate: snapshot::WriteGate::new(),
             snapshot_cycle: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_status: Arc::new(std::sync::RwLock::new(snapshot::SnapshotStatus::default())),
+            static_token: operator::StaticToken::from_env(),
         })
     }
 
@@ -811,7 +821,7 @@ impl AppState {
         let org_state =
             build_org_state(auth, &keypair, org_root, &scope, &storage, None, &blob_root).await?;
         let mut orgs = std::collections::HashMap::new();
-        orgs.insert(slug, org_state);
+        orgs.insert(slug, Arc::new(org_state));
         Ok(Self {
             keypair,
             orgs: Arc::new(std::sync::RwLock::new(orgs)),
@@ -823,6 +833,7 @@ impl AppState {
             write_gate: snapshot::WriteGate::new(),
             snapshot_cycle: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_status: Arc::new(std::sync::RwLock::new(snapshot::SnapshotStatus::default())),
+            static_token: operator::StaticToken::from_env(),
         })
     }
 }
@@ -3506,7 +3517,7 @@ async fn per_org_vox_handler(
             format!("org `{slug}` not hosted"),
         ));
     };
-    serve_org_vox(org, state.write_gate.clone(), ws, &headers)
+    serve_org_vox(&org, state.write_gate.clone(), ws, &headers)
 }
 
 /// `/server/vox` — server-management WebSocket. Hosts the
@@ -3646,7 +3657,7 @@ async fn legacy_vox_handler(
             "no org hosted on this server",
         ));
     };
-    serve_org_vox(org, state.write_gate.clone(), ws, &headers)
+    serve_org_vox(&org, state.write_gate.clone(), ws, &headers)
 }
 
 /// Build the per-org [`LayerRouter`]: every service this org hosts,
@@ -4815,7 +4826,7 @@ pub fn attach_peering(
 /// (`files_sync::serve_peer`). Only what gets wrapped differs: an org
 /// router here, one lane there.
 pub async fn serve_org_iroh(
-    org: OrgAppState,
+    org: Arc<OrgAppState>,
     gate: snapshot::WriteGate,
     endpoint: &architect::iroh_link::iroh::Endpoint,
 ) {
@@ -4834,12 +4845,12 @@ pub async fn serve_org_iroh(
 }
 
 fn serve_org_vox(
-    org: OrgAppState,
+    org: &OrgAppState,
     gate: snapshot::WriteGate,
     ws: WebSocketUpgrade,
     headers: &axum::http::HeaderMap,
 ) -> axum::response::Response {
-    let router = org_router_guarded(&org, gate, upgrade_bearer(headers));
+    let router = org_router_guarded(org, gate, upgrade_bearer(headers));
     ws.protocols([VOX_SUBPROTOCOL])
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
         .into_response()
