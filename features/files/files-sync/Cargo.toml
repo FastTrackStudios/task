@@ -22,6 +22,7 @@ vox = { workspace = true, optional = true }
 
 [dev-dependencies]
 architect = { workspace = true, features = ["local"] }
+chrono = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
