@@ -397,6 +397,19 @@ ci-tests: css
 ci-clippy: css
     cargo clippy --workspace --all-targets -- -D warnings
 
+# The copy lints at WARN (docs/perf/zero-copy-audit.md): a report, not a
+# gate. `ci-clippy` denies every warning, so these four cannot sit in
+# `[workspace.lints]` at warn until the whole workspace is clean;
+# instead each crate denies them in its own root (`#![deny(...)]`) as it
+# is cleaned, and this recipe counts what is left everywhere else.
+# `just clippy-copies -p task-server` narrows it to one package.
+clippy-copies *ARGS:
+    cargo clippy {{ if ARGS == "" { "--workspace" } else { ARGS } }} --all-targets -- \
+        -W clippy::redundant_clone -W clippy::implicit_clone \
+        -W clippy::needless_pass_by_value -W clippy::large_types_passed_by_value \
+        2>&1 | grep -oE 'rust-clippy/[^ ]*#(redundant_clone|implicit_clone|needless_pass_by_value|large_types_passed_by_value)' \
+        | sed 's/.*#//' | sort | uniq -c | sort -rn || true
+
 ci-wasm: css
     cargo check --target wasm32-unknown-unknown -p task-app-web
     # The browser dial is what an app outside this repo depends on, so the

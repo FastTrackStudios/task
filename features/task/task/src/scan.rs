@@ -5,20 +5,18 @@
 use vault::Vault;
 
 use crate::model::TaskInfo;
-use crate::parse::{looks_like_task_raw, parse_page};
+use crate::parse::{looks_like_task_raw, parse_str};
 
 #[must_use]
 pub fn scan_vault(vault: &Vault) -> Vec<TaskInfo> {
     vault
         .pages
         .iter()
-        // Tested on the raw text before converting: `to_proto` clones the
-        // whole page, and most pages in a vault are not tasks.
+        // Tested on the raw text, then parsed from the borrowed page: the
+        // parser reads only the path, the basename and the text, so
+        // there is no need to `to_proto` (clone) the page to hand it over.
         .filter(|p| looks_like_task_raw(&p.raw))
-        // The parser consumes the wasm-clean `vault_proto::VaultPage`,
-        // so convert each live page to the proto shape first.
-        .map(vault::VaultPage::to_proto)
-        .filter_map(|p| match parse_page(&p) {
+        .filter_map(|p| match parse_str(&p.rel_path, &p.basename, &p.raw) {
             Ok(t) => Some(t),
             Err(e) => {
                 tracing::warn!(path = %p.rel_path, ?e, "task parse failed");

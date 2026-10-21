@@ -237,13 +237,12 @@ fn notify_config() -> notify::Config {
 }
 
 fn is_markdown(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("md" | "markdown")
-    )
+    // Compared case-insensitively in place: every raw filesystem event
+    // under the vault passes through here, and lowering a copy of the
+    // extension to compare it was an allocation per event.
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
 }
 
 #[cfg(test)]
