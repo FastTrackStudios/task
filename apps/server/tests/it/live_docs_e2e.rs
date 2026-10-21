@@ -157,6 +157,7 @@ async fn an_agent_edits_a_live_song_that_a_peer_sees_and_undoes_it() {
                 name,
                 &OrgChoice::Some(vec![PERSONAL_SLUG.to_owned()]),
                 tools,
+                bots::Kind::Team,
             )
             .await
             .expect("the bot is made")
@@ -519,6 +520,7 @@ async fn a_bad_doc_ref_says_what_to_use() {
         "Atlas",
         &OrgChoice::Some(vec![PERSONAL_SLUG.to_owned()]),
         Tools::All,
+        bots::Kind::Team,
     )
     .await
     .unwrap();
