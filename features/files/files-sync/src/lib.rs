@@ -663,6 +663,15 @@ async fn reconcile_inner(
         .map_err(|e| SyncError::Io(format!("heads rpc: {e}")))?;
 
     for head in remote_heads {
+        // A peer holding nothing offers nothing. An empty replica (and
+        // any peer from before `sync_heads` filtered it) answers the jj
+        // root commit, which every store holds virtually — so it would
+        // pass the presence check below and become a visible head of
+        // the empty tree.
+        // t[impl files.peering.empty-replica-never-deletes]
+        if is_root_commit(&head) {
+            continue;
+        }
         let known = {
             let (l, h) = (local.clone(), head.clone());
             off_thread(move || l.sync_has_object(root_id, &h).map_err(from_files)).await?
@@ -688,6 +697,12 @@ async fn reconcile_inner(
             off_thread(move || l.materialize_head(root_id).map_err(from_files)).await?;
     }
     Ok(report)
+}
+
+/// Is `hex` the jj root commit — the all-zero id every store holds
+/// virtually, and the head an empty replica answers with?
+fn is_root_commit(hex: &str) -> bool {
+    !hex.is_empty() && hex.bytes().all(|b| b == b'0')
 }
 
 /// Depth-first import of one commit's full closure: ancestors, trees,

@@ -298,6 +298,19 @@ The consequence is the point: a second host costs the size of a catalogue,
 which scales with file count rather than bytes, so hosting an org elsewhere is
 cheap enough to do for durability alone.
 
+t[files.peering.empty-replica-never-deletes]
+A replica that holds nothing offers nothing. An empty replica's heads (the
+version store's root commit) are never imported as a line, and pulling from
+one changes no file. More generally a pull never deletes or replaces a file
+the pulled line never contained: a file on disk is removed or overwritten only
+when an ancestor of the line's head held that path at exactly that content,
+meaning the line recorded moving it on. Content that is known only because an
+auto-snapshot captured it is local work; it is kept, never treated as deleted
+because the line lacks it. A line with no commit yet (only the root commit)
+has nothing to materialize. When in doubt the pull refuses and reports the
+file as kept, because a refused replace costs a retry and a wrong delete costs
+the org's pages.
+
 ### Every host serves the whole org
 
 t[files.peering.serving]

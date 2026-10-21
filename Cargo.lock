@@ -6860,6 +6860,7 @@ name = "files-sync"
 version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
+ "chrono",
  "facet",
  "files",
  "files-proto",
