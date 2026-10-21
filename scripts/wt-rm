@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# wt-rm — remove a wt-new worktree and its target dir.
+#
+#   wt-rm <name> [--force]
+#
+# The target is a reflink clone, so removing it frees only the blocks this
+# worktree wrote itself (its rebuilt units); the canonical copy is untouched.
+# Refuses when the worktree has uncommitted changes unless --force.
+set -euo pipefail
+[ $# -ge 1 ] || { sed -n '2,4p' "$0" >&2; exit 2; }
+name=$1; shift; force=
+for a in "$@"; do case "$a" in --force) force=1 ;; esac; done
+case "$name" in */*|.*|'') echo "wt-rm: bad name '$name'" >&2; exit 2 ;; esac
+REPO=${WT_REPO:-/run/media/Development/task}
+ROOT=${WT_ROOT:-/run/media/Development/wt}
+dir=$ROOT/$name
+[ -d "$dir" ] || { echo "wt-rm: no $dir" >&2; exit 1; }
+if [ -z "$force" ] && [ -n "$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  echo "wt-rm: $dir has uncommitted changes (use --force to drop them)" >&2; exit 1
+fi
+rm -rf "$dir/target"
+git -C "$REPO" worktree remove --force "$dir"
+git -C "$REPO" worktree prune
+echo "wt-rm: removed $dir"

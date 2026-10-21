@@ -172,7 +172,22 @@ jobs:
           set -euo pipefail
           export PATH="/nix/var/nix/profiles/default/bin:$PATH"
           export NIX=/nix/var/nix/profiles/default/bin/nix
-          bash apps/mobile/ios/deploy-testflight.sh
+          # Build kind "ios" — see the same step in task-macos.yml.
+          if command -v python3 >/dev/null; then
+            python3 scripts/target-sweep.py run ios -- bash apps/mobile/ios/deploy-testflight.sh
+          else
+            bash apps/mobile/ios/deploy-testflight.sh
+          fi
+
+      # target/ persists (clean: false) and is shared with task-macos.
+      # Keep the latest build of each kind (ios, macos, desktop-release).
+      - name: Bound the target dir
+        if: always()
+        run: |
+          command -v python3 >/dev/null || exit 0
+          python3 scripts/target-sweep.py sweep --protect-hours 2 || true
+          python3 scripts/target-sweep.py status || true
+          du -sh target || true
 
       - name: Summary
         if: always()

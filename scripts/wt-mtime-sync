@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""mtime-sync.py <canonical> <worktree>
+
+Give every tracked file in <worktree> whose content is identical to the
+same path in <canonical> the canonical file's mtime. Cargo decides a path
+crate is stale when a source file is newer than its dep-info, and a fresh
+`git worktree add` stamps every file "now", so without this a worktree
+seeded with the canonical target rebuilds every workspace crate even where
+nothing changed. Files that differ keep their new mtime and rebuild.
+
+Identical = same git blob in both HEADs, not touched by the worktree's own
+uncommitted changes, and not dirty/untracked in the canonical tree (whose
+working copy is what its target was built from).
+"""
+import os, subprocess, sys
+
+canon, wt = map(os.path.abspath, sys.argv[1:3])
+
+
+def git(d, *a):
+    return subprocess.run(["git", "-C", d, *a], check=True, capture_output=True, text=True).stdout
+
+
+def z(s):
+    return [x for x in s.split("\0") if x]
+
+
+ch = git(canon, "rev-parse", "HEAD").strip()
+wh = git(wt, "rev-parse", "HEAD").strip()
+differ = set(z(git(wt, "diff", "--name-only", "--no-renames", "-z", ch, wh)))
+for d in (canon, wt):
+    entries = z(git(d, "status", "--porcelain", "-z", "--untracked-files=no"))
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        differ.add(e[3:])
+        if e[0] in "RC":  # rename/copy: the next entry is the original path
+            i += 1
+            differ.add(entries[i])
+        i += 1
+n = skipped = 0
+files = z(git(wt, "ls-files", "-z"))
+for f in files:
+    if f in differ:
+        skipped += 1
+        continue
+    try:
+        st = os.stat(os.path.join(canon, f))
+        os.utime(os.path.join(wt, f), ns=(st.st_atime_ns, st.st_mtime_ns))
+        n += 1
+    except FileNotFoundError:
+        skipped += 1
+
+# Directories too: a build script's `rerun-if-changed=<dir>` makes cargo
+# compare the newest mtime under that dir, the dirs' own included. A dir
+# keeps its new mtime if anything under it differs (an added, changed or
+# DELETED path — a deletion shows only in the dir's mtime).
+dirty_dirs = set()
+for f in differ:
+    p = os.path.dirname(f)
+    while p:
+        dirty_dirs.add(p)
+        p = os.path.dirname(p)
+dirs = {os.path.dirname(f) for f in files}
+for d in list(dirs):
+    p = os.path.dirname(d)
+    while p:
+        dirs.add(p)
+        p = os.path.dirname(p)
+nd = 0
+for d in sorted(dirs - {""}, key=len, reverse=True):
+    if d in dirty_dirs:
+        continue
+    try:
+        st = os.stat(os.path.join(canon, d))
+        os.utime(os.path.join(wt, d), ns=(st.st_atime_ns, st.st_mtime_ns))
+        nd += 1
+    except FileNotFoundError:
+        pass
+print(f"mtime-sync: {n} files and {nd} dirs take canonical mtimes, {skipped} files differ and stay new")

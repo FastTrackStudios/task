@@ -141,7 +141,26 @@ jobs:
           set -euo pipefail
           export PATH="/nix/var/nix/profiles/default/bin:$PATH"
           export NIX=/nix/var/nix/profiles/default/bin/nix
-          bash apps/desktop/macos/deploy-testflight-macos.sh
+          # Build kind "macos" (scripts/target-sweep.py): records the units
+          # this build used so the sweep below keeps the latest macOS AND
+          # the latest iOS build warm in this shared target/, and nothing
+          # else. Without python3 it just builds.
+          if command -v python3 >/dev/null; then
+            python3 scripts/target-sweep.py run macos -- bash apps/desktop/macos/deploy-testflight-macos.sh
+          else
+            bash apps/desktop/macos/deploy-testflight-macos.sh
+          fi
+
+      # target/ persists (clean: false) and is shared with task-ios. Keep
+      # the latest build of each kind (macos, ios, desktop-release); the
+      # 2 h protection covers a build of another kind still in flight.
+      - name: Bound the target dir
+        if: always()
+        run: |
+          command -v python3 >/dev/null || exit 0
+          python3 scripts/target-sweep.py sweep --protect-hours 2 || true
+          python3 scripts/target-sweep.py status || true
+          du -sh target || true
 
       - name: Summary
         if: always()
@@ -207,4 +226,8 @@ jobs:
             echo "desktop-v$v already published — nothing to do"
             exit 0
           fi
-          bash apps/desktop/macos/release.sh "$v"
+          if command -v python3 >/dev/null; then
+            python3 scripts/target-sweep.py run desktop-release -- bash apps/desktop/macos/release.sh "$v"
+          else
+            bash apps/desktop/macos/release.sh "$v"
+          fi
