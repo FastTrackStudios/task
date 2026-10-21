@@ -19,7 +19,7 @@ use crate::parse::{
 use crate::scan::frontmatter_split;
 use crate::slots;
 use crate::write::{
-    serialize_booking, serialize_cal_event, serialize_day_plan, serialize_day_template,
+    merge_cal_event_page, serialize_booking, serialize_day_plan, serialize_day_template,
     serialize_event_type, serialize_schedule,
 };
 use scheduling_proto::{
@@ -170,6 +170,37 @@ impl VaultScheduler {
         Ok(out)
     }
 
+    /// Vault-relative path of the file holding event `id`, if any.
+    /// `<id>.md` is the fast path; otherwise the file whose parsed id
+    /// (frontmatter `id:`, else its stem) is `id`.
+    fn event_path(&self, id: &str) -> Result<Option<String>, SchedulingError> {
+        let direct = format!("{EVENTS_DIR}/{}.md", sanitize(id));
+        if self.root.join(&direct).is_file() {
+            return Ok(Some(direct));
+        }
+        let dir = self.root.join(EVENTS_DIR);
+        if !dir.is_dir() {
+            return Ok(None);
+        }
+        for entry in std::fs::read_dir(&dir).map_err(io)? {
+            let path = entry.map_err(io)?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Some((fm, _)) = frontmatter_split(&raw) else {
+                continue;
+            };
+            let rel = relativize(&self.root, &path);
+            if parse_cal_event(&rel, fm).is_ok_and(|e| e.id == id) {
+                return Ok(Some(rel));
+            }
+        }
+        Ok(None)
+    }
+
     fn write_file(&self, rel_path: &str, body: &str) -> Result<(), SchedulingError> {
         let _guard = self
             .write_lock
@@ -281,8 +312,15 @@ impl CalendarEvents for VaultScheduler {
     }
 
     fn upsert_event(&self, event: &CalEvent) -> Result<(), SchedulingError> {
-        let body = serialize_cal_event(event).map_err(write_err)?;
-        self.write_file(&format!("{EVENTS_DIR}/{}.md", sanitize(&event.id)), &body)?;
+        // An existing event is rewritten in place — its file keeps its
+        // name, body and foreign properties. Seeded events are named
+        // for their title, not their id, so `<id>.md` would be a twin.
+        let rel = self
+            .event_path(&event.id)?
+            .unwrap_or_else(|| format!("{EVENTS_DIR}/{}.md", sanitize(&event.id)));
+        let existing = std::fs::read_to_string(self.root.join(&rel)).ok();
+        let body = merge_cal_event_page(event, existing.as_deref()).map_err(write_err)?;
+        self.write_file(&rel, &body)?;
         self.publish(scheduling_proto::SchedulingEvent::CalendarEventUpserted(
             event.clone(),
         ));
@@ -290,7 +328,10 @@ impl CalendarEvents for VaultScheduler {
     }
 
     fn delete_event(&self, id: &str) -> Result<(), SchedulingError> {
-        self.delete_file(&format!("{EVENTS_DIR}/{}.md", sanitize(id)))?;
+        let rel = self
+            .event_path(id)?
+            .unwrap_or_else(|| format!("{EVENTS_DIR}/{}.md", sanitize(id)));
+        self.delete_file(&rel)?;
         self.publish(scheduling_proto::SchedulingEvent::CalendarEventDeleted(
             id.to_owned(),
         ));

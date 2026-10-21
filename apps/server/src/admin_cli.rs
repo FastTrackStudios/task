@@ -2083,7 +2083,8 @@ fn seed_studio_vault(org: &org_proto::OrgRoot) -> eyre::Result<()> {
     std::fs::create_dir_all(&events)?;
     write_if_absent(
         &events.join("Sunday Service.md"),
-        "---\ntitle: Sunday Service\ntype: event\nexperience: setlist\ntabs: true\nstart: 2026-08-16T09:00:00Z\nend: 2026-08-16T11:00:00Z\n---\n\n\
+        "---\ntitle: Sunday Service\ntype: event\nexperience: setlist\ntabs: true\n\
+         for:\n  - '[[Sunday Setlist]]'\nexternal_ref: pco:plan:demo-sunday-service\nstart: 2026-08-16T09:00:00Z\nend: 2026-08-16T11:00:00Z\n---\n\n\
          # Sunday Service\n\n## Walk-in\n\n- [[Brighter Still]]\n\n## Set\n\n\
          1. [[Rise and Shine]]\n2. [[Every Morning New]]\n3. [[Anchor Line]]\n4. [[Steady Ground]]\n5. [[Carry Me Home]]\n\n\
          ## Notes\n\nSeeded demo event — the set mirrors [[Sunday Setlist]].\n",

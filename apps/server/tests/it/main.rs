@@ -63,6 +63,8 @@ mod live_e2e;
 mod local_node_e2e;
 mod local_transport;
 mod mcp_account_e2e;
+#[cfg(feature = "plugin-scheduling")]
+mod mcp_calendar_e2e;
 mod mcp_chart_e2e;
 mod mcp_e2e;
 mod mcp_refusals_e2e;

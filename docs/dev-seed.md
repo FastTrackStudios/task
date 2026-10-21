@@ -67,7 +67,11 @@ included). The **home org additionally gets the studio dataset**:
   `type: event` + `experience: setlist` events with start/end under
   `Records/events/` (`Sunday Service`, `Album Release Show — Fox
   Theater`). Basenames are unique vault-wide on purpose — wikilink
-  resolution is basename-keyed.
+  resolution is basename-keyed. `Sunday Service` also carries an event
+  link (`for: [[Sunday Setlist]]`) and an `external_ref`
+  (`pco:plan:demo-sunday-service`), so the setlist's backlinks and
+  `list_events { linked_to / external_ref }` have something to find
+  (`features/scheduling/spec/scheduling.md`).
 - **13 media Files roots**: one per video project (2 checkpoints,
   `★ Rough Cut v1` on even indices, divergences on the first two —
   kept on `notes.md` so the cuts stay playable) and one per album

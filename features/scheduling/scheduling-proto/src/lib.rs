@@ -46,7 +46,7 @@ pub mod service;
 pub mod time_block;
 
 pub use booking::{Booking, BookingId, BookingStatus, NewBooking};
-pub use cal_event::CalEvent;
+pub use cal_event::{CalEvent, EventLink, EventLinks, ExternalRef};
 pub use day_plan::{BlockAssignment, DayPlan, PlannedBlock};
 pub use error::SchedulingError;
 pub use event_type::{EventType, EventTypeId, EventTypeLocation};
