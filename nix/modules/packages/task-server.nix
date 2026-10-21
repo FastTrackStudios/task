@@ -8,7 +8,9 @@
     let
       task-server = config.fts.craneLib.buildPackage (config.fts.commonArgs // {
         pname = "task-server";
-        version = "0.1.0";
+        # The release's version, from `[workspace.package]` — the same one
+        # the binary reports (scripts/check-versions.sh).
+        version = (lib.importTOML ../../../Cargo.toml).workspace.package.version;
         cargoArtifacts = null;
         cargoExtraArgs = "--package task-server";
         doCheck = false;

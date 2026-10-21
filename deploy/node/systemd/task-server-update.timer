@@ -1,0 +1,14 @@
+# Runs task-server-update.service once a day.
+# Rendered by `task-server service write`; see https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md
+
+[Unit]
+Description=Check daily for a new Task node release
+Documentation=https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

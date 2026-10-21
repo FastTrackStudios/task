@@ -1,6 +1,8 @@
 [package]
 name = "files-daemon"
-version = "0.1.0"
+# The release's version, like every artifact the release ships: this
+# crate builds the `fts-files-daemon` the desktop app bundles.
+version.workspace = true
 edition = "2024"
 description = "Files sync daemon (issue #265): the reconcile engine shipped as a headless agent with a persistent device identity, plus DaemonControlService — the local-socket RPC the desktop app and CLI drive for rich per-file sync status, selective-sync choices, pause/resume, hydrate, and checkpoint-now."
 
