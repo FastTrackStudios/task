@@ -82,9 +82,10 @@ chrono = { workspace = true }
 # `process.rs`: a capture lands in the Inbox lane and is processed into
 # a task; what a maintenance hour brings forward is
 # `BlockCategory::surfaces`, read from the scheduling vocabulary rather
-# than restated here.
+# than restated here; the seeded day templates are read over the wire
+# (`DayTemplatesClient`) for the one-due-answer chapter.
 inbox-proto = { workspace = true, features = ["vox"] }
-scheduling-proto = { workspace = true }
+scheduling-proto = { workspace = true, features = ["vox"] }
 # `contacts_security.rs`: CardDAV accounts saved over the wire, synced
 # against the fake TLS server `contacts::testing` provides, and the
 # vault they sit in replicated to a peer.

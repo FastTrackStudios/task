@@ -198,6 +198,12 @@ impl Session {
         self.establish().await
     }
 
+    /// The org's day templates — the weekday / weekend shapes a day
+    /// with no saved plan is drawn from (`process.focus.steering`).
+    pub async fn day_templates(&self) -> scheduling_proto::DayTemplatesClient {
+        self.establish().await
+    }
+
     /// The org's set of wikis — the call made before a caller has a
     /// wiki id (`wiki.many.addressable`).
     pub async fn wikis(&self) -> wiki_proto::service::registry::RegistryClient {
@@ -411,6 +417,7 @@ signable!(
     ProjectServiceClient,
     TaskServiceClient,
     inbox_proto::InboxClient,
+    scheduling_proto::DayTemplatesClient,
     wiki_proto::service::registry::RegistryClient,
     wiki_proto::service::pages::PagesClient,
     wiki_proto::service::schema::SchemaClient,

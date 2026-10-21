@@ -242,6 +242,208 @@ async fn a_maintenance_hour_brings_errands_forward() {
     );
 }
 
+// ── one due answer ──────────────────────────────────────────────────
+//
+// Home's Today rail, the Tasks list's Today section and the Work
+// sidebar's count run `task_proto::due_queue` on the app's store; the
+// CLI's `task task list --due` and `task brief` ask `TaskService::query`
+// for it (`TaskListFilter::due_now`). Both halves are driven here against
+// the same served board, with the context built the one way every
+// client builds it (`RelevanceContext::now` + `with_session`) and the
+// mode read from the org's own seeded maintenance hour.
+
+/// A task as quick-add would make it, with a due date and a status.
+async fn plant(
+    tasks: &task_proto::TaskServiceClient,
+    line: &str,
+    due: Option<chrono::NaiveDate>,
+    status: &str,
+) -> task_proto::TaskInfo {
+    let mut t = task_proto::capture(line);
+    t.due = due.map(|d| d.to_string());
+    t.status = status.to_owned();
+    tasks.create(t).await.expect("plant a task")
+}
+
+// t[verify process.focus.everywhere]
+// t[verify process.context.device]
+/// The same due count and order on every surface, during the seeded
+/// maintenance hour and outside it, and the `@phone` gate the device
+/// opens.
+#[tokio::test]
+async fn every_surface_gives_one_due_answer_and_the_hour_reorders_it() {
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+    let (tasks, inbox, templates) = (
+        alice.tasks().await,
+        alice.inbox().await,
+        alice.day_templates().await,
+    );
+    let today = chrono::Utc::now().date_naive();
+    let day = |n: i64| Some(today + chrono::Duration::days(n));
+
+    // Alice's day: late work, work in hand, a chore due today, something
+    // for later, and a call that waits for the phone.
+    let late = plant(&tasks, "Send the label the stems", day(-2), "open").await;
+    let comping = plant(&tasks, "Comp the backing vocals", None, "in-progress").await;
+    let chore = plant(&tasks, "Vacuum the live room @chores", day(0), "open").await;
+    let later = plant(&tasks, "Book the mastering session", day(3), "open").await;
+    let call = plant(&tasks, "Ring the piano tuner @phone", None, "open").await;
+
+    // The seeded maintenance hour, served from the org's weekday
+    // template, and the mode its Suggested slot starts — the session
+    // named for it is what every surface reads as "the mode".
+    let weekday = templates
+        .list_day_templates()
+        .await
+        .expect("the day templates")
+        .into_iter()
+        .find(|t| t.id.0 == "weekday")
+        .expect("a seeded weekday template");
+    let hour = weekday
+        .blocks
+        .iter()
+        .find(|b| b.category == scheduling_proto::BlockCategory::Maintenance)
+        .expect("the seed's maintenance hour");
+    let minute = hour.start.minutes_since_midnight + 5;
+    // A day with no saved plan reads as its template — the calendar's
+    // own resolution (`scheduling_proto::merge_template`).
+    let day: Vec<scheduling_proto::PlannedBlock> =
+        scheduling_proto::merge_template(&[], &weekday.blocks)
+            .into_iter()
+            .map(|rb| rb.block)
+            .collect();
+    let mode = task_proto::suggest::now_hint(&day, minute)
+        .and_then(|h| h.mode)
+        .expect("the hour suggests its mode");
+    let at = |device: &str| {
+        RelevanceContext::now(
+            today.to_string(),
+            Some(format!("{:02}:{:02}", minute / 60, minute % 60)),
+            None,
+            Some(device),
+        )
+    };
+
+    // Both halves of the one answer, for one context.
+    let answer = |ctx: RelevanceContext| {
+        let tasks = tasks.clone();
+        async move {
+            // CLI `--due` / `task brief`: the server's query.
+            let served = tasks
+                .query(TaskListFilter {
+                    relevance: Some(ctx.clone()),
+                    due_now: true,
+                    ..Default::default()
+                })
+                .await
+                .expect("the due query");
+            // Home / Tasks / the sidebar: the same function on the store.
+            let all = tasks.list().await.expect("the board");
+            let local = task_proto::due_queue(&all, None, &ctx);
+            let ids = |q: &[task_proto::TaskInfo]| q.iter().map(|t| t.id).collect::<Vec<_>>();
+            assert_eq!(
+                ids(&served),
+                ids(&local),
+                "the app and the CLI disagree on what is due: {:?} vs {:?}",
+                served.iter().map(|t| &t.title).collect::<Vec<_>>(),
+                local.iter().map(|t| &t.title).collect::<Vec<_>>()
+            );
+            // The Tasks list's Today section holds exactly these.
+            for t in &all {
+                assert_eq!(
+                    task_proto::is_due_now(t, &today.to_string()),
+                    local.iter().any(|q| q.id == t.id),
+                    "`{}`: in Today and the queue, or in neither",
+                    t.title
+                );
+            }
+            served
+        }
+    };
+    let pos = |q: &[task_proto::TaskInfo], id| {
+        q.iter()
+            .position(|t| t.id == id)
+            .unwrap_or_else(|| panic!("{id} is not due"))
+    };
+
+    let plain = answer(at("computer")).await;
+    assert!(
+        !plain.iter().any(|t| t.id == later.id || t.id == call.id),
+        "nothing undated or future is due"
+    );
+    assert_eq!(task_proto::overdue_count(&plain, &today.to_string()), 1);
+    assert!(
+        pos(&plain, comping.id) < pos(&plain, late.id)
+            && pos(&plain, late.id) < pos(&plain, chore.id),
+        "outside the mode: the work in hand, then oldest due"
+    );
+
+    let in_mode = answer(at("computer").with_session(&mode.title, None)).await;
+    assert_eq!(
+        in_mode.len(),
+        plain.len(),
+        "the mode reorders; it hides nothing"
+    );
+    assert!(
+        pos(&in_mode, comping.id) < pos(&in_mode, chore.id)
+            && pos(&in_mode, chore.id) < pos(&in_mode, late.id),
+        "in the maintenance mode its chore leads the due work"
+    );
+
+    // The device the client fills in opens its own gate.
+    let relevant = |ctx: RelevanceContext| {
+        let tasks = tasks.clone();
+        async move {
+            tasks
+                .query(TaskListFilter {
+                    open_only: true,
+                    relevance: Some(ctx),
+                    ..Default::default()
+                })
+                .await
+                .expect("a relevance query")
+        }
+    };
+    assert!(
+        relevant(at("phone")).await.iter().any(|t| t.id == call.id),
+        "the call shows on the phone"
+    );
+    assert!(
+        !relevant(at("computer"))
+            .await
+            .iter()
+            .any(|t| t.id == call.id),
+        "the call waits on the computer"
+    );
+
+    // The inbox half: what is due for processing — the trusted queue
+    // plus the suggestion awaiting a yes or no — served as one queue,
+    // the one the app counts on its store.
+    let inbox_today = today.to_string();
+    let served = inbox
+        .due_queue(inbox_today.clone())
+        .await
+        .expect("the inbox's due queue");
+    let all = inbox.list_inbox().await.expect("the inbox");
+    let local = inbox_proto::due_queue(&all, &inbox_today);
+    assert_eq!(
+        served.iter().map(|i| &i.id).collect::<Vec<_>>(),
+        local.iter().map(|i| &i.id).collect::<Vec<_>>(),
+        "the brief and Home count the same captures"
+    );
+    assert!(
+        served.iter().any(|i| i.status == "suggested"),
+        "a suggestion is due for a decision"
+    );
+    let review = inbox.review_queue(inbox_today).await.expect("the queue");
+    assert_eq!(
+        served.len(),
+        review.len() + all.iter().filter(|i| i.status == "suggested").count(),
+        "due = the review queue + the suggestions, nothing restated"
+    );
+}
+
 // ── every outcome, through the shared decision ──────────────────────
 //
 // What the card does for each outcome, as any client holding a token

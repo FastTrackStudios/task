@@ -416,25 +416,28 @@ read back as the mode in `crates/ui/src/now_block.rs`, the label round
 trip in `scheduling-proto::focus`); no e2e test drives Start → timer
 session → focused query yet.
 
-Not met:
-
-- **`process.focus.everywhere`** — the web board, Home and the Tasks
-  page read the steering block (`crates/ui/src/now_block.rs`); the CLI
-  passes `focus: Vec::new()` (`apps/cli/src/task_cmd.rs`, marked
-  `FUTURE`), and the morning brief (`apps/cli/src/brief.rs`) fetches
-  today's plan but derives no focus from it — so `--relevant` during a
-  maintenance hour still hides `@errands` work.
-- **`process.context.device`** — no client fills
-  `RelevanceContext::device`: the web board leaves it `None`
-  (`crates/ui/src/task_board.rs`, `FUTURE(relevancy-and-inbox)`), and
-  the CLI only has it when the person passes `--device`.
+`process.focus.everywhere` and `process.context.device` are met by one
+due answer below the UI (`task_proto::due`): what is due (open, in
+progress or due today or before), whose, and in what order (work in
+hand, the running mode's work, oldest due). Home's Today rail, the Tasks
+list's Today section and the Work sidebar's count run `due_queue` on the
+app's store with the one context (`crates/ui/src/now_block.rs`
+`use_now_ctx`: clock, place, this device, the open session and its
+mode); the CLI's `task task list --due` / `--relevant` and `task brief`
+build the same context from the same timer store (`apps/cli/src/now.rs`)
+and ask `TaskService::query` (`TaskListFilter::due_now`). Checked in
+`process.rs` (served and local queues equal, in and out of the seeded
+maintenance hour, the `@phone` gate on each device), in
+`capture_peers_e2e.rs` (two device nodes, no host, one answer), and on
+the seed (`example_org::declared_tests::the_seed_gives_alice_one_due_answer_that_the_hour_reorders`).
+The inbox lane serves its own due queue (`Inbox::due_queue`, the review
+queue plus suggestions), which the badge, Home, the watch bridge and the
+brief all count.
 
 Built in the app, verified by nothing: `process.card` (the card's
 layout and keys in `crates/ui/src/process.rs`; the browser spec sees
-every outcome on it, but nothing in Rust drives it). The due rule has a home below the UI
-(`InboxItem::is_due`, which `pages::inbox::is_due` and the watch bridge
-call), but `Inbox::review_queue` is still the open half only, so a
-caller of the lane has to restate the `suggested` clause.
+every outcome on it, but nothing in Rust drives it). Nor is the app's
+`use_now_ctx` memo itself driven by a test — the functions it feeds are.
 
 `process.suggested` is verified over the watch bridge and in unit tests,
 but neither client's card is: the web slot (`crates/ui/src/suggested.rs`)
