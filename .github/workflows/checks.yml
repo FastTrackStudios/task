@@ -145,7 +145,7 @@ jobs:
 
   plan:
     name: Plan affected crates
-    runs-on: [self-hosted, task]
+    runs-on: [self-hosted, task-macpro]
     timeout-minutes: 10
     outputs:
       workspace: ${{ steps.filter.outputs.workspace }}
@@ -276,7 +276,7 @@ jobs:
   # the next thing wrong. One run still reports fmt AND tests AND clippy.
   checks:
     name: Checks (fmt + tests + clippy + wasm + docs)
-    runs-on: [self-hosted, task]
+    runs-on: [self-hosted, task-macpro]
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' }}
