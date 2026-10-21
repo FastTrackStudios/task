@@ -6,28 +6,33 @@
 //! the wrong one here: beside a task list it is a column of folders
 //! that answers nothing being asked. This column answers "what is on
 //! my plate": the inbox and tasks with live counts (their filters live
-//! on those pages, not here), every active project with how much is open
-//! in it, and every other section of the workspace.
+//! on those pages, not here), the few top-level projects in hand with
+//! how much is open in each ([`crate::recent_projects`]; the Projects
+//! page keeps the full list), and every other section of the workspace.
 //!
 //! Its counts come from the same rules as the list itself — the
 //! person's filters ([`crate::task_board::filter`]) and the same section
 //! rule ([`task_ui::task_section`]) — so a sidebar number and the list
 //! beneath it can't disagree.
 
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use task_ui::TaskSection;
 
 use crate::routes::Route;
 use crate::stores;
-use crate::task_sort::is_active;
 
 #[derive(Clone, PartialEq)]
 struct Counts {
     /// Open work due today or before — the Tasks row's number.
     today: usize,
     overdue: usize,
-    /// `(project id, title, open tasks)`, active projects by title.
-    projects: Vec<(String, String, usize)>,
+    /// `(project id, title, open tasks in its tree, starred)`: the
+    /// recent top-level projects, best first (`recent_projects`).
+    projects: Vec<(String, String, usize, bool)>,
+    /// Every project that could be listed — the Projects row's number.
+    listed: usize,
 }
 
 #[component]
@@ -39,6 +44,8 @@ pub fn WorkSidebar(current: Route) -> Element {
     let task_store = stores::use_task_store();
     let project_store = stores::use_project_store();
     let session_store = stores::use_session_store();
+    let recent =
+        crate::recent_projects::use_sidebar_projects(crate::recent_projects::SIDEBAR_LIMIT);
     let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
     // The same hour as the Tasks page, so its counts and these agree.
     let focus = crate::now_block::use_focus();
@@ -86,7 +93,12 @@ pub fn WorkSidebar(current: Route) -> Element {
             today: 0,
             overdue: 0,
             projects: Vec::new(),
+            listed: 0,
         };
+        // Open work per top-level project: a song's tasks count on
+        // its album's row, the only row the tree gets.
+        let ranked = recent();
+        let mut open: HashMap<uuid::Uuid, usize> = HashMap::new();
         for t in &board {
             if task_ui::task_section(t, today) == TaskSection::Today {
                 c.today += 1;
@@ -94,22 +106,21 @@ pub fn WorkSidebar(current: Route) -> Element {
                     c.overdue += 1;
                 }
             }
+            if let Some(task_proto::Anchor::Project(pid)) = index.anchor(t)
+                && let Some(top) = ranked.tops.get(&pid)
+            {
+                *open.entry(*top).or_default() += 1;
+            }
         }
-        let mut rows: Vec<(String, String, usize)> = project_store
-            .list()
+        c.projects = ranked
+            .rows
             .iter()
-            .filter(|r| !r.project.archived && is_active(&r.project.status))
             .map(|r| {
-                let pid = r.project.id;
-                let n = board
-                    .iter()
-                    .filter(|t| index.anchor(t) == Some(task_proto::Anchor::Project(pid)))
-                    .count();
-                (pid.to_string(), r.project.title.clone(), n)
+                let n = open.get(&r.id).copied().unwrap_or(0);
+                (r.id.to_string(), r.title.clone(), n, r.pinned)
             })
             .collect();
-        rows.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
-        c.projects = rows;
+        c.listed = ranked.listed;
         c
     });
     let c = counts();
@@ -141,18 +152,8 @@ pub fn WorkSidebar(current: Route) -> Element {
             )
         })
         .collect();
-    // Starred projects lead, then the rest of the active ones.
-    let project_rows: Vec<(String, String, usize, bool)> = {
-        let favs = favorites.read();
-        let starred = |pid: &str| favs.iter().any(|f| f.kind == "project" && f.id == pid);
-        let mut rows: Vec<_> = c
-            .projects
-            .iter()
-            .map(|(pid, t, n)| (pid.clone(), t.clone(), *n, starred(pid)))
-            .collect();
-        rows.sort_by_key(|r| !r.3);
-        rows
-    };
+    // Starred projects lead — already ranked so (`recent_projects`).
+    let project_rows = c.projects.clone();
 
     // A row: icon, label, count, the current one in the tab bar's pill.
     let row = |here: bool| {
@@ -242,7 +243,8 @@ pub fn WorkSidebar(current: Route) -> Element {
 
                 // ── Projects ──
                 // The row opens the Projects page; the chevron folds
-                // the starred-then-active list under it.
+                // the recent top-level list under it, which ends in
+                // "All projects →".
                 div { class: "flex flex-col gap-0.5",
                     div { class: "flex items-center gap-0.5",
                         Link {
@@ -250,7 +252,7 @@ pub fn WorkSidebar(current: Route) -> Element {
                             class: "{row(on_projects)} min-w-0 flex-1",
                             span { class: icon, i::FolderKanban {} }
                             span { "Projects" }
-                            span { class: count, "{c.projects.len()}" }
+                            span { class: count, "{c.listed}" }
                         }
                         button {
                             r#type: "button",
@@ -265,6 +267,7 @@ pub fn WorkSidebar(current: Route) -> Element {
                         }
                     }
                     if projects_open() {
+                        div { class: "flex flex-col gap-0.5", "data-testid": "sidebar-projects",
                         if c.projects.is_empty() {
                             p { class: "px-2.5 text-[13px] text-muted-foreground", "No active projects." }
                         }
@@ -275,6 +278,7 @@ pub fn WorkSidebar(current: Route) -> Element {
                                     Link {
                                         key: "{pid}",
                                         to: Route::ProjectDetailRoute { id: pid.clone() },
+                                        "data-testid": "sidebar-project",
                                         class: if here {
                                             "flex min-h-12 w-full items-center gap-3 rounded-[12px] bg-foreground/[0.08] px-2 text-[15px] font-medium text-foreground md:min-h-10 md:text-sm"
                                         } else {
@@ -295,6 +299,16 @@ pub fn WorkSidebar(current: Route) -> Element {
                                     }
                                 }
                             }
+                        }
+                        // The sidebar keeps a few; the Projects page
+                        // keeps them all, subprojects included.
+                        Link {
+                            to: Route::ProjectsRoute {},
+                            "data-testid": "sidebar-all-projects",
+                            class: "flex min-h-10 w-full items-center gap-1 rounded-[10px] px-2.5 text-[14px] font-medium text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.08] md:min-h-8 md:text-[13px]",
+                            "All projects"
+                            span { aria_hidden: "true", "→" }
+                        }
                         }
                     }
                 }
