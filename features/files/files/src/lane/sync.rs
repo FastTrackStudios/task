@@ -1155,6 +1155,93 @@ mod tests {
         assert!(enrolled(&backend, endpoint).is_err(), "revoked");
     }
 
+    /// A transport that is never used: binding an endpoint takes one.
+    #[derive(Debug)]
+    struct NoRemotes;
+
+    #[async_trait::async_trait]
+    impl crate::lane::federation::RemoteFiles for NoRemotes {
+        async fn browse_offered(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &str,
+            _: &RootPath,
+        ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+        async fn read_offered(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &str,
+            _: &RootPath,
+        ) -> Result<files_proto::service::media::ByteTicket, FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+        async fn open_relay(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &str,
+            _: &str,
+        ) -> Result<files_proto::service::federation::RelayManifest, FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+        async fn fetch_relay(
+            &self,
+            _: &files_proto::service::federation::EndpointId,
+            _: &files_proto::service::federation::RelayManifest,
+            _: Option<(u64, u64)>,
+            _: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+        ) -> Result<(), FilesFault> {
+            Err(FilesFault::Io("unused".into()))
+        }
+    }
+
+    // t[verify files.device.identity] — this node's own endpoint is never
+    // an enrolled peer, even when a legacy row that is not `local` holds it
+    #[test]
+    fn this_nodes_own_endpoint_never_resolves_as_a_peer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let own = "5555555555555555555555555555555555555555555555555555555555555555";
+        let backend = FilesBackend::new(dir.path(), dir.path().join("vault"))
+            .expect("backend")
+            .with_remotes(own, std::sync::Arc::new(NoRemotes));
+
+        // A legacy file's shape, written without `ensure_local`: a
+        // "this device" row for the org's own endpoint and no `local`.
+        let legacy = DeviceId::generate();
+        SYNC.write(&backend, |s| {
+            s.devices.insert(
+                legacy.to_string(),
+                DeviceInfo {
+                    id: legacy,
+                    name: "this device".into(),
+                    endpoint: Some(own.into()),
+                    last_seen: Utc::now(),
+                    transfer: TransferPolicy {
+                        max_bytes_per_sec: None,
+                        paused: false,
+                    },
+                    revoked: false,
+                },
+            );
+        });
+        // Even admitted, which a host never does for itself.
+        backend.admit_host(
+            files_domain::HostId(own.into()),
+            files_domain::Hosting::working(),
+        );
+        assert!(
+            enrolled(&backend, own).is_err(),
+            "the org's own endpoint resolved to a legacy row as though it were a peer"
+        );
+
+        // And the legacy row is adopted as this node rather than joined.
+        assert_eq!(local_device(&backend), legacy);
+        SYNC.forget(&backend);
+        assert_eq!(local_device(&backend), legacy, "adopted, and persisted");
+        assert_eq!(read_state(&backend, |s| s.devices.len()), 1);
+    }
+
     #[test]
     fn a_software_root_holds_no_facet_capability() {
         let root = FileRootInfo {

@@ -598,3 +598,199 @@ async fn revoking_a_device_stops_admitting_its_endpoint() {
             .is_some()
     );
 }
+
+// ── Legacy `sync.json`: one "this device" row per dead process ──────
+
+/// A transport that is never used. `devices()` only needs the backend to
+/// know its own endpoint, and `with_remotes` is how an endpoint is bound.
+#[derive(Debug)]
+struct NoRemotes;
+
+#[async_trait::async_trait]
+impl files::lane::federation::RemoteFiles for NoRemotes {
+    async fn browse_offered(
+        &self,
+        _origin: &files_proto::service::federation::EndpointId,
+        _secret: &str,
+        _path: &RootPath,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+        Err(FilesFault::Io("no remotes in this test".into()))
+    }
+
+    async fn read_offered(
+        &self,
+        _origin: &files_proto::service::federation::EndpointId,
+        _secret: &str,
+        _path: &RootPath,
+    ) -> Result<files_proto::service::media::ByteTicket, FilesFault> {
+        Err(FilesFault::Io("no remotes in this test".into()))
+    }
+
+    async fn open_relay(
+        &self,
+        _origin: &files_proto::service::federation::EndpointId,
+        _secret: &str,
+        _token: &str,
+    ) -> Result<files_proto::service::federation::RelayManifest, FilesFault> {
+        Err(FilesFault::Io("no remotes in this test".into()))
+    }
+
+    async fn fetch_relay(
+        &self,
+        _origin: &files_proto::service::federation::EndpointId,
+        _manifest: &files_proto::service::federation::RelayManifest,
+        _range: Option<(u64, u64)>,
+        _dest: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+    ) -> Result<(), FilesFault> {
+        Err(FilesFault::Io("no remotes in this test".into()))
+    }
+}
+
+/// `sync.json` as a server wrote it before this node's id was persisted:
+/// the same rows, and no `local` key.
+#[derive(facet::Facet)]
+#[repr(C)]
+struct LegacySyncFile {
+    subscriptions: Vec<files_proto::service::sync::Subscription>,
+    devices: Vec<files_proto::service::sync::DeviceInfo>,
+    mappings: Vec<LegacyMapping>,
+}
+
+#[derive(facet::Facet)]
+#[repr(C)]
+struct LegacyMapping {
+    root: RootId,
+    facets: std::collections::BTreeMap<String, FacetName>,
+}
+
+fn device_row(
+    name: &str,
+    endpoint: &str,
+    last_seen: chrono::DateTime<chrono::Utc>,
+) -> files_proto::service::sync::DeviceInfo {
+    files_proto::service::sync::DeviceInfo {
+        id: DeviceId::generate(),
+        name: name.into(),
+        endpoint: Some(endpoint.into()),
+        last_seen,
+        transfer: files_proto::service::sync::TransferPolicy {
+            max_bytes_per_sec: None,
+            paused: false,
+        },
+        revoked: false,
+    }
+}
+
+/// How many device rows `sync.json` on disk holds, and its `local` value
+/// as raw JSON text (`null` when absent).
+fn on_disk(dir: &std::path::Path) -> (usize, String) {
+    let text = std::fs::read_to_string(dir.join("sync.json")).expect("sync.json");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("sync.json parses");
+    let rows = json["devices"].as_array().expect("devices").len();
+    (rows, json["local"].to_string())
+}
+
+/// Before this node's id was persisted, every server process wrote a new
+/// "this device" row for itself, and prod orgs were left with 189 of them.
+/// Loading such a file must collapse them to one: the newest becomes
+/// `local`, the rest go with their subscriptions, and peers are untouched.
+// t[verify files.device.identity]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_file_collapses_to_one_row_for_this_node() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let own = "1542542863b2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let peer_endpoint = "929cb07ebbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let base = chrono::Utc::now() - chrono::Duration::days(30);
+
+    let legacy: Vec<_> = (0..5)
+        .map(|i| device_row("this device", own, base + chrono::Duration::hours(i)))
+        .collect();
+    let newest = legacy.last().expect("rows").id;
+    let peer = device_row("THEBATTLESHIP", peer_endpoint, base);
+    let root = RootId::new(uuid::Uuid::new_v4());
+    let sub = |device: DeviceId| files_proto::service::sync::Subscription {
+        device,
+        root_id: root,
+        facets: vec![FacetName("sessions".into())],
+        pinned: Vec::new(),
+    };
+    let file = LegacySyncFile {
+        // One subscription held by a duplicate (dropped with it), one by
+        // the peer (kept).
+        subscriptions: vec![sub(legacy[0].id), sub(peer.id)],
+        devices: legacy.iter().cloned().chain([peer.clone()]).collect(),
+        mappings: Vec::new(),
+    };
+    std::fs::write(
+        tmp.path().join("sync.json"),
+        facet_json::to_string(&file).expect("legacy file serialises"),
+    )
+    .unwrap();
+
+    let open = || {
+        FilesBackend::new(tmp.path(), tmp.path().join("vault"))
+            .expect("backend")
+            .with_remotes(own, std::sync::Arc::new(NoRemotes))
+    };
+    let backend = open();
+    let devices = backend.devices().await.expect("devices");
+
+    let mine: Vec<_> = devices
+        .iter()
+        .filter(|d| d.endpoint.as_deref() == Some(own))
+        .collect();
+    assert_eq!(
+        mine.len(),
+        1,
+        "a legacy file must collapse to one row for this node, not keep every dead process's: {mine:?}"
+    );
+    assert_eq!(
+        mine[0].id, newest,
+        "the newest legacy row is the one adopted as this node"
+    );
+    let kept = devices
+        .iter()
+        .find(|d| d.id == peer.id)
+        .expect("a peer's row is not this node's to retire");
+    assert_eq!(
+        (kept.name.as_str(), kept.endpoint.as_deref(), kept.revoked),
+        (peer.name.as_str(), peer.endpoint.as_deref(), peer.revoked),
+        "and it is left as it was"
+    );
+    assert_eq!(devices.len(), 2, "{devices:?}");
+
+    let (rows, local) = on_disk(tmp.path());
+    assert!(
+        local.contains(&newest.0.to_string()),
+        "the adopted row must be persisted as `local`, or the next process adopts again: {local}"
+    );
+    assert_eq!(rows, 2, "the file itself must shrink");
+    let text = std::fs::read_to_string(tmp.path().join("sync.json")).unwrap();
+    assert!(
+        !text.contains(&legacy[0].id.0.to_string()),
+        "a retired row's subscription must go with it: {text}"
+    );
+    assert!(
+        text.contains(&peer.id.0.to_string()),
+        "the peer's row and subscription stay"
+    );
+
+    // A restart: a second backend over the same directory. It shares this
+    // process's lane cache, so the disk checks above are what prove the
+    // file; this proves a second open neither grows nor re-mints the row.
+    drop(backend);
+    let again = open().devices().await.expect("devices after restart");
+    let mine: Vec<_> = again
+        .iter()
+        .filter(|d| d.endpoint.as_deref() == Some(own))
+        .map(|d| d.id)
+        .collect();
+    assert_eq!(
+        mine,
+        vec![newest],
+        "a restart must not grow or re-mint this node's row"
+    );
+    let (rows, local) = on_disk(tmp.path());
+    assert_eq!(rows, 2);
+    assert!(local.contains(&newest.0.to_string()), "{local}");
+}
