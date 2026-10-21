@@ -1,6 +1,6 @@
 # Task macOS TestFlight — build the Task desktop app (task-app-desktop, a
-# Dioxus/dx macOS app) and upload it to TestFlight for Mac on every push to
-# main that touches Task or its dependencies. The macOS mirror of
+# Dioxus/dx macOS app) and upload it to TestFlight for Mac when a release tag
+# `vX.Y.Z` is pushed (a push to main builds nothing). The macOS mirror of
 # task-ios.yml; testers' Macs then auto-update via the TestFlight app.
 #
 # Runs on the SAME self-hosted airlock Mac as the iOS workflows and shares
@@ -14,32 +14,17 @@
 # apps/desktop/macos/setup-macos.sh (signing identities in the build
 # keychain); see docs/macos-testflight.md for the runbook.
 #
-# CHANGE-GATED by the push `paths:` filter (Task app + its Rust deps).
-# workflow_dispatch forces a build regardless of what changed.
-#
-# ONCE PER RELEASE: main moves only by release PRs from `dev` (see
-# skills/release-workflow.md), so a push here is a release, and the build
-# is marked with the release's version (the Version step). The
-# `desktop-release` job below also cuts the Developer-ID `desktop-v<ver>`
-# release the in-app updater follows.
+# ONCE PER RELEASE: the trigger is the release tag, and the build is marked
+# with the release's version (the Version step). The `desktop-release` job
+# below also cuts the Developer-ID `desktop-v<ver>` release the in-app
+# updater follows. No `paths:` filter (tag pushes ignore them).
+# workflow_dispatch forces a build (select the tag as the ref).
 
 name: task-macos
 
 on:
   push:
-    branches: [main]
-    # See the same block in `task-ios.yml`: three of the four crate paths
-    # this used to name are monorepo leftovers that do not exist here, so
-    # the build did not trigger on most of what the app is made of.
-    paths:
-      - "apps/**"
-      - "crates/**"
-      - "features/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "flake.nix"
-      - "flake.lock"
-      - ".github/workflows/task-macos.yml"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       marketing_version:
@@ -47,7 +32,7 @@ on:
         required: false
         default: ""
       desktop_release:
-        description: "Developer-ID desktop job: skip, or build (build + notarize, never publish). Publishing happens only on a push to main."
+        description: "Developer-ID desktop job: skip, or build (build + notarize, never publish). Publishing happens only on a v* tag push."
         type: choice
         options: [skip, build]
         default: skip
@@ -172,7 +157,7 @@ jobs:
   # installs) as GitHub release `desktop-v<version>` — the same thing
   # `just release-desktop <version>` does by hand on airlock.
   #
-  # ON for every release (the Captain's call): each push to main publishes
+  # ON for every release (the Captain's call): each release tag publishes
   # `desktop-v<release version>`, the version read from [workspace.package]
   # in Cargo.toml by scripts/release.sh — the same number TestFlight, iOS
   # and the server release carry, so the desktop can never drift onto its
@@ -186,13 +171,13 @@ jobs:
   # workflow_dispatch with desktop_release=build runs the whole thing —
   # build, Developer-ID sign, notarize, staple, Gatekeeper check, manifest —
   # and stops before `gh release create` (PUBLISH=0), so a fix branch can
-  # prove the job without publishing. Only a push to main publishes.
+  # prove the job without publishing. Only a `v*` tag push publishes.
   # Skips itself when desktop-v<version> exists, so a re-run never
   # collides with a hand-made release.
   desktop-release:
     name: Developer-ID desktop release (desktop-v*)
     needs: testflight
-    if: ${{ !cancelled() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.desktop_release == 'build') }}
+    if: ${{ !cancelled() && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.desktop_release == 'build') }}
     runs-on: [self-hosted, macos, airlock]
     timeout-minutes: 90
     permissions:
@@ -207,9 +192,9 @@ jobs:
       - name: Publish desktop-v<version>
         env:
           GH_TOKEN: ${{ github.token }}
-          # 1 only on a push to main; a dispatch builds and notarizes but
+          # 1 only on a v* tag push; a dispatch builds and notarizes but
           # never publishes.
-          PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '0' }}
+          PUBLISH: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && '1' || '0' }}
           KEYCHAIN: fts-build.keychain
           KEYCHAIN_PW: fts-build
           TASK_SENTRY_DSN: ${{ secrets.TASK_SENTRY_DSN }}

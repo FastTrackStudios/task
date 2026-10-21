@@ -61,6 +61,7 @@ commit_parsers = [
     { message = "^Merge (pull request|branch|remote-tracking branch)", skip = true },
     { message = "^Merge [A-Za-z0-9/_.-]+ into [A-Za-z0-9/_.-]+", skip = true },
     { message = "^(Release|Hotfix) v[0-9]+\\.[0-9]+\\.[0-9]+", skip = true },
+    { message = "^Promote dev to main", skip = true },
     { message = "^feat", group = "<!-- 0 -->Features" },
     { message = "^fix", group = "<!-- 1 -->Fixes" },
     { message = "^perf", group = "<!-- 2 -->Performance" },

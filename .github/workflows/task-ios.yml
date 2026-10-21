@@ -1,6 +1,7 @@
 # Task iOS TestFlight — build the Task iPhone app + its embedded watchOS
-# companion and upload to TestFlight on every push to main that touches Task
-# or its dependencies.
+# companion and upload to TestFlight when a release tag `vX.Y.Z` is pushed.
+# A push to main builds nothing: main holds finished features, a release is
+# a tag (skills/release-workflow.md).
 #
 # Runs on the SAME self-hosted airlock Mac as the audio app's `ios.yml`, and
 # shares its `ios-testflight` concurrency group so the single Mac never runs
@@ -13,41 +14,17 @@
 #   WATCH_APP=apps/watchos. The watch companion is embedded in the iOS
 #   build so it installs on the paired watch and auto-updates.
 #
-# CHANGE-GATED by the push `paths:` filter (Task app + its Rust deps).
-# workflow_dispatch forces a build regardless of what changed.
-#
-# ONCE PER RELEASE: main moves only by release PRs from `dev` (see
-# skills/release-workflow.md), so a push here is a release, and the build
-# is marked with the release's version (the Version step).
+# ONCE PER RELEASE: the trigger is the release tag, and the build is marked
+# with the release's version (the Version step). There is no `paths:` filter
+# (tag pushes ignore them): every release builds, so the TestFlight build
+# always contains what production runs. workflow_dispatch forces a build
+# (select the tag as the ref to rebuild a release).
 
 name: task-ios
 
 on:
   push:
-    branches: [main]
-    # What the app is actually built from. `crates/**` and `features/**`
-    # rather than the `crates/task/**` / `features/task/**` /
-    # `libs/architect/**` / `features/editor/**` this used to name: those
-    # are the monorepo paths this repo was extracted from, and three of
-    # the four do not exist here. The effect was an iOS build that did
-    # not trigger on the shell, the UI-core crates, the stores, the
-    # player, or any feature `-ui` crate — most of what the app IS —
-    # and did so silently, because a `paths:` filter that matches
-    # nothing is not an error, it is just quiet.
-    #
-    # Broad on purpose. The concurrency group below queues builds rather
-    # than running them at once, so the cost of an extra build on the
-    # single Mac is latency; the cost of a missing one is a TestFlight
-    # build that does not contain the change somebody is waiting to test.
-    paths:
-      - "apps/**"
-      - "crates/**"
-      - "features/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "flake.nix"
-      - "flake.lock"
-      - ".github/workflows/task-ios.yml"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       marketing_version:

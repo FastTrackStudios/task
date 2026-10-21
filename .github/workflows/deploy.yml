@@ -19,30 +19,25 @@
 # checks workflow are the only things on main that are not part of an
 # image; everything else deploys.
 #
-# RELEASES. Under the release model (skills/release-workflow.md) main
-# moves only by release PRs merged from a `release/vX.Y.Z` branch cut
-# from dev (merge commit; the release guard in release.yml proves its
-# tree is the tree `checks` tested), or a hotfix/* PR. So a push here IS
-# a release: the images built below get
-# the version tag `v<Cargo.toml version>` beside `sha-<short>`, and once
-# "Verify live" passes, the `release` job tags the source and publishes
-# the GitHub Release (release.yml). A release always bumps Cargo.toml and
-# Cargo.lock, so paths-ignore never swallows one.
+# RELEASES. Under the release model (skills/release-workflow.md) a push to
+# main deploys NOTHING: main holds finished features (promoted from dev,
+# checked and reviewed), and production is the latest `v*` TAG. This runs
+# when a release tag `vX.Y.Z` is pushed (`just release-tag`, on main after the
+# release PR merged) or is dispatched with that tag as its ref (a re-run, or
+# a rollback by deploying an older tag). The images built below carry the
+# version tag `v<Cargo.toml version>` beside `sha-<short>`; once "Verify
+# live" passes the `release` job publishes the GitHub Release (release.yml)
+# and node-binaries.yml attaches the headless node binaries. The first step
+# checks the tag is a release commit on main (scripts/release.sh tag-guard),
+# so a stray tag cannot reach production.
 
 name: deploy
 
 on:
   push:
-    branches: [main]
-    # A commit that touches only prose, skills or the CI itself changes
-    # nothing the images are built from; a 30-minute deploy for it only
-    # holds a runner. Everything else on main still deploys.
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "skills/**"
-      - ".github/workflows/checks.yml"
-      - ".github/workflows/pr-title.yml"
+    tags: ["v*"]
+  # Re-run a release, or roll back: run this workflow with an existing v*
+  # tag selected as the ref. A branch ref is refused by the tag guard.
   workflow_dispatch:
 
 # Never cancel a deploy mid-push; queue instead.
@@ -79,6 +74,8 @@ jobs:
   # cluster to roll happens on a hosted runner (below), so a slot here is
   # held for the minutes the build takes, not the minutes Argo takes.
   deploy:
+    # Only a release tag deploys (the guard step below checks it too).
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     # Task's deploy runner, separate from its two checks runners: a
     # deploy queued behind two PRs' checks sat 45 minutes on 2026-09-04
     # while both slots compiled tests. Its release target dir is its
@@ -90,23 +87,25 @@ jobs:
       # mirror of it; this repo is small enough that cloning is cheaper
       # than the mirror-lag handling the old version needed.
       - uses: actions/checkout@v4
+        with:
+          # The tag guard walks main's history.
+          fetch-depth: 0
+
+      # The tag must be `v<Cargo.toml version>` on a commit of main that
+      # carries that version's CHANGELOG section: a release commit.
+      - name: Tag guard
+        run: bash scripts/release.sh tag-guard
 
       - name: Compute tags
         id: tags
         run: |
           echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           # The product version (one source: [workspace.package] in
-          # Cargo.toml), as an extra image tag so rollback and audit can
-          # name "v0.2.0" instead of a short sha. Only for a NEW version:
-          # once `v<version>` is a git tag that release is cut, and a later
-          # push at the same version (a re-run, a hotfix that forgot to
-          # bump) must not move the image tag under it.
+          # Cargo.toml) as an extra image tag, so rollback and audit can
+          # name "v0.2.0" instead of a short sha. The tag guard has proved
+          # it equals the git tag that started this run.
           v="v$(bash scripts/release.sh version)"
-          if git ls-remote --exit-code --tags origin "refs/tags/$v" >/dev/null 2>&1; then
-            echo "version tag $v already released — not re-tagging images"
-          else
-            echo "version=$v" >> "$GITHUB_OUTPUT"
-          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       # The release binary and the web bundle are built HERE, in the dev
       # shell, against a target dir that persists on the runner's disk —
@@ -246,19 +245,17 @@ jobs:
           done
           [ "$bad" = 0 ] || { echo "UNHEALTHY: an org did not answer ok"; exit 1; }
 
-  # Production serves this commit: cut the release. Tag `v<version>` on
-  # the release branch tip this merge brought in (same tree), GitHub Release with the
-  # CHANGELOG section and the migrations list. A no-op when the version's
-  # release already exists (a re-run, a hotfix without a bump).
+  # Production serves this commit: publish the GitHub Release for the tag
+  # (CHANGELOG section, migrations list, moved git deps). A no-op when the
+  # release already exists (a re-run, a rollback to an older tag).
   #
   # It sits HERE, after Verify live, so "a GitHub Release exists" means
-  # "production runs it". Tags and releases made with GITHUB_TOKEN start
-  # no other workflow, which is why the Apple builds are triggered by the
-  # push to main and not by this tag.
+  # "production runs it". The tag itself was pushed before (just
+  # release-tag): it is what started this run, and the Apple builds.
   release:
-    name: Tag + GitHub Release
+    name: GitHub Release
     needs: verify
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     permissions:
       contents: write
     uses: ./.github/workflows/release.yml
@@ -271,7 +268,7 @@ jobs:
   node-binaries:
     name: Headless node binaries
     needs: release
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     permissions:
       contents: write
     uses: ./.github/workflows/node-binaries.yml
