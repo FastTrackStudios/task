@@ -6,9 +6,10 @@
 //! and exercises backlinks / links / orphans / unresolved /
 //! deadends / tags over the same socket.
 //!
-//! The example vault seeds one page of its own — link-less, tag-less —
-//! so it appears in `orphans` and `deadends` beside the page this test
-//! plants for the purpose, and nowhere else.
+//! The example vault seeds a page with no outgoing links and no tags
+//! ([`support::EXAMPLE_PAGE`]), so it appears in `deadends` beside the
+//! page this test plants for the purpose. It is not an orphan: another
+//! seeded note links to it from its frontmatter.
 //!
 //! Uses `vault_id = "default"` throughout — the server mounts
 //! one vault per org under that id (`Backend::single`), and the
@@ -78,22 +79,28 @@ async fn graph_queries_over_seeded_vault() {
     assert_eq!(links[0].resolved.as_deref(), Some("Plans.md"));
     assert_eq!(links[1].resolved, None);
 
-    // Orphans + deadends: the unlinked, link-less pages. Asserted by
-    // membership, not as the whole list — every seeded page that happens
-    // to carry no links is also an orphan, so pinning the list makes
-    // adding an unrelated example file fail here, which is a confusing
-    // place to hear about it.
+    // Orphans (no incoming links) and deadends (no outgoing links),
+    // asserted by membership rather than as the whole list. Pinning the
+    // list means adding an unrelated example file fails here, which is a
+    // confusing place to hear about it.
     //
-    // What matters is that a page this test planted with no links *is*
-    // one, and a page it planted *with* links is not.
+    // Only the page this test planted is promised to be an orphan,
+    // because nothing can link to it. Whether a *seeded* page has
+    // backlinks is a fact about the seed. `EXAMPLE_PAGE` stopped being an
+    // orphan the day a seeded note named it in its frontmatter
+    // (`folder: "[[Studio Notes]]"`), since a frontmatter wikilink is an
+    // incoming edge. It still links nowhere itself, so it stays a
+    // deadend.
+    let orphans = graph.orphans("default".to_string()).await.unwrap();
+    assert!(
+        orphans.contains(&"Loose.md".to_string()),
+        "Loose.md: {orphans:?}"
+    );
+    let deadends = graph.deadends("default".to_string()).await.unwrap();
     for page in ["Loose.md", support::EXAMPLE_PAGE] {
-        let orphans = graph.orphans("default".to_string()).await.unwrap();
-        assert!(orphans.contains(&page.to_string()), "{page}: {orphans:?}");
-        let deadends = graph.deadends("default".to_string()).await.unwrap();
         assert!(deadends.contains(&page.to_string()), "{page}: {deadends:?}");
     }
-    // The other half of the claim: a page WITH links is neither.
-    let orphans = graph.orphans("default".to_string()).await.unwrap();
+    // The other half of the claim: a page WITH links is not an orphan.
     assert!(
         !orphans.contains(&"Wisdom.md".to_string()),
         "a linked page is not an orphan: {orphans:?}"
