@@ -185,6 +185,24 @@ grant and the service.
 
 ---
 
+## In the seed
+
+The planted world carries one of everything above, so the lanes can be
+reached from it (`docs/demo.md`, "Crescendum — shared from
+FastTrackAudio"). FastTrackAudio owns **Crescendum**
+(`9880bdc8-307f-4ed6-b6cb-6e05ca733571`): two songs, one with a
+sub-project nested a level deeper, parts, tasks, notes and a File Root,
+and a client and a rate on its page. One live `ReadComment` grant on it
+names Jordan, a person of Rockstars of Tomorrow with no account and no
+membership row in FastTrackAudio; there is no guest bot. Beside it,
+**Northbeam Jingles** holds what no grant reaches: its own tasks,
+notes and File Root, a client contact, a rate, billed time and an
+invoice. `example_org::SEED_GRANTS`, `DECLARED_CLIENTS` and
+`SEED_BILLING` declare them; `example_org::declared_tests` and
+`demo_plant.rs` hold them true.
+
+---
+
 ## Not in v1
 
 Named here so nobody builds toward them by accident:

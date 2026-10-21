@@ -112,7 +112,7 @@ telemetry_env() {
     echo ">> telemetry: collector on :$OTLP_PORT — exporting traces/logs/metrics"
   fi
 }
-DEMO_CAST="alice@acme.test:$PASSWORD:Alice:alice,sam@acme.test:$PASSWORD:Sam:sam,casey@client.test:$PASSWORD:Casey:casey,riley@rockstars.test:$PASSWORD:Riley:riley"
+DEMO_CAST="alice@acme.test:$PASSWORD:Alice:alice,sam@acme.test:$PASSWORD:Sam:sam,casey@client.test:$PASSWORD:Casey:casey,riley@rockstars.test:$PASSWORD:Riley:riley,taylor@fasttrackaudio.test:$PASSWORD:Taylor:taylor,jordan@rockstars.test:$PASSWORD:Jordan:jordan"
 
 plant() {
   echo ">> planting the example studio → $DEMO_ROOT"
@@ -136,6 +136,14 @@ plant() {
   ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/acme" \
       cargo run --quiet -p task-server -- admin demo --org rockstars-of-tomorrow )
   echo
+  # FastTrackAudio, on ACME's data root too, AFTER Rockstars: it owns
+  # Crescendum and shares it with Jordan of Rockstars of Tomorrow — a
+  # Sharing Grant (docs/spec/sharing.md) to a person whose account
+  # Rockstars holds, so Rockstars has to be planted first. Sign in as
+  # Taylor (the owner) or Jordan (the guest, no FastTrackAudio membership).
+  ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/acme" \
+      cargo run --quiet -p task-server -- admin demo --org fasttrackaudio )
+  echo
   # Membership rows for the people who belong to their org — what the
   # Files lanes read a role from (ADR 0005 decision 1). Without them an
   # owner signed in from an app holds only the grants the seed made, and
@@ -143,7 +151,7 @@ plant() {
   # Casey is left out on purpose: a client holds one granted folder and
   # nothing beside it.
   echo ">> recording memberships"
-  for who in acme:alice@acme.test acme:sam@acme.test acme:riley@rockstars.test vnt:victor@vnt.test; do
+  for who in acme:alice@acme.test acme:sam@acme.test acme:riley@rockstars.test acme:taylor@fasttrackaudio.test acme:jordan@rockstars.test vnt:victor@vnt.test; do
     ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/${who%%:*}" \
         cargo run --quiet -p task-server -- admin adopt-principal --email "${who#*:}" >/dev/null )
   done
