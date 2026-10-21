@@ -273,15 +273,38 @@ impl AssetShelf {
     /// [`crate::chart::refresh_document`] matters: the smaller the
     /// region a save rewrites, the less there is to merge.
     fn put(&self, rel: &str, text: &str) -> Result<(), ResourcesError> {
+        self.put_expecting(rel, text, "").map(|_sha| ())
+    }
+
+    /// Write one asset document, conditionally on `expected` — the
+    /// revision a caller read — and answer the revision written.
+    ///
+    /// An empty `expected` is [`Self::put`]'s unconditional write, for
+    /// the reasons given there. A non-empty one is the safe save: the
+    /// vault compares it with the document's current sha under its write
+    /// lock and refuses on a mismatch, so the check and the write cannot
+    /// be split by another writer. The refusal is
+    /// [`ResourcesError::Stale`] with the sha the document is at now.
+    fn put_expecting(
+        &self,
+        rel: &str,
+        text: &str,
+        expected: &str,
+    ) -> Result<String, ResourcesError> {
+        let if_match = if expected.is_empty() {
+            IfMatch::Force
+        } else {
+            IfMatch::Sha(expected.to_owned())
+        };
         self.vault
-            .put_file(
-                &self.vault_id,
-                rel,
-                text.as_bytes().to_vec(),
-                IfMatch::Force,
-            )
-            .map(|_ack| ())
-            .map_err(|e| ResourcesError::Io(format!("write {rel}: {e}")))
+            .put_file(&self.vault_id, rel, text.as_bytes().to_vec(), if_match)
+            .map(|ack| ack.sha256)
+            .map_err(|e| match e {
+                vault_proto::VaultSyncError::Conflict { server_sha, .. } => {
+                    ResourcesError::Stale(server_sha)
+                }
+                e => ResourcesError::Io(format!("write {rel}: {e}")),
+            })
     }
 
     /// Remove one asset document, idempotently.
@@ -587,6 +610,7 @@ impl ResourcesBackend {
                 .and_then(|p| std::fs::read_to_string(p).ok())
                 .unwrap_or_default();
             let doc = ChartDoc {
+                revision: String::new(),
                 slug: slug.clone(),
                 title: vendored_key(index, "title").unwrap_or_else(|| song_slug.to_owned()),
                 source,
@@ -1105,6 +1129,47 @@ fn io_err(e: &ResourceError) -> ResourcesError {
     ResourcesError::Io(e.to_string())
 }
 
+/// A document's revision: the lowercase-hex sha-256 of its bytes —
+/// byte-for-byte the sha `VaultSync` reports for the same path, which
+/// is what lets a revision read here be checked by the vault's own
+/// conditional write, and read on one node be checked on another.
+fn revision_of(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, b| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{b:02x}");
+            hex
+        })
+}
+
+/// The revision of the document at `abs`, or empty when there is none.
+fn revision_at(abs: &Path) -> String {
+    std::fs::read(abs)
+        .map(|bytes| revision_of(&bytes))
+        .unwrap_or_default()
+}
+
+/// The safe-save check made *before* any work: a caller that sent a
+/// revision gets [`ResourcesError::Stale`] at once when the document
+/// is not at it — including when it is gone, which reads as the empty
+/// revision. The vault repeats the check atomically at the write; this
+/// one exists so a stale save rewrites nothing on the way (a sibling
+/// chart's default flag, say) before it is refused.
+// t[impl storage.save.revision]
+fn expect_revision(expected: &str, existing: Option<&str>) -> Result<(), ResourcesError> {
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let current = existing.map(|d| revision_of(d.as_bytes())).unwrap_or_default();
+    if current == expected {
+        Ok(())
+    } else {
+        Err(ResourcesError::Stale(current))
+    }
+}
+
 /// The default `Sermons.base`: every sermon manifest under the wiki,
 /// newest first, plus a per-channel board.
 const SERMONS_BASE_YAML: &str = r#"filters:
@@ -1340,22 +1405,28 @@ impl ResourcesService for ResourcesBackend {
             |r| shelf.rel(&r.path),
         );
         let abs = shelf.root.join(&rel);
-        let (md, created) = match std::fs::read_to_string(&abs) {
-            Ok(old) => (
+        let old = match std::fs::read_to_string(&abs) {
+            Ok(old) => Some(old),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        expect_revision(&song_doc.revision, old.as_deref())?;
+        let (md, created) = match old {
+            Some(old) => (
                 song::refresh_document(&old, &song_doc).map_err(|e| io_err(&e))?,
                 false,
             ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+            None => (
                 song::render_document(&song_doc, &slug).map_err(|e| io_err(&e))?,
                 true,
             ),
-            Err(e) => return Err(ResourcesError::Io(e.to_string())),
         };
-        shelf.put(&rel, &md)?;
+        let revision = shelf.put_expecting(&rel, &md, &song_doc.revision)?;
         Ok(SongUpsert {
             slug,
             rel_path: rel,
             created,
+            revision,
         })
     }
 
@@ -1366,6 +1437,7 @@ impl ResourcesService for ResourcesBackend {
             .into_iter()
             .find(|r| r.resource.slug == slug)
             .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
+        let revision = revision_at(&found.path);
         Ok(SongDoc {
             slug: found.resource.slug,
             title: found.resource.title,
@@ -1373,6 +1445,7 @@ impl ResourcesService for ResourcesBackend {
             key: found.resource.key,
             tags: found.resource.tags,
             updated_at: found.resource.updated_at,
+            revision,
         })
     }
 
@@ -1466,19 +1539,27 @@ impl ResourcesService for ResourcesBackend {
             |r| shelf.rel(&r.path),
         );
         let abs = shelf.root.join(&rel);
-        let (md, created) = match std::fs::read_to_string(&abs) {
-            Ok(old) => (
+        let old = match std::fs::read_to_string(&abs) {
+            Ok(old) => Some(old),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        // A safe save against a chart that has moved on stops here,
+        // before anything is written — this chart or a sibling's flag.
+        expect_revision(&chart_doc.revision, old.as_deref())?;
+        let (md, created) = match old {
+            Some(old) => (
                 chart::refresh_document(&old, &chart_doc).map_err(|e| io_err(&e))?,
                 false,
             ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+            None => (
                 chart::render_document(&chart_doc, &slug).map_err(|e| io_err(&e))?,
                 true,
             ),
-            Err(e) => return Err(ResourcesError::Io(e.to_string())),
         };
-        // One file, one write, through the vault — see [`AssetShelf::put`].
-        shelf.put(&rel, &md)?;
+        // One file, one write, through the vault — see [`AssetShelf::put`]
+        // — and conditional on the caller's revision when it sent one.
+        shelf.put_expecting(&rel, &md, &chart_doc.revision)?;
 
         // The flag the caller asked for is a request; the invariant is
         // settled by re-reading the song's charts now that this one is
@@ -1490,8 +1571,13 @@ impl ResourcesService for ResourcesBackend {
         let prefer = chart_doc.is_default.then_some(slug.as_str());
         self.reconcile_song_defaults(&chart_doc.song, prefer)?;
 
+        // Read back rather than taking the write's sha: the reconcile
+        // may just have rewritten this very chart (a song's first chart
+        // becomes its default), and the revision a caller holds next
+        // has to be the one on disk.
         Ok(ChartUpsert {
             slug,
+            revision: revision_at(&abs),
             rel_path: rel,
             created,
         })
@@ -1510,6 +1596,9 @@ impl ResourcesService for ResourcesBackend {
         let document =
             std::fs::read_to_string(&found.path).map_err(|e| ResourcesError::Io(e.to_string()))?;
         let source = chart::source_of(&document);
+        // The revision of exactly the bytes the source came from, so a
+        // save made against this read is checked against this read.
+        let revision = revision_of(document.as_bytes());
         Ok(ChartDoc {
             slug: found.resource.slug,
             title: found.resource.title,
@@ -1521,6 +1610,7 @@ impl ResourcesService for ResourcesBackend {
             arrangement: found.resource.arrangement,
             is_default: found.resource.is_default,
             updated_at: found.resource.updated_at,
+            revision,
         })
     }
 
@@ -2031,6 +2121,7 @@ mod tests {
 
     fn chart_doc(title: &str, source: &str) -> ChartDoc {
         ChartDoc {
+            revision: String::new(),
             slug: String::new(),
             title: title.into(),
             source: source.into(),
@@ -2048,6 +2139,7 @@ mod tests {
     /// from the song's others, and what it asks to be.
     fn arrangement(title: &str, song: &str, label: &str, is_default: bool) -> ChartDoc {
         ChartDoc {
+            revision: String::new(),
             song: song.into(),
             arrangement: label.into(),
             is_default,
@@ -2203,6 +2295,7 @@ mod tests {
         // A second run is a no-op — and stays one after an edit, which
         // is the case that would otherwise silently revert.
         be.upsert_chart(ChartDoc {
+            revision: String::new(),
             slug: "doxology".into(),
             ..chart_doc("Doxology", "[Verse]\n| G | Am |\n")
         })
@@ -2348,6 +2441,7 @@ mod tests {
         let be = backend(&dir);
         let out = be
             .upsert_song(SongDoc {
+                revision: String::new(),
                 slug: String::new(),
                 title: "Opening Night".into(),
                 writers: vec!["A. Wright".into()],
@@ -2367,6 +2461,7 @@ mod tests {
 
         // A chart of it, so the delete has something to leave behind.
         be.upsert_chart(ChartDoc {
+            revision: String::new(),
             song: "song:opening-night".into(),
             ..chart_doc("Opening Night", "| C |")
         })
@@ -2380,6 +2475,92 @@ mod tests {
             "an arrangement of a song that is gone is a legible state, \
              not a reason to destroy somebody's chart"
         );
+    }
+
+    /// The safe save, at the lane: a read carries the document's sha,
+    /// the save that names it lands and hands back the next one, and a
+    /// save against an old one is `Stale` and writes nothing — not the
+    /// chart and not a sibling's default flag.
+    #[test]
+    fn a_chart_save_against_an_old_revision_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = backend(&dir);
+        let made = be
+            .upsert_chart(ChartDoc {
+                song: "song:opener".into(),
+                ..chart_doc("Opener", "| G |")
+            })
+            .unwrap();
+        let read = be.chart(&made.slug).unwrap();
+        assert_eq!(read.revision, made.revision, "the save hands back what a read sees");
+        let on_disk = std::fs::read(chart_file(&dir, &made.slug)).unwrap();
+        assert_eq!(read.revision, revision_of(&on_disk), "the sha of the document");
+
+        let first = be
+            .upsert_chart(ChartDoc {
+                source: "| G | C |".into(),
+                ..read.clone()
+            })
+            .unwrap();
+        assert_ne!(first.revision, read.revision);
+
+        // The late save also asks to be the song's default: refused, it
+        // touches nothing — not the source and not the flag.
+        let late = be.upsert_chart(ChartDoc {
+            source: "| G | D |".into(),
+            is_default: true,
+            ..read.clone()
+        });
+        assert_eq!(late, Err(ResourcesError::Stale(first.revision.clone())));
+        let now = be.chart(&made.slug).unwrap();
+        assert_eq!(now.source, "| G | C |", "the refused save wrote nothing");
+        assert_eq!(now.revision, first.revision);
+
+        // Deleted since it was read: stale, at the empty revision, and
+        // not resurrected.
+        assert!(be.delete_chart(&made.slug).unwrap());
+        assert_eq!(
+            be.upsert_chart(now.clone()),
+            Err(ResourcesError::Stale(String::new()))
+        );
+        assert!(be.chart(&made.slug).is_err());
+
+        // No revision is no condition.
+        be.upsert_chart(ChartDoc {
+            revision: String::new(),
+            ..now
+        })
+        .expect("an unconditional save still lands");
+    }
+
+    #[test]
+    fn a_song_save_against_an_old_revision_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = backend(&dir);
+        let made = be
+            .upsert_song(SongDoc {
+                title: "Opener".into(),
+                ..SongDoc::default()
+            })
+            .unwrap();
+        let read = be.song(&made.slug).unwrap();
+        assert_eq!(read.revision, made.revision);
+        let first = be
+            .upsert_song(SongDoc {
+                key: "G".into(),
+                ..read.clone()
+            })
+            .unwrap();
+        assert_eq!(
+            be.upsert_song(SongDoc {
+                key: "A".into(),
+                ..read
+            }),
+            Err(ResourcesError::Stale(first.revision.clone()))
+        );
+        let now = be.song(&made.slug).unwrap();
+        assert_eq!(now.key, "G");
+        assert_eq!(now.revision, first.revision);
     }
 
     #[test]
@@ -2483,6 +2664,7 @@ mod tests {
         // 3. One that asks takes it, and the other is cleared in the
         //    same operation.
         be.upsert_chart(ChartDoc {
+            revision: String::new(),
             slug: "doxology-condensed-live".into(),
             is_default: true,
             ..arrangement("Doxology", "song:doxology", "condensed live", true)
@@ -2527,6 +2709,7 @@ mod tests {
         // Attaching it later is an ordinary re-save, and *then* it is
         // the song's first chart and therefore its default.
         be.upsert_chart(ChartDoc {
+            revision: String::new(),
             slug: "sketch".into(),
             ..arrangement("Sketch", "song:doxology", "", false)
         })
@@ -2548,6 +2731,7 @@ mod tests {
             ("condensed live", "2026-03-01T00:00:00Z"),
         ] {
             be.upsert_chart(ChartDoc {
+                revision: String::new(),
                 updated_at: stamp.into(),
                 ..arrangement(
                     "Doxology",
@@ -2591,6 +2775,7 @@ mod tests {
             ("acoustic", "2026-02-01T00:00:00Z"),
         ] {
             be.upsert_chart(ChartDoc {
+                revision: String::new(),
                 updated_at: stamp.into(),
                 ..arrangement("Doxology", "song:doxology", label, false)
             })
@@ -2606,6 +2791,7 @@ mod tests {
         assert_eq!(default_of(&be, "song:doxology").len(), 2);
 
         be.upsert_chart(ChartDoc {
+            revision: String::new(),
             slug: "doxology-original".into(),
             updated_at: "2026-01-01T00:00:00Z".into(),
             ..arrangement("Doxology", "song:doxology", "original", false)
@@ -2638,6 +2824,7 @@ mod tests {
                 s.spawn(move || {
                     for _ in 0..25 {
                         be.upsert_chart(ChartDoc {
+                            revision: String::new(),
                             slug: slug.into(),
                             ..arrangement("Doxology", "song:doxology", label, true)
                         })

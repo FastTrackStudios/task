@@ -529,6 +529,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
                     .await?;
             let song = resources
                 .upsert_song(SongDoc {
+                    revision: String::new(),
                     slug: String::new(),
                     title: title.clone(),
                     writers: artist.into_iter().collect(),
@@ -544,6 +545,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
                 Some(
                     resources
                         .upsert_chart(ChartDoc {
+                            revision: String::new(),
                             slug: String::new(),
                             title: title.clone(),
                             source,

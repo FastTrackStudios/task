@@ -105,6 +105,7 @@ const SONG_LIBRARY: &str = "songs";
 
 fn chart(title: &str, source: &str) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         source: source.into(),
@@ -172,6 +173,7 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
         .resources()
         .await
         .upsert_song(resources_proto::SongDoc {
+            revision: String::new(),
             slug: String::new(),
             title: "Hosanna".into(),
             writers: vec!["Alice".into()],

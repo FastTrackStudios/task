@@ -254,6 +254,30 @@ pub struct ChartDoc {
     #[serde(default)]
     #[facet(default)]
     pub updated_at: String,
+    /// The chart's **revision** — the etag of a safe save.
+    ///
+    /// Server-issued, never computed by an app: [`ResourcesService::chart`]
+    /// fills it, and [`ChartUpsert::revision`] hands back the new one
+    /// after a save. It is the sha-256 of the chart's document, the same
+    /// string `VaultSync` reports for that path, so it means the same
+    /// thing on every node holding the document — a revision read on a
+    /// laptop is checked correctly against a phone's copy.
+    ///
+    /// On an upsert it is the *expected* revision:
+    ///
+    /// - **set** — the save lands only if the chart is still at this
+    ///   revision. Anything else — somebody else's save, a collaborative
+    ///   edit flushed, a change pulled from another device, the chart
+    ///   deleted — is [`ResourcesError::Stale`], and nothing is written.
+    ///   This is the mode for anything a person edits.
+    /// - **empty** — no condition: the save replaces what is there. That
+    ///   is a create, or a writer that owns the chart outright (an
+    ///   import, a migration). It is also what every client written
+    ///   before revisions existed sends, which is why it stays the
+    ///   unconditional mode rather than becoming an error.
+    #[serde(default)]
+    #[facet(default)]
+    pub revision: String,
 }
 
 /// What the server laid down for one chart.
@@ -268,6 +292,11 @@ pub struct ChartUpsert {
     pub rel_path: String,
     /// `true` when the chart did not exist before this call.
     pub created: bool,
+    /// The chart's revision *after* this save — what to send as
+    /// [`ChartDoc::revision`] on the next one, with no re-read.
+    #[serde(default)]
+    #[facet(default)]
+    pub revision: String,
 }
 
 /// One chart, as `list_charts` reports it — everything but the source,
@@ -394,6 +423,14 @@ pub struct SongDoc {
     #[serde(default)]
     #[facet(default)]
     pub updated_at: String,
+    /// The song's revision — the etag of a safe save, exactly as
+    /// [`ChartDoc::revision`]: filled by [`ResourcesService::song`],
+    /// returned by [`SongUpsert::revision`], and on an upsert the
+    /// revision the save expects. Set, a song that has moved on answers
+    /// [`ResourcesError::Stale`]; empty, the save is unconditional.
+    #[serde(default)]
+    #[facet(default)]
+    pub revision: String,
 }
 
 /// What the server laid down for one song.
@@ -405,6 +442,10 @@ pub struct SongUpsert {
     pub rel_path: String,
     /// `true` when the song did not exist before this call.
     pub created: bool,
+    /// The song's revision after this save.
+    #[serde(default)]
+    #[facet(default)]
+    pub revision: String,
 }
 
 /// One song, as `list_songs` reports it.
@@ -755,6 +796,13 @@ pub enum ResourcesError {
     Io(String),
     #[error("bad request: {0}")]
     BadRequest(String),
+    /// A safe save refused: the chart or song is no longer at the
+    /// revision the caller sent ([`ChartDoc::revision`]). Carries the
+    /// current revision — empty when the thing is gone — so the caller
+    /// can show a person both versions and let them choose, then save
+    /// again against the revision it now holds. Nothing was written.
+    #[error("stale: the document moved on (now at `{0}`)")]
+    Stale(String),
 }
 
 #[architect::rpc]
@@ -786,6 +834,48 @@ pub trait ResourcesService {
     /// and sidecars are untouched (links are keyed by slug). Returns
     /// how many manifests moved.
     fn relocate_sermons(&self, folder: &str, wiki: &str) -> Result<u32, ResourcesError>;
+
+    /// Create or replace a song document at
+    /// `<vault>/Assets/Songs/<slug>.md` (ADR 0004).
+    ///
+    /// The identity is the slug: pass one to update, leave it empty and
+    /// the server derives it from the title and suffixes a collision,
+    /// exactly as `upsert_chart` does. The app owns the frontmatter
+    /// keys it writes; every other key and the whole body — the prose
+    /// somebody wrote about the song — survive verbatim.
+    ///
+    /// Nothing about a song's *arrangements* is stored here. A chart
+    /// names its song and the song is silent about its charts, which is
+    /// the only direction that can be maintained by one write: adding an
+    /// arrangement is an `upsert_chart`, and nothing has to be kept in
+    /// step. `list_charts("song:<slug>")` is the read.
+    ///
+    /// An empty title is a `BadRequest`.
+    ///
+    /// A [`SongDoc::revision`] makes it a safe save, exactly as on
+    /// `upsert_chart`: a song that has moved on is
+    /// [`ResourcesError::Stale`] and nothing is written.
+    fn upsert_song(&self, song: SongDoc) -> Result<SongUpsert, ResourcesError>;
+
+    /// One song by slug, with its current [`SongDoc::revision`].
+    fn song(&self, slug: &str) -> Result<SongDoc, ResourcesError>;
+
+    /// Every song on the Assets shelf, by slug.
+    fn list_songs(&self) -> Result<Vec<SongSummary>, ResourcesError>;
+
+    /// Delete a song document. `false` when there was nothing there.
+    ///
+    /// Its charts are **not** deleted, and this is the same choice ADR
+    /// 0003 made for a collection holding a deleted chart: an
+    /// arrangement of a song that is gone still parses, still has a
+    /// source somebody may want, and reads as attached to a song that
+    /// does not resolve. A legible state, not an error — and one a
+    /// person can fix by re-creating the song, which deleting the
+    /// charts would have made impossible.
+    ///
+    /// The media under `<org>/resources/songs/<slug>/` is not touched
+    /// either. It is a different tier and a different lifetime.
+    fn delete_song(&self, slug: &str) -> Result<bool, ResourcesError>;
 
     /// Create or replace a chart under `<org>/resources/charts/`:
     /// `<slug>.kf` holds [`ChartDoc::source`] verbatim and `<slug>.md`
@@ -836,47 +926,23 @@ pub trait ResourcesService {
     /// and no way to tell which write was last; enforced here, the
     /// second write clears the first, and the song has exactly one
     /// default either way round.
-    /// Create or replace a song document at
-    /// `<vault>/Assets/Songs/<slug>.md` (ADR 0004).
     ///
-    /// The identity is the slug: pass one to update, leave it empty and
-    /// the server derives it from the title and suffixes a collision,
-    /// exactly as `upsert_chart` does. The app owns the frontmatter
-    /// keys it writes; every other key and the whole body — the prose
-    /// somebody wrote about the song — survive verbatim.
+    /// # Saving safely
     ///
-    /// Nothing about a song's *arrangements* is stored here. A chart
-    /// names its song and the song is silent about its charts, which is
-    /// the only direction that can be maintained by one write: adding an
-    /// arrangement is an `upsert_chart`, and nothing has to be kept in
-    /// step. `list_charts("song:<slug>")` is the read.
-    ///
-    /// An empty title is a `BadRequest`.
-    fn upsert_song(&self, song: SongDoc) -> Result<SongUpsert, ResourcesError>;
-
-    /// One song by slug.
-    fn song(&self, slug: &str) -> Result<SongDoc, ResourcesError>;
-
-    /// Every song on the Assets shelf, by slug.
-    fn list_songs(&self) -> Result<Vec<SongSummary>, ResourcesError>;
-
-    /// Delete a song document. `false` when there was nothing there.
-    ///
-    /// Its charts are **not** deleted, and this is the same choice ADR
-    /// 0003 made for a collection holding a deleted chart: an
-    /// arrangement of a song that is gone still parses, still has a
-    /// source somebody may want, and reads as attached to a song that
-    /// does not resolve. A legible state, not an error — and one a
-    /// person can fix by re-creating the song, which deleting the
-    /// charts would have made impossible.
-    ///
-    /// The media under `<org>/resources/songs/<slug>/` is not touched
-    /// either. It is a different tier and a different lifetime.
-    fn delete_song(&self, slug: &str) -> Result<bool, ResourcesError>;
-
+    /// A save that names a [`ChartDoc::revision`] lands only on that
+    /// revision; anything else is [`ResourcesError::Stale`] carrying the
+    /// current one, and nothing is written — not the chart, and not a
+    /// sibling's default flag. Two people editing one chart in two
+    /// clients each hold the revision they read; the first save wins,
+    /// and the second is told rather than overwriting it. The check and
+    /// the write are one step on the node (the vault's write lock), so
+    /// there is no window between them. [`ChartUpsert::revision`] is the
+    /// revision to hold next. An empty revision is the old,
+    /// unconditional save.
     fn upsert_chart(&self, chart: ChartDoc) -> Result<ChartUpsert, ResourcesError>;
 
-    /// One chart by slug, source included.
+    /// One chart by slug, source included, with its current
+    /// [`ChartDoc::revision`] — the one to send back on the next save.
     fn chart(&self, slug: &str) -> Result<ChartDoc, ResourcesError>;
 
     /// Every chart under `resources/charts/`, by slug.

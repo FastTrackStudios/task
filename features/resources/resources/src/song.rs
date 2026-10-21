@@ -195,6 +195,7 @@ mod tests {
 
     fn song() -> SongDoc {
         SongDoc {
+            revision: String::new(),
             slug: String::new(),
             title: "Opening Night".into(),
             writers: vec!["A. Wright".into()],

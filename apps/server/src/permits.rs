@@ -822,6 +822,9 @@ table!(COLLECTION, "collection", "collections/**", [
     // gathered goes with it — the songs and charts stay — but a set list
     // somebody built is work, and its removal is worth a line.
     wr "rename", wa "delete",
+    // The safe whole-list save: conditional on the revision the editor
+    // read, so it writes no more than `rename` + `reorder` already may.
+    wr "save",
 ]);
 // Live sessions: a setlist played together. Joining admits the set's docs
 // for sync (DocSync gates the edits themselves) and writes nothing of the

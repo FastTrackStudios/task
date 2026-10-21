@@ -109,6 +109,7 @@ mod plugin_toggle_e2e;
 mod presence_relay;
 mod ranged_routes_e2e;
 mod rename_org;
+mod safe_saves_e2e;
 mod rendition_route;
 mod scheduling_durability;
 mod schema_stamps_e2e;

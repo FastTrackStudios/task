@@ -16,6 +16,36 @@ pub enum CollectionError {
     BadRequest(String),
     #[error("io: {0}")]
     Io(String),
+    /// A [`CollectionService::save`] refused: the collection is no
+    /// longer at the revision the caller read. Carries the revision it
+    /// is at now. Nothing was written — re-read it with `get`, show the
+    /// person what changed, and save again against the new revision.
+    #[error("stale: the collection moved on (now at revision {0})")]
+    Stale(u64),
+}
+
+/// A whole-collection edit, made against the revision it was read at —
+/// what a set-list editor sends when the person presses save.
+///
+/// `title` and `items` *replace* the collection's: `items` is the full
+/// order, head first, exactly as the editor shows it. Kind, org and id
+/// are not here because a save never changes what a collection is or
+/// whose it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Facet)]
+pub struct CollectionSave {
+    /// The collection to save over.
+    pub id: String,
+    /// The [`Collection::revision`] the caller read. The save lands only
+    /// if the collection is still at it; there is no unconditional form,
+    /// because an unconditional whole-list write is precisely how one
+    /// person's set list silently replaces another's.
+    pub revision: u64,
+    /// The new title; blank is refused, as on `create` and `rename`.
+    pub title: String,
+    /// Every item, in order. A node may appear once; a collection may
+    /// not come to contain itself.
+    #[serde(default)]
+    pub items: Vec<NodeRef>,
 }
 
 /// Where to place an item — `after` a given node, or at the head when
@@ -83,4 +113,22 @@ pub trait CollectionService {
     /// `placement.after` (or to the tail when `after` is `None`). Only
     /// that item's rank is recomputed.
     fn reorder(&self, placement: Placement) -> Result<Collection, CollectionError>;
+
+    /// Save a whole collection — its title and its full order — against
+    /// the revision the caller read. This is the safe save for a set
+    /// list, a show or a library edited as one thing.
+    ///
+    /// Two people editing one set list each hold the revision they
+    /// read; the first save lands and moves the revision on, and the
+    /// second is [`CollectionError::Stale`] rather than an overwrite.
+    /// Any change counts — a rename, or one item added through
+    /// `add_item` — because the editor's list was made without it.
+    ///
+    /// `add_item`, `remove_item` and `reorder` stay unconditional on
+    /// purpose: each names one item, so two of them from two people
+    /// compose instead of one erasing the other. It is the whole-list
+    /// write that loses work, and it is the one that is checked.
+    ///
+    /// Returns the saved collection, carrying its new revision.
+    fn save(&self, edit: CollectionSave) -> Result<Collection, CollectionError>;
 }

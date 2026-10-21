@@ -258,6 +258,7 @@ never re-lists the tree.
 - [ ] A fresh account signs in and lands in its personal org with no manual step.
 - [ ] The app's roots are found by `ensure_root` on every start, never created twice.
 - [ ] Every save passes an `Expect` (`create_only` or `replacing(etag)`) unless last-writer-wins is genuinely what the person wants.
+- [ ] Every edit of a chart, song or setlist sends the `revision` it was read at (see *Saving safely*).
 - [ ] Every manifest that names bytes carries a pinned `ContentRef`.
 - [ ] A second machine signed in as the same person lists the manifests and fetches the bytes.
 - [ ] A late save from a second machine surfaces `Stale` to the person instead of overwriting.
@@ -329,6 +330,54 @@ and let them choose; re-fetch the current etag with `files.entry(root, path)`.
 The etag is issued by the server (`CatalogueEntry::content`); an app never
 computes one.
 
+#### Charts, songs and setlists
+
+The library lanes follow the same rule, with a **revision** in place of the
+etag. Every read carries one, and a save that hands it back lands only if
+nothing has changed since:
+
+| what | read it from | save with | refused as |
+|---|---|---|---|
+| chart | `resources.chart(slug)` → `ChartDoc::revision` | `upsert_chart(ChartDoc { revision, .. })` | `ResourcesError::Stale(now)` |
+| song | `resources.song(slug)` → `SongDoc::revision` | `upsert_song(SongDoc { revision, .. })` | `ResourcesError::Stale(now)` |
+| setlist, show, library | `collections.get(id)` → `Collection::revision` | `collections.save(CollectionSave { id, revision, title, items })` | `CollectionError::Stale(now)` |
+
+```rust
+let chart = resources.chart("track-one".into()).await?;
+let edited = ChartDoc { source: new_source, ..chart }; // keeps `revision`
+match resources.upsert_chart(edited).await {
+    Ok(saved) => held_revision = saved.revision, // the next save's revision
+    Err(VoxError::User(e)) if matches!(*e, ResourcesError::Stale(_)) => {
+        // Somebody saved first. Nothing was written: re-read, show the
+        // person both versions, save again against the new revision.
+    }
+    Err(e) => return Err(e.into()),
+}
+```
+
+- **Keep the revision with what the person is editing**, and send it back
+  unchanged; the upsert's answer (`ChartUpsert::revision`,
+  `SongUpsert::revision`, the saved `Collection`) is the one to hold next, so
+  a second save needs no re-read.
+- A chart's or song's revision is the sha-256 of its document — the same
+  string `VaultSync` reports for `rel_path` — so it means the same thing on
+  every node: a revision read on a laptop's node is checked correctly on a
+  phone's after the devices sync, with no host anywhere. Anything that changes
+  the document makes it stale: another app's save, a collaborative edit
+  flushed, a change pulled from another device, the chart deleted
+  (`Stale("")`), or the server moving the song's default flag off it.
+- An **empty** revision is the unconditional save. That is what a create
+  sends, and what every app built before revisions sends, so older Keyflow
+  builds keep working exactly as before — and keep overwriting. Send the
+  revision for anything a person edits.
+- `CollectionService::save` replaces a collection's title and its whole
+  order, and has no unconditional form. `add_item`, `remove_item` and
+  `reorder` stay unconditional because each names one item and two of them
+  compose; they still move the revision on, so a list an editor is holding
+  goes stale when anyone changes it.
+- Over MCP (`read_chart` / `write_chart`), the same revision is the
+  `revision` field of the read and the `revision` argument of the write.
+
 ### Access
 
 What a person may do is their org role united with any grants: owner, admin
@@ -389,5 +438,6 @@ The current list of gaps is `docs/spec/unmet.md`; the full surface is
 | Files rules | `features/files/spec/files.md` |
 | manifests | `features/resources/resources-proto/src/lib.rs` |
 | collections | `features/collection/collection-proto/src/` |
+| safe saves for charts, songs and setlists | `tests/integration/tests/it/safe_saves.rs`; host absent: `apps/server/tests/it/safe_saves_e2e.rs` |
 | the end-to-end chapter an app should mirror | `tests/integration/tests/it/app_store.rs` |
 | the planted example (a sample bound and pinned) | `apps/server/src/demo_cli.rs` → `plant_bound_sample` |

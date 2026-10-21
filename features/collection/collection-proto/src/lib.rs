@@ -34,7 +34,7 @@ pub mod service;
 
 pub use links_proto::{NodeKind, NodeRef};
 pub use model::{Collection, CollectionItem, CollectionKind};
-pub use service::{CollectionError, CollectionService, Placement};
+pub use service::{CollectionError, CollectionSave, CollectionService, Placement};
 
 #[cfg(feature = "vox")]
 pub use service::{
