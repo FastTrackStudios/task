@@ -19,7 +19,7 @@
 #
 # ONCE PER RELEASE: main moves only by release PRs from `dev` (see
 # skills/release-workflow.md), so a push here is a release, and the build
-# is marked with the release's version (the Version step). The optional
+# is marked with the release's version (the Version step). The
 # `desktop-release` job below also cuts the Developer-ID `desktop-v<ver>`
 # release the in-app updater follows.
 
@@ -46,6 +46,11 @@ on:
         description: "CFBundleShortVersionString. Empty = the workspace version in Cargo.toml (the release's)."
         required: false
         default: ""
+      desktop_release:
+        description: "Developer-ID desktop job: skip, or build (build + notarize, never publish). Publishing happens only on a push to main."
+        type: choice
+        options: [skip, build]
+        default: skip
 
 # Serialize with the iOS builds — one Apple build at a time on the single
 # Mac. Shared group name across the workflows; queue, never cancel.
@@ -148,17 +153,27 @@ jobs:
   # installs) as GitHub release `desktop-v<version>` — the same thing
   # `just release-desktop <version>` does by hand on airlock.
   #
-  # OFF until the Captain turns it on (repo variable
-  # TASK_DESKTOP_AUTO_RELEASE = true): it is a second full desktop build
-  # on the one Mac per release, and it needs the Developer-ID identity and
-  # notarization credentials that until now were only used interactively.
-  # Run it by hand once (`just release-desktop $(just version)` on
-  # airlock) before enabling. Skips itself when desktop-v<version> exists,
-  # so a re-run never collides with a hand-made release.
+  # ON for every release (the Captain's call): each push to main publishes
+  # `desktop-v<release version>`, the version read from [workspace.package]
+  # in Cargo.toml by scripts/release.sh — the same number TestFlight, iOS
+  # and the server release carry, so the desktop can never drift onto its
+  # own track again (it sat at 0.0.5 while the release was 0.2.x).
+  #
+  # It runs even when the TestFlight job fails (`!cancelled()`): the App
+  # Store and the direct download are separate channels, and one Apple
+  # rejection must not take the other one down with it. `needs` stays, so
+  # the two builds still run one after the other on the one Mac.
+  #
+  # workflow_dispatch with desktop_release=build runs the whole thing —
+  # build, Developer-ID sign, notarize, staple, Gatekeeper check, manifest —
+  # and stops before `gh release create` (PUBLISH=0), so a fix branch can
+  # prove the job without publishing. Only a push to main publishes.
+  # Skips itself when desktop-v<version> exists, so a re-run never
+  # collides with a hand-made release.
   desktop-release:
     name: Developer-ID desktop release (desktop-v*)
     needs: testflight
-    if: ${{ vars.TASK_DESKTOP_AUTO_RELEASE == 'true' && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.desktop_release == 'build') }}
     runs-on: [self-hosted, macos, airlock]
     timeout-minutes: 90
     permissions:
@@ -173,6 +188,9 @@ jobs:
       - name: Publish desktop-v<version>
         env:
           GH_TOKEN: ${{ github.token }}
+          # 1 only on a push to main; a dispatch builds and notarizes but
+          # never publishes.
+          PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '0' }}
           KEYCHAIN: fts-build.keychain
           KEYCHAIN_PW: fts-build
           TASK_SENTRY_DSN: ${{ secrets.TASK_SENTRY_DSN }}
@@ -181,10 +199,11 @@ jobs:
           TASK_VOX_URL_NATIVE: ${{ vars.TASK_VOX_URL_NATIVE || 'wss://task.fasttrackstudio.app/vox' }}
         run: |
           set -euo pipefail
-          export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+          export PATH="/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:$PATH"
           export NIX=/nix/var/nix/profiles/default/bin/nix
           v="$(bash scripts/release.sh version)"
-          if gh release view "desktop-v$v" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          echo "desktop version: $v (PUBLISH=$PUBLISH)"
+          if [ "$PUBLISH" = 1 ] && gh release view "desktop-v$v" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "desktop-v$v already published — nothing to do"
             exit 0
           fi

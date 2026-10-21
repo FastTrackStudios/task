@@ -240,7 +240,14 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
       done
 # The nested agent binary, signed before the bundle that contains it —
 # inside-out, or the outer signature is invalidated by signing it after.
-codesign --force --keychain "$KEYCHAIN" --timestamp --sign "$SIGN_ID" \
+# App Store Connect requires EVERY executable in the package to carry the
+# App Sandbox entitlement (90296); a helper signed bare is rejected at
+# upload, which is what failed every task-macos run on main. The helper
+# gets app-sandbox + inherit (Task-helper.entitlements), not the app's set.
+HELPER_ENTITLEMENTS="$SCRIPT_DIR/Task-helper.entitlements"
+plutil -lint "$HELPER_ENTITLEMENTS" >/dev/null
+codesign --force --keychain "$KEYCHAIN" --timestamp \
+    --entitlements "$HELPER_ENTITLEMENTS" --sign "$SIGN_ID" \
     "$APP/Contents/MacOS/fts-files-daemon"
 codesign --force --keychain "$KEYCHAIN" --timestamp \
     --entitlements /tmp/task-ent.plist --sign "$SIGN_ID" "$APP"

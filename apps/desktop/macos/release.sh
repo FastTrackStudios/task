@@ -18,6 +18,11 @@
 # Needs what build-dmg.sh needs (the Developer ID identity in the build
 # keychain, ~/.appstoreconnect/config.env for notarization) and `gh`
 # signed in with write access to the repo.
+#
+# PUBLISH=0 does everything up to the release itself — build, sign,
+# notarize, staple, the Gatekeeper check, the zip and manifest — and stops
+# before `gh release create`. CI's workflow_dispatch uses it to prove the
+# job on a branch without publishing anything.
 set -euo pipefail
 
 VERSION="${1:?usage: release.sh <version, e.g. 0.0.3>}"
@@ -29,8 +34,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
 TAG="desktop-v$VERSION"
+PUBLISH="${PUBLISH:-1}"
 
-if gh release view "$TAG" --repo FastTrackStudios/task >/dev/null 2>&1; then
+if [ "$PUBLISH" = 1 ] && gh release view "$TAG" --repo FastTrackStudios/task >/dev/null 2>&1; then
     echo "release $TAG already exists — pick the next version" >&2
     exit 1
 fi
@@ -42,6 +48,12 @@ MARKETING_VER="$VERSION" OUT_DIR="$OUT_DIR" \
 for f in Task-macos.dmg Task-macos.zip latest-macos.json; do
     [ -f "$OUT_DIR/$f" ] || { echo "build-dmg.sh produced no $f" >&2; exit 1; }
 done
+
+if [ "$PUBLISH" != 1 ]; then
+    echo "=== PUBLISH=$PUBLISH — built and notarized $TAG, not publishing ==="
+    cat "$OUT_DIR/latest-macos.json"
+    exit 0
+fi
 
 echo "=== publishing $TAG ==="
 gh release create "$TAG" \
