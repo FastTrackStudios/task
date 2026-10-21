@@ -1,0 +1,30 @@
+filters:
+  and:
+    - file.inFolder("Gigs")
+    - 'type == "gig"'
+formulas:
+  opener_key: "note.opener.key"
+  venue_city: 'if(note.venue.exists(), note.venue.city, "TBD")'
+  band_cut: "fee * 0.8"
+  plays_paper_moon: 'file.hasLink("Paper Moon")'
+views:
+  - type: table
+    name: Upcoming gigs
+    order:
+      - file.name
+      - date
+      - formula.venue_city
+      - formula.opener_key
+      - fee
+      - formula.band_cut
+    sort:
+      - property: date
+        direction: ASC
+  - type: table
+    name: Gigs playing Paper Moon
+    filters:
+      and:
+        - file.hasLink("Paper Moon")
+    order:
+      - file.name
+      - formula.venue_city

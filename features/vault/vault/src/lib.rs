@@ -64,6 +64,9 @@ pub use vault_obsidian::GraphBackend;
 pub use vault_live::sync;
 #[cfg(feature = "live")]
 pub use vault_live::watcher;
+/// The `.base` parser and evaluator (`parse`, `BaseEval`, `view_table`).
+#[cfg(feature = "live")]
+pub use vault_live::bases;
 /// Who may write a file: the guard a host installs on the backend.
 #[cfg(feature = "live")]
 pub use vault_live::write_guard;

@@ -452,6 +452,26 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             },
         },
         ToolDef {
+            name: "query_base",
+            plugin: "core",
+            description: "Run an Obsidian Bases query over the vault: a `.base` file by path, or an \
+                          inline base YAML. Returns each view's rows (filtered, sorted, grouped) \
+                          with their column values and every formula's value. Filters and \
+                          formulas may use file.hasLink(), .exists(), file.links and link-follow \
+                          (`note.song.key` reads the linked note's `key`).",
+            schema: || {
+                obj(
+                    json!({
+                        "path": s_("Vault-relative path of a .base file, e.g. 'Gigs/Gigs.base'. Give this or `yaml`."),
+                        "yaml": s_("An inline base (the YAML a .base file holds). Give this or `path`."),
+                        "view": s_("Run only this view (case-insensitive name). Omit to run every view."),
+                        "limit": i_("Max rows per view (default 50, max 200)."),
+                    }),
+                    &[],
+                )
+            },
+        },
+        ToolDef {
             name: "append_note",
             plugin: "core",
             description: "Append markdown to the end of an existing note. Use for adding to a \
@@ -3377,6 +3397,77 @@ fn call_tool(
                 .map_err(|e| backend_err("note", &path, &e))?;
             let text = String::from_utf8_lossy(&bytes.0).to_string();
             Ok(json!({ "path": path, "content": text }))
+        }
+
+        // t[impl vault.bases.query]
+        "query_base" => {
+            let (source, text) = match (arg_str(args, "path"), arg_str(args, "yaml")) {
+                (Some(path), None) => {
+                    let bytes = org
+                        .vault_sync
+                        .get_file(VAULT_ID, &path)
+                        .map_err(|e| backend_err("base", &path, &e))?;
+                    (path, String::from_utf8_lossy(&bytes.0).into_owned())
+                }
+                (None, Some(yaml)) => ("(inline)".to_owned(), yaml),
+                _ => {
+                    return Err(ToolFailure::Message(
+                        "pass exactly one of `path` (a .base file in the vault) or `yaml` (an inline base)"
+                            .into(),
+                    ));
+                }
+            };
+            let base = vault::bases::parse(&text)
+                .map_err(|e| ToolFailure::Message(format!("`{source}` is not a valid base: {e}")))?;
+            // Every note in THIS org's vault is the row set (and the
+            // link-resolution universe) — read through the same
+            // VaultSync backend read_note uses, so nothing outside the
+            // org the caller was admitted to is ever visible.
+            let manifest = org
+                .vault_sync
+                .manifest(VAULT_ID)
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
+            let notes: Vec<(String, String)> = manifest
+                .files
+                .iter()
+                .filter(|f| f.path.ends_with(".md"))
+                .filter_map(|f| {
+                    let bytes = org.vault_sync.get_file(VAULT_ID, &f.path).ok()?;
+                    Some((f.path.clone(), String::from_utf8_lossy(&bytes.0).into_owned()))
+                })
+                .collect();
+            let rows = vault::obsidian::rows_from_markdown(
+                notes.iter().map(|(p, s)| (p.as_str(), s.as_str())),
+            );
+            let view = arg_str(args, "view");
+            let tables =
+                vault::obsidian::run_base(&base, &rows, view.as_deref()).map_err(|e| {
+                    let names: Vec<String> =
+                        base.views.iter().map(|v| format!("`{}`", v.name)).collect();
+                    ToolFailure::Message(format!("{e}; the base's views are: {}", names.join(", ")))
+                })?;
+            let limit = arg_limit(args);
+            let views: Vec<Value> = tables
+                .into_iter()
+                .map(|mut t| {
+                    let total: usize = t.groups.iter().map(|g| g.rows.len()).sum();
+                    let mut budget = limit;
+                    for g in &mut t.groups {
+                        g.rows.truncate(budget);
+                        budget -= g.rows.len();
+                    }
+                    t.groups.retain(|g| !g.rows.is_empty() || total == 0);
+                    json!({
+                        "name": t.name,
+                        "type": t.kind,
+                        "columns": t.columns,
+                        "total": total,
+                        "truncated": total > limit,
+                        "groups": t.groups,
+                    })
+                })
+                .collect();
+            Ok(json!({ "base": source, "views": views }))
         }
 
         "append_note" => {
