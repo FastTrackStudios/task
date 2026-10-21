@@ -346,7 +346,7 @@ async fn an_asset_shelf_crosses_a_boundary_and_leaves_an_oversized_take_behind()
         .await
         .grant_source_read(SourceKind::Assets, SONGS.to_owned())
         .await
-        .expect("a shelf is published by existing on the tier");
+        .expect("ACME's song shelf is public in the seed, so a read secret opens it");
 
     let subs = victor.wiki_subscriptions().await;
     subs.trust_source(SourceGrant {
@@ -525,8 +525,9 @@ async fn a_project_on_another_server_names_the_gap_rather_than_reporting_an_orph
     let victor = s.as_victor().await;
     let subs = alice.wiki_subscriptions().await;
 
-    // VNT publishes its projects tier the way every org does — by having
-    // one — so the grant is mintable and it is the *refresh* that draws
+    // VNT's Shared Project is unlisted in the seed
+    // (`example_org::SHARED_SOURCES`), so the grant is mintable and it is
+    // the *refresh* that draws
     // the line.
     // A directory on the tier is not a project: without a `project.md` it
     // is unclassified content and admits nobody
@@ -538,15 +539,17 @@ async fn a_project_on_another_server_names_the_gap_rather_than_reporting_an_orph
         .flatten()
         .filter(|e| e.path().join(org_proto::PROJECT_PAGE).is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .next()
-        .expect("the seed declares at least one project on VNT");
+        // The one the seed opens to other orgs. Every other project is
+        // private (`wiki.access.shelf-visibility`).
+        .find(|name| name == "shared-project")
+        .expect("the seed declares VNT's Shared Project");
 
     let secret = victor
         .wiki_subscriptions()
         .await
         .grant_source_read(SourceKind::Projects, project.clone())
         .await
-        .expect("a project is published by existing on the tier");
+        .expect("an unlisted project is open to a read secret");
     subs.trust_source(SourceGrant {
         domain: VNT_DOMAIN.to_owned(),
         endpoint: s.orgs.vnt.endpoint.id().to_string(),

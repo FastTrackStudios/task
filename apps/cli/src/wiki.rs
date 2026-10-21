@@ -882,6 +882,51 @@ pub(crate) enum WikiSourcesCmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// **Publisher side, owner or admin.** Set who outside this org may
+    /// subscribe to an asset shelf or a project: `public`, `unlisted` or
+    /// `private` (the default).
+    Visibility {
+        slug: String,
+        visibility: String,
+        #[arg(long, default_value = "assets")]
+        kind: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Publisher side, owner or admin.** Grant one asset shelf or
+    /// project to one subscriber org, given by its slug on this server or
+    /// its domain on another.
+    Allow {
+        slug: String,
+        /// The subscriber org's slug, or its federation domain.
+        #[arg(long)]
+        to: String,
+        #[arg(long, default_value = "assets")]
+        kind: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Publisher side, owner or admin.** Revoke a grant made with
+    /// `allow`, by its id.
+    Disallow {
+        id: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Publisher side, owner or admin.** Every grant made with `allow`,
+    /// revoked ones included.
+    Allowed {
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// **Subscriber side.** Record a grant received from another server:
     /// where that domain is, and the secret that reads one source there.
     Trust {
@@ -4469,6 +4514,28 @@ async fn run_wiki_sources(cmd: WikiSourcesCmd) -> eyre::Result<()> {
         })
     }
 
+    /// The owner-only `sharing` service: shelf and project visibility,
+    /// and source grants (`wiki.access.source-grant`).
+    async fn sharing(
+        org: Option<String>,
+        server: Option<String>,
+    ) -> eyre::Result<share_proto::SharingServiceClient> {
+        let slug = resolve_active_org(org)?;
+        establish_for_url(&resolve_org_vox_url(server, &slug)).await
+    }
+
+    /// The tiers a visibility or a source grant is about.
+    fn tier_of(s: &str) -> eyre::Result<share_proto::SourceTier> {
+        Ok(match kind_of(s)? {
+            SourceKind::Assets => share_proto::SourceTier::Assets,
+            SourceKind::Projects => share_proto::SourceTier::Projects,
+            other => eyre::bail!(
+                "a {} declares its own visibility; this is for assets and projects",
+                other.noun()
+            ),
+        })
+    }
+
     /// The subscriber key, in the same spelling `Subscriber::key` writes
     /// on disk — so what a person reads in `subscriptions.json` is what
     /// they can type back.
@@ -4634,6 +4701,79 @@ async fn run_wiki_sources(cmd: WikiSourcesCmd) -> eyre::Result<()> {
                 "It binds on their next call. The copy they already hold keeps resolving — \
                  what ends is the refreshing."
             );
+        }
+        WikiSourcesCmd::Visibility {
+            slug,
+            visibility,
+            kind,
+            org,
+            server,
+        } => {
+            let v = match visibility.trim().to_ascii_lowercase().as_str() {
+                "public" => share_proto::SourceVisibility::Public,
+                "unlisted" => share_proto::SourceVisibility::Unlisted,
+                "private" => share_proto::SourceVisibility::Private,
+                other => eyre::bail!("`{other}` is not public, unlisted or private"),
+            };
+            sharing(org, server)
+                .await?
+                .set_source_visibility(tier_of(&kind)?, slug.clone(), v)
+                .await?;
+            println!("{kind}/{slug} is now {}", v.as_str());
+        }
+        WikiSourcesCmd::Allow {
+            slug,
+            to,
+            kind,
+            org,
+            server,
+        } => {
+            let minted = sharing(org, server)
+                .await?
+                .grant_source(share_proto::NewSourceGrant {
+                    tier: tier_of(&kind)?,
+                    slug: slug.clone(),
+                    subscriber: to.clone(),
+                })
+                .await?;
+            println!("granted {kind}/{slug} to {to}");
+            println!("id      {}", minted.grant.id);
+            println!("secret  {}", minted.secret);
+            println!();
+            println!(
+                "A subscriber on this server needs nothing more. One on another server \
+                 records the secret with `task wiki sources trust <domain>/{slug} --kind \
+                 {kind} --endpoint <endpoint id> --secret <secret>`. It is shown once."
+            );
+        }
+        WikiSourcesCmd::Disallow { id, org, server } => {
+            let id: uuid::Uuid = id
+                .parse()
+                .map_err(|e| eyre::eyre!("`{id}` is not a grant id: {e}"))?;
+            let g = sharing(org, server).await?.revoke_source_grant(id).await?;
+            println!(
+                "revoked {}/{} from {}. It binds on their next refresh; the copy they hold \
+                 is kept.",
+                g.tier.as_str(),
+                g.slug,
+                g.subscriber
+            );
+        }
+        WikiSourcesCmd::Allowed { org, server } => {
+            let grants = sharing(org, server).await?.list_source_grants().await?;
+            if grants.is_empty() {
+                println!("(no source grants)");
+            }
+            for g in grants {
+                println!(
+                    "{}  {}/{}  to {}  {}",
+                    g.id,
+                    g.tier.as_str(),
+                    g.slug,
+                    g.subscriber,
+                    if g.live { "live" } else { "revoked" }
+                );
+            }
         }
         WikiSourcesCmd::Trust {
             qualified,

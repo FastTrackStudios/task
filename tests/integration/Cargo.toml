@@ -30,6 +30,11 @@ task-proto = { workspace = true }
 # The wiki lane: registry, pages, subscriptions and Edit Requests, all
 # reached as a signed-in person on the org router.
 wiki-proto = { workspace = true }
+# A publisher opening a shelf or a project to another org
+# (`wiki.access.source-grant`), written on its own disk the way the
+# chapters write the shelves themselves. The owner-only RPC in front of
+# it is driven in `task-server`'s `sharing_grants_e2e`.
+wiki-live = { workspace = true }
 # ADR 0003's three halves, reached over the wire like everything else:
 # the asset tier (`resources/charts/…`), the collections that gather it
 # into a Library or a Setlist, and the resolver that says whether a

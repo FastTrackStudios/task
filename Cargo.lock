@@ -10311,6 +10311,7 @@ dependencies = [
  "vault-proto",
  "vox",
  "vox-core",
+ "wiki-live",
  "wiki-proto",
 ]
 
@@ -23180,6 +23181,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
  "vault-live",

@@ -169,6 +169,115 @@ pub trait SharingService {
     /// Every grant this org has made, newest first, revoked ones
     /// included.
     async fn list_grants(&self) -> Result<Vec<SharingGrantInfo>, SharingError>;
+
+    /// Declare who outside this org may subscribe to one of its asset
+    /// shelves or projects (`t[wiki.access.shelf-visibility]`). Private
+    /// is the default. Audited.
+    async fn set_source_visibility(
+        &self,
+        tier: SourceTier,
+        slug: String,
+        visibility: SourceVisibility,
+    ) -> Result<(), SharingError>;
+
+    /// Grant one asset shelf or project to one subscriber org
+    /// (`t[wiki.access.source-grant]`). The returned secret is shown once:
+    /// a subscriber on another server presents it, one on this server
+    /// does not need it. Audited.
+    async fn grant_source(&self, grant: NewSourceGrant) -> Result<MintedSourceGrant, SharingError>;
+
+    /// Revoke a source grant. It binds on the subscriber's next refresh;
+    /// the copy they hold is theirs to keep. Idempotent. Audited.
+    async fn revoke_source_grant(&self, grant_id: Uuid) -> Result<SourceGrantInfo, SharingError>;
+
+    /// Every source grant this org has made, oldest first, revoked ones
+    /// included.
+    async fn list_source_grants(&self) -> Result<Vec<SourceGrantInfo>, SharingError>;
+}
+
+/// Which tier a source grant or a visibility is about. Only the two
+/// tiers that carry no config of their own: a wiki declares its
+/// visibility in `wiki.json`, and a Resource is public by licence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Facet)]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum SourceTier {
+    /// `<org>/assets/<kind>/`, keyed by the kind (`songs`).
+    Assets,
+    /// `<org>/projects/<path>/`, keyed by the tier-relative path.
+    Projects,
+}
+
+impl SourceTier {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Assets => "assets",
+            Self::Projects => "projects",
+        }
+    }
+}
+
+/// The three visibilities a wiki has, for a shelf or a project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Facet)]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum SourceVisibility {
+    /// Listed in discovery; anyone may subscribe.
+    Public,
+    /// Listed to nobody; anyone holding the reference may subscribe.
+    Unlisted,
+    /// Only the owning org, and subscribers it has granted.
+    Private,
+}
+
+impl SourceVisibility {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Unlisted => "unlisted",
+            Self::Private => "private",
+        }
+    }
+}
+
+/// What an owner asks for when granting a source.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct NewSourceGrant {
+    pub tier: SourceTier,
+    /// The shelf's kind, or the project's tier-relative path.
+    pub slug: String,
+    /// The subscriber: an org slug on this server, or the federation
+    /// domain of an org on another one.
+    pub subscriber: String,
+}
+
+/// One source grant row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct SourceGrantInfo {
+    pub id: Uuid,
+    pub owner_org: String,
+    pub tier: SourceTier,
+    pub slug: String,
+    pub subscriber: String,
+    pub granted_by: String,
+    /// Unix seconds.
+    pub granted_at: i64,
+    pub revoked_at: Option<i64>,
+    pub revoked_by: Option<String>,
+    pub live: bool,
+}
+
+/// A source grant just made, with its secret. The secret is returned
+/// here once and stored only as a hash.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct MintedSourceGrant {
+    pub grant: SourceGrantInfo,
+    pub secret: String,
 }
 
 #[cfg(test)]

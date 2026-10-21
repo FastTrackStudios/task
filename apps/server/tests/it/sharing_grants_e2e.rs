@@ -315,3 +315,176 @@ async fn only_an_owner_grants_and_everyone_else_finds_nothing() {
         ]
     );
 }
+
+// t[verify wiki.access.source-grant]
+// t[verify wiki.access.shelf-visibility]
+#[tokio::test(flavor = "multi_thread")]
+async fn only_an_owner_opens_a_shelf_to_another_org_and_every_change_is_on_record() {
+    use share_proto::{NewSourceGrant, SourceTier, SourceVisibility};
+    use wiki_live::source_access::{self, AccessGrants};
+    use wiki_proto::config::Visibility;
+    use wiki_proto::subscription::SourceKind;
+
+    let _env = crate::support::env_lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let node = LocalNode::open(NodeOptions {
+        owner_name: "Cody Owner".into(),
+        peers: false,
+        ..NodeOptions::at(root.path())
+    })
+    .await
+    .expect("the node opens");
+
+    let owner = node.owner().clone();
+    let anon = node.caller(&owner.org, None).await.unwrap();
+    let signed_in = AuthServiceClient::from_vox_lane(anon, None)
+        .sign_in_email_password(SignInEmailPassword {
+            email: owner.email.clone(),
+            password: owner.password.clone(),
+            ip_address: None,
+            user_agent: Some("sharing-e2e".into()),
+        })
+        .await
+        .expect("the owner signs in");
+    let me = signed_in.user.id;
+    let personal = [PERSONAL_SLUG.to_owned()];
+    node.admit_account(me, &personal, "owner").await.unwrap();
+    let (member, member_token) = person(&node, "member@example.test").await;
+    node.admit_account(member, &personal, "member")
+        .await
+        .unwrap();
+
+    let org_root = node
+        .state()
+        .org(PERSONAL_SLUG)
+        .unwrap()
+        .sharing
+        .org_root
+        .clone();
+    let songs = org_root.join("assets").join("songs");
+    std::fs::create_dir_all(&songs).unwrap();
+    let ask = || NewSourceGrant {
+        tier: SourceTier::Assets,
+        slug: "songs".into(),
+        subscriber: "rockstars-of-tomorrow".into(),
+    };
+    let grants = AccessGrants::open(&org_root);
+
+    // ── a plain member, and nobody at all, can mint nothing ──
+    for (who, token) in [("member", Some(member_token.as_str())), ("anonymous", None)] {
+        let c = client(&node, token).await;
+        let answers = [
+            format!("{:?}", c.grant_source(ask()).await),
+            format!(
+                "{:?}",
+                c.set_source_visibility(
+                    SourceTier::Assets,
+                    "songs".into(),
+                    SourceVisibility::Public
+                )
+                .await
+            ),
+            format!("{:?}", c.list_source_grants().await),
+            format!("{:?}", c.revoke_source_grant(Uuid::new_v4()).await),
+        ];
+        for a in &answers {
+            assert!(
+                a == &format!(
+                    "{:?}",
+                    Err::<(), _>(VoxError::User(Box::new(SharingError::NotFound)))
+                ) || a.contains("InvalidPayload"),
+                "{who} got {a}"
+            );
+        }
+    }
+    assert!(grants.list().unwrap().is_empty(), "nothing was written");
+    assert_eq!(
+        source_access::visibility(&org_root.join("assets"), &songs),
+        Visibility::Private,
+        "the shelf is still private"
+    );
+
+    // ── the owner grants, and the row names them ──
+    let owner_c = client(&node, Some(&signed_in.token)).await;
+    let minted = owner_c.grant_source(ask()).await.expect("the owner grants");
+    assert!(minted.grant.live);
+    assert_eq!(minted.grant.owner_org, PERSONAL_SLUG);
+    assert_eq!(minted.grant.granted_by, me.to_string());
+    assert!(!minted.secret.is_empty());
+    assert!(grants.admits(SourceKind::Assets, "songs", "rockstars-of-tomorrow"));
+    assert_eq!(
+        owner_c.list_source_grants().await.unwrap(),
+        vec![minted.grant.clone()]
+    );
+    // A second live grant for the same pair is refused, not merged.
+    assert!(matches!(
+        refusal(owner_c.grant_source(ask()).await),
+        SharingError::Invalid(_)
+    ));
+    // Not to itself, and not of something it does not hold.
+    assert!(matches!(
+        refusal(
+            owner_c
+                .grant_source(NewSourceGrant {
+                    subscriber: PERSONAL_SLUG.into(),
+                    ..ask()
+                })
+                .await
+        ),
+        SharingError::Invalid(_)
+    ));
+    assert_eq!(
+        refusal(
+            owner_c
+                .grant_source(NewSourceGrant {
+                    slug: "nonesuch".into(),
+                    ..ask()
+                })
+                .await
+        ),
+        SharingError::NotFound
+    );
+
+    // ── visibility, by the owner ──
+    owner_c
+        .set_source_visibility(
+            SourceTier::Assets,
+            "songs".into(),
+            SourceVisibility::Unlisted,
+        )
+        .await
+        .expect("the owner sets visibility");
+    assert_eq!(
+        source_access::visibility(&org_root.join("assets"), &songs),
+        Visibility::Unlisted
+    );
+
+    // ── revoke: once, then idempotent ──
+    let revoked = owner_c
+        .revoke_source_grant(minted.grant.id)
+        .await
+        .expect("revoke");
+    assert!(!revoked.live);
+    assert_eq!(revoked.revoked_by, Some(me.to_string()));
+    let again = owner_c
+        .revoke_source_grant(minted.grant.id)
+        .await
+        .expect("revoke again");
+    assert_eq!(again, revoked);
+    assert!(!grants.admits(SourceKind::Assets, "songs", "rockstars-of-tomorrow"));
+
+    // ── the record: append-only, and never the secret ──
+    let log = std::fs::read_to_string(org_root.join("subscribed/.state/access-grants.jsonl"))
+        .expect("the log");
+    let events: Vec<&str> = log
+        .lines()
+        .map(|l| {
+            l.split("\"event\":\"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .unwrap_or("?")
+        })
+        .collect();
+    assert_eq!(events, vec!["granted", "visibility", "revoked"], "{log}");
+    assert!(!log.contains(&minted.secret));
+}
