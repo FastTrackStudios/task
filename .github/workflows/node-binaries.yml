@@ -6,6 +6,18 @@
 #   task-server-linux-aarch64    glibc >= 2.35
 #   task-server-macos-aarch64    macOS 14+, Apple silicon
 #   SHA256SUMS                   `sha256sum` format, over all three
+#   SHA256SUMS.minisig           minisign signature of SHA256SUMS, by the release
+#                                key, trusted comment "task-server <tag> SHA256SUMS"
+#
+# The signature is what `self-update` trusts: the binaries and SHA256SUMS
+# come from the same release, so whoever can write release assets can swap
+# both, and only a key that is not in the release proves which build it is.
+# The secret half is the TASK_RELEASE_MINISIGN_KEY Actions secret (an
+# unencrypted minisign secret key file, `minisign -G -W`); the public half
+# is RELEASE_SIGNING_KEY in apps/server/src/self_update.rs, and the publish
+# job refuses to sign with a key that is not that one. Until the secret is
+# set, releases go out unsigned with a warning, and `self-update` installs
+# none of them.
 #
 # The asset names are a contract: `task-server self-update`
 # (apps/server/src/self_update.rs) and scripts/install-node.sh look them up
@@ -218,23 +230,47 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only for the pinned public key the signature must verify against.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          sparse-checkout: apps/server/src/self_update.rs
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums + upload
+      - name: Checksums, signature + upload
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
+          MINISIGN_KEY: ${{ secrets.TASK_RELEASE_MINISIGN_KEY }}
         run: |
           set -euo pipefail
+          # The const, however rustfmt wraps it: `Some("RW…")`, or empty for `None`.
+          pinned="$(awk '/^pub const RELEASE_SIGNING_KEY/{f=1} f{printf "%s", $0} f&&/;$/{exit}' \
+            apps/server/src/self_update.rs | tr -d ' ' | sed -n 's/.*=Some("\([A-Za-z0-9+\/=]*\)");$/\1/p')"
           cd dist
           for a in task-server-linux-x86_64 task-server-linux-aarch64 task-server-macos-aarch64; do
             [ -f "$a" ] || { echo "::error::missing $a"; exit 1; }
           done
           sha256sum task-server-* > SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$TAG" task-server-* SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          assets=(task-server-* SHA256SUMS)
+          if [ -n "$MINISIGN_KEY" ]; then
+            [ -n "$pinned" ] || { echo "::error::TASK_RELEASE_MINISIGN_KEY is set but $TAG pins no RELEASE_SIGNING_KEY: nodes could not verify this signature"; exit 1; }
+            sudo apt-get install -y -q minisign >/dev/null
+            key="$RUNNER_TEMP/release.key"
+            ( umask 077; printf '%s\n' "$MINISIGN_KEY" > "$key" )
+            minisign -S -s "$key" -m SHA256SUMS -x SHA256SUMS.minisig -t "task-server $TAG SHA256SUMS"
+            rm -f "$key"
+            # Signed by the key the binaries pin, or nothing is published.
+            minisign -V -P "$pinned" -m SHA256SUMS -x SHA256SUMS.minisig
+            assets+=(SHA256SUMS.minisig)
+          else
+            echo "::warning::TASK_RELEASE_MINISIGN_KEY is not set: $TAG's node binaries go out unsigned, and task-server self-update will not install them"
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           {
             echo "### Node binaries attached to $TAG"
             echo '```'

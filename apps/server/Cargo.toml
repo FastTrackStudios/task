@@ -40,6 +40,11 @@ async-trait.workspace = true
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
+# `self-update`: release signatures (minisign, key pinned in
+# self_update.rs) and the staged download (an unpredictable name, created
+# exclusively, so a planted symlink cannot redirect the write).
+minisign-verify = "0.2"
+tempfile = "3"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 base64 = { workspace = true }

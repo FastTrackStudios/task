@@ -18,7 +18,7 @@ task-server peer sign-in         sign this node in as your account
 task-server peer                 run as one more of your devices
 task-server                      host the orgs under $TASK_DATA_ROOT (the cluster's mode)
 task-server service write <dir>  the systemd unit / launchd agent that keeps it running
-task-server self-update          move to the newest release, sha256-checked
+task-server self-update          move to the newest release, signature- and sha256-checked
 ```
 
 ## Two modes
@@ -46,6 +46,7 @@ once production runs the release:
 | `task-server-linux-aarch64` | Linux ARM64, glibc ≥ 2.35 (Raspberry Pi 4/5 on a 64-bit OS, Graviton, …) |
 | `task-server-macos-aarch64` | macOS 14+ on Apple silicon |
 | `SHA256SUMS` | the checksums of the three, `sha256sum` format |
+| `SHA256SUMS.minisig` | a [minisign](https://jedisct1.github.io/minisign/) signature of `SHA256SUMS` by the release key, trusted comment `task-server v<X.Y.Z> SHA256SUMS` |
 
 OpenSSL is linked in; the only runtime dependency is the system's libc.
 
@@ -65,6 +66,8 @@ By hand:
 v=0.2.3; a=task-server-linux-x86_64
 curl -fLO https://github.com/FastTrackStudios/task/releases/download/v$v/$a
 curl -fLO https://github.com/FastTrackStudios/task/releases/download/v$v/SHA256SUMS
+curl -fLO https://github.com/FastTrackStudios/task/releases/download/v$v/SHA256SUMS.minisig
+minisign -V -P <RELEASE_SIGNING_KEY from apps/server/src/self_update.rs> -m SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS      # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
 install -m 755 $a /usr/local/bin/task-server && task-server --version
 ```
@@ -81,21 +84,28 @@ machine; the defaults are committed in `deploy/node/systemd/` (a test keeps
 them identical to what the binary renders).
 
 ```bash
-sudo task-server service write /etc/systemd/system     # task-server.service + the daily update
+sudo task-server service write /etc/systemd/system     # task-server.service + the daily update (refuses to overwrite; --force)
 # create the node's user and data root, then sign it in (a code to approve on your phone):
 sudo useradd --system --home-dir /var/lib/task-server --shell /usr/sbin/nologin task
 sudo install -d -o task -g task -m 0700 /var/lib/task-server
 sudo -u task env TASK_DATA_ROOT=/var/lib/task-server task-server peer sign-in
 sudo systemctl daemon-reload
-sudo systemctl enable --now task-server.service task-server-update.timer
+sudo systemctl enable --now task-server.service
 journalctl -u task-server -f
+# the daily update, once your binary pins a release key (see "Updating"):
+sudo systemctl enable --now task-server-update.timer
 ```
 
 `task-server service write` takes `--binary`, `--data-root`, `--bind`,
 `--user` and `--host` (`task-server service` lists them). The unit runs
 `task-server peer` as `task`, with `TASK_DATA_ROOT=/var/lib/task-server`
 (a systemd `StateDirectory`) and `TASK_SERVER_BIND=0.0.0.0:9090`, under
-`ProtectSystem=strict` with only the data root writable.
+`ProtectSystem=strict` with only the data root writable. The update unit
+runs as root (it replaces a root-owned binary and restarts the node), and
+is sandboxed the same way: only the binary's directory is writable, no
+new privileges, a private `/tmp`, and a 45-minute `TimeoutStartSec`.
+`service write` refuses to replace a file that already exists (a unit you
+edited stays yours); `--force` replaces them.
 
 ### macOS (launchd)
 
@@ -186,7 +196,12 @@ as it was.
 - **Everywhere else, `task-server self-update`.** It asks the GitHub
   releases API for the newest `vX.Y.Z` release (not `desktop-v*`, not
   drafts or prereleases) that carries this platform's asset and
-  `SHA256SUMS`; downloads the binary; checks its sha256 against
+  `SHA256SUMS`; checks `SHA256SUMS.minisig` is a signature of
+  `SHA256SUMS` by the release key pinned in the binary
+  (`RELEASE_SIGNING_KEY`, apps/server/src/self_update.rs) whose trusted
+  comment names that release (so a signature cannot be lifted from an
+  older one); streams the binary into a fresh, randomly named file beside
+  the installed one while hashing it; checks its sha256 against
   `SHA256SUMS`; runs the download with `--version` and requires it to say
   `task-server X.Y.Z`; and renames it over the running binary (atomic; the
   running node keeps the old one until it restarts). `--check` only
@@ -200,6 +215,15 @@ as it was.
   The same logic the macOS desktop updater uses for `desktop-v*` releases
   (apps/desktop/src/updater.rs): newest release by version, verify the
   checksum, verify the thing itself, swap only then.
+  **Why the signature:** the binary and `SHA256SUMS` come from the same
+  release, so the checksum alone only proves the download is intact.
+  Anyone who can write a release's assets could replace both, and the
+  update runs as root on every node. The minisign secret key lives
+  outside the release (the `TASK_RELEASE_MINISIGN_KEY` Actions secret,
+  used by `node-binaries.yml`, which also refuses to sign with a key the
+  source does not pin). A binary built while `RELEASE_SIGNING_KEY` is
+  still `None` installs nothing and says so, and so does an unsigned
+  release.
 - **By hand:** run `scripts/install-node.sh` again; it is a no-op when the
   newest release is already installed.
 

@@ -228,12 +228,22 @@ impl NodeService {
 
     /// The daily update: `self-update`, then a restart of the node only
     /// if the binary changed (`--then` runs only after a replacement).
+    ///
+    /// It runs as root, because it replaces a root-owned binary and asks
+    /// systemd to restart the node, so it is walled in to what that takes:
+    /// the only writable path is the binary's directory, no privilege can
+    /// be gained, and a run that hangs is stopped.
     #[must_use]
     pub fn systemd_update_unit(&self) -> String {
+        let bin_dir = self
+            .binary
+            .parent()
+            .map_or_else(|| "/".into(), Path::to_string_lossy);
         format!(
             "# Keeps the Task node on the newest release: once a day (task-server-update.timer)\n\
-             # `self-update` checks the GitHub releases, verifies the binary's sha256 and that it\n\
-             # reports the release's version, swaps it in, and only then restarts the node.\n\
+             # `self-update` checks the GitHub releases, verifies the release's signature, the\n\
+             # binary's sha256 and that it reports the release's version, swaps it in, and only\n\
+             # then restarts the node. Root, sandboxed: it can write only the binary's directory.\n\
              # Rendered by `task-server service write`; see {DOCS}\n\
              \n\
              [Unit]\n\
@@ -244,8 +254,24 @@ impl NodeService {
              \n\
              [Service]\n\
              Type=oneshot\n\
-             ExecStart={bin} self-update --then systemctl try-restart {SYSTEMD_UNIT}\n",
+             ExecStart={bin} self-update --then systemctl try-restart {SYSTEMD_UNIT}\n\
+             TimeoutStartSec=45min\n\
+             NoNewPrivileges=true\n\
+             PrivateTmp=true\n\
+             PrivateDevices=true\n\
+             ProtectSystem=strict\n\
+             ProtectHome=read-only\n\
+             ReadWritePaths={bin_dir}\n\
+             ProtectKernelTunables=true\n\
+             ProtectKernelModules=true\n\
+             ProtectKernelLogs=true\n\
+             ProtectControlGroups=true\n\
+             RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n\
+             RestrictNamespaces=true\n\
+             RestrictSUIDSGID=true\n\
+             LockPersonality=true\n",
             bin = systemd_quote(&self.binary.to_string_lossy()),
+            bin_dir = systemd_quote(&bin_dir),
         )
     }
 
@@ -434,6 +460,7 @@ options:
   --user <name>           systemd: the account it runs as      [task]
   --log <file>            launchd: stdout/stderr               [~/Library/Logs/task-server.log]
   --host                  host orgs (`task-server`) instead of running as your device (`task-server peer`)
+  --force                 write: replace files that already exist (default: refuse, change nothing)
 
 systemd:  sudo task-server service write /etc/systemd/system && sudo systemctl daemon-reload
           sudo systemctl enable --now task-server.service task-server-update.timer
@@ -517,7 +544,15 @@ pub fn cli(args: &[String]) -> eyre::Result<()> {
         println!("{SERVICE_USAGE}");
         return Ok(());
     };
-    let (svc, positional) = parse_options(&args[1..], NodeService::defaults_for)?;
+    // `--force` only means something to `write`; take it out before the
+    // shared options are parsed.
+    let force = args[1..].iter().any(|a| a == "--force");
+    let rest: Vec<String> = args[1..]
+        .iter()
+        .filter(|a| *a != "--force")
+        .cloned()
+        .collect();
+    let (svc, positional) = parse_options(&rest, NodeService::defaults_for)?;
     match verb.as_str() {
         "list" => {
             for (name, _) in svc.files() {
@@ -541,12 +576,7 @@ pub fn cli(args: &[String]) -> eyre::Result<()> {
             let dir = positional
                 .first()
                 .ok_or_else(|| eyre!("write needs a directory\n\n{SERVICE_USAGE}"))?;
-            let dir = PathBuf::from(dir);
-            std::fs::create_dir_all(&dir).wrap_err_with(|| format!("create {}", dir.display()))?;
-            for (name, body) in svc.files() {
-                let path = dir.join(name);
-                std::fs::write(&path, body)
-                    .wrap_err_with(|| format!("write {}", path.display()))?;
+            for path in write_files(Path::new(dir), &svc.files(), force)? {
                 println!("wrote {}", path.display());
             }
         }
@@ -554,6 +584,45 @@ pub fn cli(args: &[String]) -> eyre::Result<()> {
         other => bail!("unknown service command `{other}`\n\n{SERVICE_USAGE}"),
     }
     Ok(())
+}
+
+/// Write `files` into `dir`. Without `force`, a file that already exists
+/// stops the run before anything is written: a unit someone edited by
+/// hand (a different user, a tightened sandbox) is not silently replaced.
+/// New files are created exclusively, so a symlink at the name is not
+/// followed.
+fn write_files(dir: &Path, files: &[(&str, String)], force: bool) -> eyre::Result<Vec<PathBuf>> {
+    use std::io::Write as _;
+    std::fs::create_dir_all(dir).wrap_err_with(|| format!("create {}", dir.display()))?;
+    let paths: Vec<PathBuf> = files.iter().map(|(name, _)| dir.join(name)).collect();
+    if !force {
+        let existing: Vec<String> = paths
+            .iter()
+            .filter(|p| p.symlink_metadata().is_ok())
+            .map(|p| p.display().to_string())
+            .collect();
+        if !existing.is_empty() {
+            bail!(
+                "{} already exist{}; nothing written (compare with `task-server service show <file>`, \
+                 or pass --force to replace)",
+                existing.join(", "),
+                if existing.len() == 1 { "s" } else { "" }
+            );
+        }
+    }
+    for (path, (_, body)) in paths.iter().zip(files) {
+        let mut open = std::fs::OpenOptions::new();
+        open.write(true);
+        if force {
+            open.create(true).truncate(true);
+        } else {
+            open.create_new(true);
+        }
+        open.open(path)
+            .and_then(|mut f| f.write_all(body.as_bytes()))
+            .wrap_err_with(|| format!("write {}", path.display()))?;
+    }
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -577,7 +646,7 @@ mod tests {
                 committed(&format!("systemd/{name}")),
                 body,
                 "deploy/node/systemd/{name} drifted from `task-server service show {name} --for systemd`; \
-                 regenerate it with `task-server service write deploy/node/systemd --for systemd`"
+                 regenerate it with `task-server service write deploy/node/systemd --for systemd --force`"
             );
         }
     }
@@ -590,7 +659,7 @@ mod tests {
                 committed(&format!("launchd/{name}")),
                 body,
                 "deploy/node/launchd/{name} drifted from the rendered agent; regenerate it with \
-                 `HOME=/Users/you task-server service write deploy/node/launchd --for launchd`"
+                 `HOME=/Users/you task-server service write deploy/node/launchd --for launchd --force`"
             );
         }
     }
@@ -649,6 +718,69 @@ mod tests {
         ), "{unit}");
         assert!(unit.contains("Type=oneshot"));
         assert!(systemd_update_timer().contains("OnCalendar=daily"));
+    }
+
+    #[test]
+    fn the_update_unit_is_sandboxed_to_the_binarys_directory() {
+        let unit = NodeService::systemd_defaults().systemd_update_unit();
+        for line in [
+            "NoNewPrivileges=true",
+            "PrivateTmp=true",
+            "ProtectSystem=strict",
+            "ReadWritePaths=/usr/local/bin",
+            "TimeoutStartSec=45min",
+        ] {
+            assert!(unit.contains(&format!("\n{line}\n")), "{line}:\n{unit}");
+        }
+        let mut svc = NodeService::systemd_defaults();
+        svc.binary = PathBuf::from("/opt/task node/bin/task-server");
+        assert!(
+            svc.systemd_update_unit()
+                .contains("\nReadWritePaths=\"/opt/task node/bin\"\n")
+        );
+    }
+
+    #[test]
+    fn service_write_refuses_to_replace_files_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            ("a.service", "new a\n".to_owned()),
+            ("b.timer", "new b\n".to_owned()),
+        ];
+        std::fs::write(dir.path().join("b.timer"), "edited by hand\n").unwrap();
+        let err = write_files(dir.path(), &files, false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("b.timer already exists"), "{err}");
+        assert!(
+            !dir.path().join("a.service").exists(),
+            "nothing is written when one file is refused"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.timer")).unwrap(),
+            "edited by hand\n"
+        );
+
+        write_files(dir.path(), &files, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.timer")).unwrap(),
+            "new b\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.service")).unwrap(),
+            "new a\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_write_does_not_follow_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&target, dir.path().join("a.service")).unwrap();
+        let files = vec![("a.service", "x\n".to_owned())];
+        assert!(write_files(dir.path(), &files, false).is_err());
+        assert!(!target.exists());
     }
 
     #[test]

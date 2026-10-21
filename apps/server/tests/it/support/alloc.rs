@@ -68,6 +68,25 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
+/// Whether this test has the process, and so the counters, to itself.
+///
+/// nextest runs every test in a process of its own and sets `NEXTEST`;
+/// plain `cargo test` runs the whole `it` binary's tests on threads of one
+/// process, where every other test's allocations land in the same
+/// counters and a budget reads their work as this test's. A budget test
+/// skips itself there (with a line saying so) rather than fail at random.
+#[must_use]
+pub fn counters_are_this_tests() -> bool {
+    if std::env::var_os("NEXTEST").is_some() {
+        return true;
+    }
+    eprintln!(
+        "skipped: the heap counters are process-wide and other tests share this process; \
+         run it under `cargo nextest run`"
+    );
+    false
+}
+
 /// Heap bytes live right now.
 #[must_use]
 pub fn live() -> usize {
