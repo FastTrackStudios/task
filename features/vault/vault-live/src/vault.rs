@@ -53,6 +53,26 @@ impl VaultPage {
             mtime_ms,
         }
     }
+
+    /// [`Self::to_proto`] by value: the strings move, nothing is cloned.
+    /// For a caller that owns the page it converts (a scan over a
+    /// freshly opened [`crate::Vault`]), where `to_proto` would copy
+    /// every page's whole text to drop the original a line later.
+    #[must_use]
+    pub fn into_proto(self) -> vault_proto::VaultPage {
+        let mtime_ms = self
+            .mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        vault_proto::VaultPage {
+            rel_path: self.rel_path,
+            basename: self.basename,
+            folder: self.folder,
+            raw: self.raw,
+            mtime_ms,
+        }
+    }
 }
 
 /// One `.base` file (Obsidian Bases). The vault loads + holds

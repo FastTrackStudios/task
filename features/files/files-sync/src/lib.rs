@@ -350,6 +350,11 @@ pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Open the replica lane on `peer`, dialling from `endpoint`.
 ///
+/// The connection lives as long as **both processes** do: dropping the
+/// client closes its lane, not the connection (see [`Dialled`]). That
+/// suits a caller that keeps the client, such as the sync daemon's link
+/// to its coordinator. A dial for one exchange wants [`dial_peer_once`].
+///
 /// The dialling half of [`serve_peer`], and it lives beside it because
 /// both callers are the same shape: a server collecting what a laptop
 /// did offline, and a laptop collecting what the server did while it was
@@ -376,6 +381,89 @@ pub async fn dial_peer(
         .establish()
         .await
         .map_err(|e| SyncError::Io(format!("establishing the replica lane on {peer}: {e}")))
+}
+
+/// [`dial_peer`] for one exchange: the replica lane, closed **with its
+/// connection** when the returned [`Dialled`] drops.
+///
+/// Use this for a dial that is done when the caller is done with it,
+/// such as the server's device sweep. A client from [`dial_peer`] keeps
+/// its QUIC connection open, and the far side's session with it, for as
+/// long as both processes live. See [`Dialled`] for why.
+#[cfg(feature = "vox")]
+pub async fn dial_peer_once(
+    endpoint: &architect::iroh_link::iroh::Endpoint,
+    peer: &str,
+) -> Result<Dialled<SyncServiceClient>, SyncError> {
+    use architect::iroh_link;
+
+    let id: iroh_link::iroh::EndpointId = peer
+        .parse()
+        .map_err(|e| SyncError::BadRequest(format!("not an endpoint id: {peer} ({e})")))?;
+    let link = tokio::time::timeout(DIAL_TIMEOUT, iroh_link::connect(endpoint, id))
+        .await
+        .map_err(|_| SyncError::Io(format!("dialling {peer}: timed out")))?
+        .map_err(|e| SyncError::Io(format!("dialling {peer}: {e}")))?;
+    Dialled::establish(link)
+        .await
+        .map_err(|e| SyncError::Io(format!("establishing the replica lane on {peer}: {e}")))
+}
+
+/// A service client on a vox connection this side dialled. Dropping it
+/// shuts the connection down.
+///
+/// vox keeps a connection (its driver tasks, the link and the QUIC
+/// connection under it) until something tells it to shut down or the
+/// link ends. Dropping a client only closes that client's *lane*. So
+/// with `initiator_on(link).establish()`, which drops the connection's
+/// handle and returns just the client, nothing can ever shut the
+/// connection down. Every dial then leaves both ends running for good:
+/// the dialler's driver and the far side's accept task. Measured on the
+/// device sweep, that was ~0.7 MiB of heap per sweep that never came
+/// back (t_37712151, `memory_budget`).
+///
+/// This keeps the handle beside the client and calls `shutdown()` on
+/// drop. Deref to the client to use it.
+#[cfg(feature = "vox")]
+pub struct Dialled<C> {
+    client: C,
+    connection: architect::vox::ConnectionHandle,
+}
+
+#[cfg(feature = "vox")]
+impl<C: architect::vox::FromVoxLane> Dialled<C> {
+    /// Handshake on `link` and open `C`'s lane, keeping the connection.
+    ///
+    /// # Errors
+    ///
+    /// The handshake or the lane open failed.
+    pub async fn establish(
+        link: architect::iroh_link::IrohLink,
+    ) -> Result<Self, architect::vox::ConnectionError> {
+        let connection = architect::vox::initiator_on(link)
+            .establish_connection()
+            .await?;
+        let client = connection.open_lane::<C>().await?;
+        Ok(Self { client, connection })
+    }
+}
+
+#[cfg(feature = "vox")]
+impl<C> std::ops::Deref for Dialled<C> {
+    type Target = C;
+
+    fn deref(&self) -> &C {
+        &self.client
+    }
+}
+
+#[cfg(feature = "vox")]
+impl<C> Drop for Dialled<C> {
+    fn drop(&mut self) {
+        // An error means the connection is already gone, which is the
+        // outcome we wanted.
+        let _ = self.connection.shutdown();
+    }
 }
 
 /// [`SyncService`] served straight off a [`FilesBackend`] — the shape

@@ -39,7 +39,7 @@ use files_domain::{Content, HostId};
 use tracing::Instrument;
 use vault_doc::SessionEnd;
 use vault_doc::peer::{DocAt, DocEntry, DocPeer, DocPeerClient, Exchanged, PeerDoc};
-use vault_proto::{VaultSync, collab_doc_id};
+use vault_proto::collab_doc_id;
 
 use crate::OrgAppState;
 
@@ -118,20 +118,17 @@ impl DocPeer for DocPeerHost {
 fn held(sync: &vault::Backend) -> Vec<DocEntry> {
     let mut out = Vec::new();
     for vault_id in sync.vault_ids() {
-        let Ok(manifest) = sync.manifest(&vault_id) else {
+        // Markdown only, filtered before hashing: every other file in
+        // the vault (attachments, PDFs, audio) would be streamed through
+        // SHA-256 on every peer's `list` just to drop its row.
+        let Ok(manifest) = sync.manifest_where(&vault_id, |p| p.ends_with(".md")) else {
             continue;
         };
-        out.extend(
-            manifest
-                .files
-                .into_iter()
-                .filter(|f| f.path.ends_with(".md"))
-                .map(|f| DocEntry {
-                    vault_id: vault_id.clone(),
-                    path: f.path,
-                    sha256: f.sha256,
-                }),
-        );
+        out.extend(manifest.files.into_iter().map(|f| DocEntry {
+            vault_id: vault_id.clone(),
+            path: f.path,
+            sha256: f.sha256,
+        }));
     }
     out
 }
@@ -236,7 +233,7 @@ async fn pull(
         debug_assert_eq!(doc_id, collab_doc_id(&entry.vault_id, &entry.path));
         report.exchanged += 1;
         let remote = PeerDoc {
-            client: &peer,
+            client: &*peer,
             vault_id: &entry.vault_id,
             path: &entry.path,
         };
@@ -256,8 +253,13 @@ async fn pull(
     Ok(report)
 }
 
-/// Dial `peer` from this org's endpoint and open its document lane.
-async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<DocPeerClient, String> {
+/// Dial `peer` from this org's endpoint and open its document lane. The
+/// connection closes when the returned client drops: see
+/// [`files_sync::Dialled`], which this sweep leaked without.
+async fn dial(
+    endpoint: &iroh::Endpoint,
+    peer: &str,
+) -> Result<files_sync::Dialled<DocPeerClient>, String> {
     let id: iroh::EndpointId = peer
         .parse()
         .map_err(|e| format!("not an endpoint id: {peer} ({e})"))?;
@@ -265,8 +267,7 @@ async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<DocPeerClient, St
         .await
         .map_err(|_| format!("dialling {peer}: timed out"))?
         .map_err(|e| format!("dialling {peer}: {e}"))?;
-    architect::vox::initiator_on(link)
-        .establish()
+    files_sync::Dialled::establish(link)
         .await
         .map_err(|e| format!("the document lane on {peer}: {e}"))
 }
