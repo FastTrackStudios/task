@@ -49,8 +49,8 @@ mod legacy {
 
 fn decode<W, R>(old: &W) -> R
 where
-    W: for<'a> facet::Facet<'a>,
-    R: for<'a> facet::Facet<'a>,
+    W: facet::Facet<'static>,
+    R: facet::Facet<'static>,
 {
     let schema = vox_phon::schema_bytes::<W>().expect("writer schema");
     let bundle = vox_phon::parse_schema_bytes(&schema).expect("parse writer schema");
