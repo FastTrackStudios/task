@@ -10514,15 +10514,13 @@ dependencies = [
 [[package]]
 name = "iroh-blobs"
 version = "0.103.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be50b0e2d0a9ba65cee4e0dfb708b3704e02ad12bd4c14c6307e94245943126"
 dependencies = [
  "arrayvec",
  "bao-tree",
  "bytes",
  "cfg_aliases",
  "chrono",
- "constant_time_eq 0.4.2",
+ "constant_time_eq 0.3.1",
  "data-encoding",
  "derive_more 2.1.1",
  "genawaiter",

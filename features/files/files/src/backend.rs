@@ -612,9 +612,11 @@ impl FilesBackend {
     pub async fn federation_blobs(&self) -> Result<&iroh_blobs::store::fs::FsStore, FilesFault> {
         self.federation_blobs
             .get_or_try_init(|| async {
-                iroh_blobs::store::fs::FsStore::load(self.data_dir.join("federation-blobs"))
-                    .await
-                    .map_err(|e| FilesFault::Io(format!("opening federation-blobs store: {e}")))
+                files_store::chunk::runtime::load_fs_store_at(
+                    self.data_dir.join("federation-blobs"),
+                )
+                .await
+                .map_err(|e| FilesFault::Io(format!("opening federation-blobs store: {e}")))
             })
             .await
     }

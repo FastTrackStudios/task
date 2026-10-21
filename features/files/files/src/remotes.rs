@@ -319,7 +319,7 @@ impl IrohRemotes {
             .get_or_try_init(|| async {
                 let dir = tempfile::tempdir()
                     .map_err(|e| FilesFault::Io(format!("relay scratch dir: {e}")))?;
-                let store = iroh_blobs::store::fs::FsStore::load(dir.path())
+                let store = files_store::chunk::runtime::load_fs_store_at(dir.path())
                     .await
                     .map_err(|e| FilesFault::Io(format!("opening relay scratch store: {e}")))?;
                 Ok((dir, store))

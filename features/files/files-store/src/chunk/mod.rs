@@ -30,6 +30,7 @@ mod chunker;
 mod error;
 pub mod gc;
 mod manifest;
+pub mod runtime;
 mod store;
 
 pub use chunker::{ChunkerConfig, chunk_to_vec};

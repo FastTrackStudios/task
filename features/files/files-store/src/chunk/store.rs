@@ -187,7 +187,7 @@ impl ChunkStore {
         }
 
         let db_path = blobs_dir.join("blobs.db");
-        let blobs = iroh_blobs::store::fs::FsStore::load_with_opts(db_path, options)
+        let blobs = crate::chunk::runtime::load_fs_store(db_path, options)
             .await
             .map_err(|e| {
                 Error::Store(format!(
