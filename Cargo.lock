@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "agent-codex"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "agent-dispatch"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-proto",
  "agent-tasks",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "agent-hermes"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "agent-inbox"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-codex",
  "agent-proto",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "agent-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "agent-runners"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-proto",
  "agent-tasks",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "agent-tasks"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-proto",
  "async-trait",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "agent-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "agent-wiki"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-codex",
  "agent-proto",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "agent-worktree"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "tempfile",
  "thiserror 2.0.20",
@@ -1459,7 +1459,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "attachments-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -2018,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "body"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "bookings-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -2669,7 +2669,7 @@ checksum = "724d27a0ee38b700e5e164350e79aba601a0db673ac47fce1cb74c3e38864036"
 
 [[package]]
 name = "collection"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "collection-proto",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "collection-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -2959,7 +2959,7 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "contacts"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "auth",
@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "contacts-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -3045,7 +3045,7 @@ dependencies = [
 
 [[package]]
 name = "cookbook"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -3069,7 +3069,7 @@ dependencies = [
 
 [[package]]
 name = "cookbook-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -3580,7 +3580,7 @@ dependencies = [
 
 [[package]]
 name = "cycle"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -5685,7 +5685,7 @@ dependencies = [
 
 [[package]]
 name = "email-autoconfig"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-config",
  "hickory-resolver 0.24.4",
@@ -5699,7 +5699,7 @@ dependencies = [
 
 [[package]]
 name = "email-config"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-proto",
  "email-secret",
@@ -5713,7 +5713,7 @@ dependencies = [
 
 [[package]]
 name = "email-imap"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "async-imap",
@@ -5732,7 +5732,7 @@ dependencies = [
 
 [[package]]
 name = "email-integration-tests"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-config",
  "email-imap",
@@ -5752,7 +5752,7 @@ dependencies = [
 
 [[package]]
 name = "email-jmap"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "email-config",
@@ -5767,7 +5767,7 @@ dependencies = [
 
 [[package]]
 name = "email-link"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -5787,7 +5787,7 @@ dependencies = [
 
 [[package]]
 name = "email-maildir"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "email-config",
@@ -5803,7 +5803,7 @@ dependencies = [
 
 [[package]]
 name = "email-mux"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "email-config",
@@ -5820,7 +5820,7 @@ dependencies = [
 
 [[package]]
 name = "email-product"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "email-config",
@@ -5835,7 +5835,7 @@ dependencies = [
 
 [[package]]
 name = "email-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -5847,7 +5847,7 @@ dependencies = [
 
 [[package]]
 name = "email-secret"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "facet",
  "keyring",
@@ -5860,7 +5860,7 @@ dependencies = [
 
 [[package]]
 name = "email-smtp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-config",
  "email-proto",
@@ -5876,7 +5876,7 @@ dependencies = [
 
 [[package]]
 name = "email-store"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-proto",
  "mail-parser",
@@ -5891,7 +5891,7 @@ dependencies = [
 
 [[package]]
 name = "email-sync"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "email-config",
@@ -5908,7 +5908,7 @@ dependencies = [
 
 [[package]]
 name = "email-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -6287,7 +6287,7 @@ dependencies = [
 
 [[package]]
 name = "example-email-client"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-maildir",
  "email-proto",
@@ -6298,7 +6298,7 @@ dependencies = [
 
 [[package]]
 name = "exercises"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -6644,7 +6644,7 @@ dependencies = [
 
 [[package]]
 name = "files"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
@@ -6682,7 +6682,7 @@ dependencies = [
 
 [[package]]
 name = "files-client"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "files",
@@ -6723,7 +6723,7 @@ dependencies = [
 
 [[package]]
 name = "files-daemon-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -6737,7 +6737,7 @@ dependencies = [
 
 [[package]]
 name = "files-domain"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "facet",
@@ -6755,7 +6755,7 @@ dependencies = [
 
 [[package]]
 name = "files-fileprovider"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "files",
@@ -6771,7 +6771,7 @@ dependencies = [
 
 [[package]]
 name = "files-fuse"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "files",
  "fuser",
@@ -6782,7 +6782,7 @@ dependencies = [
 
 [[package]]
 name = "files-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -6799,7 +6799,7 @@ dependencies = [
 
 [[package]]
 name = "files-storage"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "blake3",
@@ -6821,7 +6821,7 @@ dependencies = [
 
 [[package]]
 name = "files-storage-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -6836,7 +6836,7 @@ dependencies = [
 
 [[package]]
 name = "files-store"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "bao-tree",
@@ -6891,7 +6891,7 @@ dependencies = [
 
 [[package]]
 name = "files-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -6908,7 +6908,7 @@ dependencies = [
 
 [[package]]
 name = "files-webdav"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bytes",
  "chrono",
@@ -6941,7 +6941,7 @@ dependencies = [
 
 [[package]]
 name = "finance"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "async-trait",
@@ -6966,11 +6966,11 @@ dependencies = [
 
 [[package]]
 name = "finance-contract"
-version = "0.2.2"
+version = "0.2.3"
 
 [[package]]
 name = "finance-db"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6987,7 +6987,7 @@ dependencies = [
 
 [[package]]
 name = "finance-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -7005,7 +7005,7 @@ dependencies = [
 
 [[package]]
 name = "finance-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -7048,7 +7048,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "fitness"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "body",
@@ -7071,7 +7071,7 @@ dependencies = [
 
 [[package]]
 name = "fitness-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -7089,7 +7089,7 @@ dependencies = [
 
 [[package]]
 name = "fitness-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -7764,7 +7764,7 @@ dependencies = [
 
 [[package]]
 name = "git-config"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "facet",
@@ -7777,7 +7777,7 @@ dependencies = [
 
 [[package]]
 name = "git-forgejo"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "git-proto",
@@ -7793,7 +7793,7 @@ dependencies = [
 
 [[package]]
 name = "git-github"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "git-proto",
@@ -7807,7 +7807,7 @@ dependencies = [
 
 [[package]]
 name = "git-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -7819,7 +7819,7 @@ dependencies = [
 
 [[package]]
 name = "git-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -8687,7 +8687,7 @@ dependencies = [
 
 [[package]]
 name = "goal"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -8711,7 +8711,7 @@ dependencies = [
 
 [[package]]
 name = "goal-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -8728,7 +8728,7 @@ dependencies = [
 
 [[package]]
 name = "goal-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -9897,7 +9897,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "identity"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "auth",
@@ -9918,7 +9918,7 @@ checksum = "dfdd7caa900436d8f13b2346fe10257e0c05c1f1f9e351f4f5d57c03bd5f45da"
 
 [[package]]
 name = "identity-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -10067,7 +10067,7 @@ checksum = "7a46645bbd70538861a90d0f26c31537cdf1e44aae99a794fb75a664b70951bc"
 
 [[package]]
 name = "inbox"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -10083,7 +10083,7 @@ dependencies = [
 
 [[package]]
 name = "inbox-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -10249,7 +10249,7 @@ dependencies = [
 
 [[package]]
 name = "intake"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -10272,7 +10272,7 @@ dependencies = [
 
 [[package]]
 name = "integration"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-auth",
@@ -10347,7 +10347,7 @@ dependencies = [
 
 [[package]]
 name = "inventory"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -10379,7 +10379,7 @@ dependencies = [
 
 [[package]]
 name = "inventory-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -10396,7 +10396,7 @@ dependencies = [
 
 [[package]]
 name = "inventory-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -11296,7 +11296,7 @@ dependencies = [
 
 [[package]]
 name = "label-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -12267,7 +12267,7 @@ dependencies = [
 
 [[package]]
 name = "links"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -12286,7 +12286,7 @@ dependencies = [
 
 [[package]]
 name = "links-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -12299,7 +12299,7 @@ dependencies = [
 
 [[package]]
 name = "links-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "dioxus",
@@ -12363,7 +12363,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "live-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -12374,7 +12374,7 @@ dependencies = [
 
 [[package]]
 name = "locations"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -12397,7 +12397,7 @@ dependencies = [
 
 [[package]]
 name = "locations-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -12414,7 +12414,7 @@ dependencies = [
 
 [[package]]
 name = "locations-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -13043,14 +13043,14 @@ checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "mealplan"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
  "cookbook",
  "facet",
  "fake",
- "inventory 0.2.2",
+ "inventory 0.2.3",
  "mealplan-proto",
  "pantry",
  "sea-orm",
@@ -13068,7 +13068,7 @@ dependencies = [
 
 [[package]]
 name = "mealplan-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -13086,7 +13086,7 @@ dependencies = [
 
 [[package]]
 name = "mealplan-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -13105,7 +13105,7 @@ dependencies = [
 
 [[package]]
 name = "media-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -13171,7 +13171,7 @@ dependencies = [
 
 [[package]]
 name = "milestone"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -13195,7 +13195,7 @@ dependencies = [
 
 [[package]]
 name = "milestone-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -13282,7 +13282,7 @@ dependencies = [
 
 [[package]]
 name = "mount"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "mount-proto",
@@ -13296,7 +13296,7 @@ dependencies = [
 
 [[package]]
 name = "mount-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -13369,7 +13369,7 @@ dependencies = [
 
 [[package]]
 name = "music-key"
-version = "0.2.0"
+version = "0.2.3"
 
 [[package]]
 name = "mutants"
@@ -13773,7 +13773,7 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "async-trait",
@@ -13832,7 +13832,7 @@ dependencies = [
 
 [[package]]
 name = "notify-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -14657,7 +14657,7 @@ dependencies = [
 
 [[package]]
 name = "org-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -14678,7 +14678,7 @@ dependencies = [
 
 [[package]]
 name = "org-snapshot"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "org-proto",
@@ -14825,14 +14825,14 @@ dependencies = [
 
 [[package]]
 name = "pantry"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
  "cookbook",
  "facet",
  "fake",
- "inventory 0.2.2",
+ "inventory 0.2.3",
  "pantry-proto",
  "reqwest 0.12.28",
  "sea-orm",
@@ -14851,14 +14851,14 @@ dependencies = [
 
 [[package]]
 name = "pantry-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
  "cookbook-proto",
  "facet",
  "fake",
- "inventory 0.2.2",
+ "inventory 0.2.3",
  "sea-orm",
  "serde",
  "serde_json",
@@ -15738,7 +15738,7 @@ dependencies = [
 
 [[package]]
 name = "prefs"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "prefs-proto",
@@ -15751,7 +15751,7 @@ dependencies = [
 
 [[package]]
 name = "prefs-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -15949,7 +15949,7 @@ dependencies = [
 
 [[package]]
 name = "project"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -15973,7 +15973,7 @@ dependencies = [
 
 [[package]]
 name = "project-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -16714,7 +16714,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "recall"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -16730,7 +16730,7 @@ dependencies = [
 
 [[package]]
 name = "recall-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -16747,7 +16747,7 @@ dependencies = [
 
 [[package]]
 name = "recall-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -16763,7 +16763,7 @@ dependencies = [
 
 [[package]]
 name = "recipe-import"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cooklang",
  "cooklang-import",
@@ -16993,7 +16993,7 @@ checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
 
 [[package]]
 name = "resources"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "links",
@@ -17013,7 +17013,7 @@ dependencies = [
 
 [[package]]
 name = "resources-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -17026,7 +17026,7 @@ dependencies = [
 
 [[package]]
 name = "resources-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "dioxus",
@@ -17470,7 +17470,7 @@ dependencies = [
 
 [[package]]
 name = "scheduling"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -17488,7 +17488,7 @@ dependencies = [
 
 [[package]]
 name = "scheduling-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -17505,7 +17505,7 @@ dependencies = [
 
 [[package]]
 name = "scheduling-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -17584,7 +17584,7 @@ dependencies = [
 
 [[package]]
 name = "scripture"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "csv",
@@ -17605,7 +17605,7 @@ dependencies = [
 
 [[package]]
 name = "scripture-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -17618,7 +17618,7 @@ dependencies = [
 
 [[package]]
 name = "scripture-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "dioxus",
@@ -18353,7 +18353,7 @@ dependencies = [
 
 [[package]]
 name = "share-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -18723,7 +18723,7 @@ dependencies = [
 
 [[package]]
 name = "spaced-repetition"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
 ]
@@ -19015,7 +19015,7 @@ dependencies = [
 
 [[package]]
 name = "ssg"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "ssg-ui",
  "ssg-vault",
@@ -19023,7 +19023,7 @@ dependencies = [
 
 [[package]]
 name = "ssg-build"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "notify 8.2.0",
  "ssg-vault",
@@ -19031,7 +19031,7 @@ dependencies = [
 
 [[package]]
 name = "ssg-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dioxus",
  "ssg-vault",
@@ -19042,7 +19042,7 @@ dependencies = [
 
 [[package]]
 name = "ssg-vault"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "pulldown-cmark",
 ]
@@ -19540,7 +19540,7 @@ dependencies = [
 
 [[package]]
 name = "tag"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "serde",
@@ -19554,7 +19554,7 @@ dependencies = [
 
 [[package]]
 name = "tag-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "facet",
@@ -19647,7 +19647,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "task"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -19671,7 +19671,7 @@ dependencies = [
 
 [[package]]
 name = "task-app-desktop"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-telemetry",
  "block2",
@@ -19700,7 +19700,7 @@ dependencies = [
 
 [[package]]
 name = "task-app-mobile"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-telemetry",
  "block2",
@@ -19723,7 +19723,7 @@ dependencies = [
 
 [[package]]
 name = "task-app-web"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dioxus",
  "getrandom 0.3.4",
@@ -19734,7 +19734,7 @@ dependencies = [
 
 [[package]]
 name = "task-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-codex",
  "agent-inbox",
@@ -19835,7 +19835,7 @@ dependencies = [
 
 [[package]]
 name = "task-client"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-auth",
@@ -19858,7 +19858,7 @@ dependencies = [
 
 [[package]]
 name = "task-dial"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "futures-channel",
  "js-sys",
@@ -19874,7 +19874,7 @@ dependencies = [
 
 [[package]]
 name = "task-node-host"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-auth",
  "futures-util",
@@ -19890,7 +19890,7 @@ dependencies = [
 
 [[package]]
 name = "task-note-tabs"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dioxus",
  "editor",
@@ -19899,7 +19899,7 @@ dependencies = [
 
 [[package]]
 name = "task-player-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "dioxus",
@@ -19919,7 +19919,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -19928,7 +19928,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-agent"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-ui",
  "task-plugin-ui",
@@ -19937,7 +19937,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-bookings"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bookings-ui",
  "task-plugin-ui",
@@ -19945,7 +19945,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-email"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "email-ui",
  "task-plugin-ui",
@@ -19953,7 +19953,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-finance"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "finance-contract",
  "finance-ui",
@@ -19962,7 +19962,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-fitness"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "fitness-ui",
  "task-plugin-ui",
@@ -19970,7 +19970,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-git"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "git-ui",
  "task-plugin-ui",
@@ -19978,7 +19978,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-home"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "inventory-ui",
  "locations-ui",
@@ -19987,7 +19987,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-mealplan"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "mealplan-ui",
  "task-plugin-ui",
@@ -19995,7 +19995,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-recall"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "recall-ui",
  "task-plugin-ui",
@@ -20003,7 +20003,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-scripture"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "scripture-proto",
  "scripture-ui",
@@ -20012,7 +20012,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-studio"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "resources-ui",
  "task-player-ui",
@@ -20021,7 +20021,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugin-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "base64 0.22.1",
@@ -20031,7 +20031,7 @@ dependencies = [
 
 [[package]]
 name = "task-plugins"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "task-plugin-agent",
  "task-plugin-bookings",
@@ -20049,7 +20049,7 @@ dependencies = [
 
 [[package]]
 name = "task-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -20070,7 +20070,7 @@ dependencies = [
 
 [[package]]
 name = "task-server"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "agent-codex",
  "agent-dispatch",
@@ -20135,7 +20135,7 @@ dependencies = [
  "inbox-proto",
  "include_dir",
  "intake",
- "inventory 0.2.2",
+ "inventory 0.2.3",
  "iroh-blobs",
  "links",
  "links-proto",
@@ -20144,7 +20144,7 @@ dependencies = [
  "mealplan",
  "media-proto",
  "milestone",
- "notify 0.2.2",
+ "notify 0.2.3",
  "notify-proto",
  "org-proto",
  "org-snapshot",
@@ -20208,7 +20208,7 @@ dependencies = [
 
 [[package]]
 name = "task-stores"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "dioxus",
@@ -20220,7 +20220,7 @@ dependencies = [
 
 [[package]]
 name = "task-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -20236,7 +20236,7 @@ dependencies = [
 
 [[package]]
 name = "task-ui-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-ui",
@@ -20264,7 +20264,7 @@ dependencies = [
 
 [[package]]
 name = "task-widgets"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "dioxus",
@@ -20414,7 +20414,7 @@ dependencies = [
 
 [[package]]
 name = "threads"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "threads-db",
  "threads-proto",
@@ -20423,7 +20423,7 @@ dependencies = [
 
 [[package]]
 name = "threads-db"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -20440,7 +20440,7 @@ dependencies = [
 
 [[package]]
 name = "threads-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -20457,7 +20457,7 @@ dependencies = [
 
 [[package]]
 name = "threads-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -20514,7 +20514,7 @@ dependencies = [
 
 [[package]]
 name = "timer"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "async-trait",
@@ -20535,7 +20535,7 @@ dependencies = [
 
 [[package]]
 name = "timer-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -21678,7 +21678,7 @@ checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "actions-proto",
  "actions-standalone",
@@ -22130,7 +22130,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "vault-live",
  "vault-obsidian",
@@ -22139,7 +22139,7 @@ dependencies = [
 
 [[package]]
 name = "vault-collab"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "crdt",
  "sha2 0.10.9",
@@ -22154,7 +22154,7 @@ dependencies = [
 
 [[package]]
 name = "vault-doc"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "crdt",
@@ -22172,7 +22172,7 @@ dependencies = [
 
 [[package]]
 name = "vault-entity"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -22187,7 +22187,7 @@ dependencies = [
 
 [[package]]
 name = "vault-live"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
@@ -22217,7 +22217,7 @@ dependencies = [
 
 [[package]]
 name = "vault-obsidian"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -22242,7 +22242,7 @@ dependencies = [
 
 [[package]]
 name = "vault-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -22259,7 +22259,7 @@ dependencies = [
 
 [[package]]
 name = "vault-sync-client"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "hex",
@@ -22310,7 +22310,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "view-calendar",
  "view-gantt",
@@ -22321,7 +22321,7 @@ dependencies = [
 
 [[package]]
 name = "view-calendar"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -22338,7 +22338,7 @@ dependencies = [
 
 [[package]]
 name = "view-gantt"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -22352,7 +22352,7 @@ dependencies = [
 
 [[package]]
 name = "view-heatmap"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -22364,7 +22364,7 @@ dependencies = [
 
 [[package]]
 name = "view-kanban"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "dioxus",
@@ -22377,7 +22377,7 @@ dependencies = [
 
 [[package]]
 name = "view-knowledge-graph"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "dioxus",
@@ -22388,7 +22388,7 @@ dependencies = [
 
 [[package]]
 name = "view-table"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect-ui",
  "chrono",
@@ -23119,7 +23119,7 @@ checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "wiki-archive"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "csv",
@@ -23143,7 +23143,7 @@ dependencies = [
 
 [[package]]
 name = "wiki-extract"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "image",
  "pdfium-render",
@@ -23156,7 +23156,7 @@ dependencies = [
 
 [[package]]
 name = "wiki-graph"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arborium",
  "arborium-tree-sitter",
@@ -23171,7 +23171,7 @@ dependencies = [
 
 [[package]]
 name = "wiki-live"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
@@ -23201,7 +23201,7 @@ dependencies = [
 
 [[package]]
 name = "wiki-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -23220,7 +23220,7 @@ dependencies = [
 
 [[package]]
 name = "wiki-search"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -23853,7 +23853,7 @@ dependencies = [
 
 [[package]]
 name = "workflows-orchestrator"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "serde",
@@ -23865,7 +23865,7 @@ dependencies = [
 
 [[package]]
 name = "workflows-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -23880,7 +23880,7 @@ dependencies = [
 
 [[package]]
 name = "workouts"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -23903,7 +23903,7 @@ dependencies = [
 
 [[package]]
 name = "workstream"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -23930,7 +23930,7 @@ dependencies = [
 
 [[package]]
 name = "workstream-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "chrono",
@@ -24187,7 +24187,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "auth-proto",
  "milestone-proto",
