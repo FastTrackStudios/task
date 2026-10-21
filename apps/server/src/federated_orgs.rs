@@ -116,7 +116,17 @@ impl Dialler {
     /// By bare id: the endpoint resolves it through whatever address
     /// lookup it was bound with — n0's DNS in a deployment, a seeded
     /// book where there is nothing to discover.
-    async fn lane(&self, peer: &str) -> Result<SubscriptionsClient, VaultSyncError> {
+    ///
+    /// The lane is a vox connection on its own stream, and it ends when
+    /// the returned [`files::Dialled`] drops, after the call it was opened
+    /// for; the QUIC connection stays pooled. Before, every manifest and
+    /// file read left its stream and the publisher's session open for as
+    /// long as the pooled connection lived: thirty per thirty-page
+    /// refresh, every refresh.
+    async fn lane(
+        &self,
+        peer: &str,
+    ) -> Result<files::Dialled<SubscriptionsClient>, VaultSyncError> {
         let endpoint = self.endpoint.get().ok_or_else(|| {
             // Not an outage: this process has no endpoint at all, so no
             // peer is reachable and none will become reachable by
@@ -145,8 +155,7 @@ impl Dialler {
             },
             None => Self::open(self.redial(endpoint, id).await?).await?,
         };
-        architect::vox::initiator_on(link)
-            .establish()
+        files::Dialled::establish(link)
             .await
             .map_err(|e| VaultSyncError::Io(format!("establish on {peer}: {e}")))
     }
@@ -237,7 +246,7 @@ impl RemoteSource {
         self.runtime.block_on(call)
     }
 
-    async fn lane(&self) -> Result<SubscriptionsClient, VaultSyncError> {
+    async fn lane(&self) -> Result<files::Dialled<SubscriptionsClient>, VaultSyncError> {
         self.dialler.lane(&self.peer).await
     }
 }
@@ -536,5 +545,73 @@ mod tests {
             err.to_string().contains("dials no peers"),
             "unhelpful error: {err}"
         );
+    }
+
+    /// Each lane's session on the publisher ends when the lane drops;
+    /// the QUIC connection under them stays pooled. Counted on the far
+    /// side: a session is live from its stream's accept until
+    /// `serve_link` returns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_lane_ends_its_session_on_the_publisher() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let book = files::AddressBook::new();
+        let far = files::bind_endpoint(iroh::SecretKey::generate(), Some(book.clone()))
+            .await
+            .expect("bind the publisher");
+        book.add_endpoint_info(far.addr());
+        let live = Arc::new(AtomicUsize::new(0));
+        let (accepting, counter) = (far.clone(), live.clone());
+        tokio::spawn(async move {
+            while let Some(incoming) = accepting.accept().await {
+                let counter = counter.clone();
+                tokio::spawn(async move {
+                    let Ok(connection) = incoming.await else {
+                        return;
+                    };
+                    while let Ok((send, recv)) = connection.accept_bi().await {
+                        let link = iroh_link::IrohLink::new(connection.clone(), send, recv);
+                        let counter = counter.clone();
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        tokio::spawn(async move {
+                            let acceptor =
+                                architect::layer::handler_acceptor(architect::LayerRouter::new());
+                            iroh_link::serve_link(link, acceptor).await;
+                            counter.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                });
+            }
+        });
+        async fn settles_at_zero(live: &AtomicUsize) -> bool {
+            for _ in 0..250 {
+                if live.load(Ordering::SeqCst) == 0 {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            false
+        }
+
+        let near = files::bind_endpoint(iroh::SecretKey::generate(), Some(book.clone()))
+            .await
+            .expect("bind the subscriber");
+        book.add_endpoint_info(near.addr());
+        let dialler = Dialler::default();
+        dialler.attach(near);
+        let peer = far.id().to_string();
+
+        for round in 0..3 {
+            let lane = dialler.lane(&peer).await.expect("open a lane");
+            assert!(lane.owns_connection());
+            drop(lane);
+            assert!(
+                settles_at_zero(&live).await,
+                "round {round}: {} session(s) still open on the publisher",
+                live.load(Ordering::SeqCst)
+            );
+        }
+        assert_eq!(dialler.pool.lock().await.len(), 1, "one pooled connection");
     }
 }

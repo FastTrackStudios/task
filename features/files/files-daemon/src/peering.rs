@@ -32,7 +32,7 @@
 
 use architect::iroh_link::iroh;
 use files::FilesBackend;
-use files_sync::SyncServiceClient;
+use files_sync::{Dialled, SyncServiceClient};
 
 use crate::error::{DaemonError, Result};
 
@@ -74,7 +74,12 @@ pub async fn serve(backend: FilesBackend, whose: String, endpoint: iroh::Endpoin
 /// Signs nothing: what reaches the far gate is the endpoint iroh proved
 /// during the handshake, so what authorises the pull is `peer` having
 /// admitted this machine.
-pub async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<SyncServiceClient> {
+///
+/// The connection closes when the last copy of the returned
+/// [`Dialled`] drops. Every tick of a laptop dials its server, so a
+/// dial that never closed cost the *server* a session per tick until
+/// the laptop's process exited.
+pub async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<Dialled<SyncServiceClient>> {
     files_sync::dial_peer(endpoint, peer)
         .await
         .map_err(crate::error::from_sync)

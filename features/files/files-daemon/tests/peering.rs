@@ -58,6 +58,8 @@ struct Machine {
     backend: FilesBackend,
     daemon: SyncDaemon,
     endpoint_id: String,
+    /// Its endpoint, kept for counting the QUIC connections open on it.
+    endpoint: iroh::Endpoint,
     /// This machine's key, kept so a "restart" can come back at the same
     /// address — which is what a real one does, reading it off disk.
     key: iroh::SecretKey,
@@ -80,7 +82,7 @@ impl Machine {
         let daemon = SyncDaemon::open(backend.clone(), dir.path().join("daemon")).expect("daemon");
         let key = iroh::SecretKey::generate();
         let endpoint = bind(key.clone()).await;
-        let endpoint_id = daemon.attach_endpoint(endpoint);
+        let endpoint_id = daemon.attach_endpoint(endpoint.clone());
         Self {
             dir: dir.path().to_path_buf(),
             _dir: dir,
@@ -88,6 +90,7 @@ impl Machine {
             daemon,
 
             endpoint_id,
+            endpoint,
             key,
             clock,
         }
@@ -178,6 +181,84 @@ async fn edits_flow_both_ways_between_two_daemons() {
         server.read("mix.wav"),
         b"the final mix",
         "the laptop's work never left the laptop"
+    );
+}
+
+/// QUIC connections open on `endpoint` now, from its own counters.
+fn open_connections(endpoint: &iroh::Endpoint) -> u64 {
+    let socket = &endpoint.metrics().socket;
+    socket.num_conns_opened.get() - socket.num_conns_closed.get()
+}
+
+/// Wait up to five seconds for `endpoint` to hold `n` connections.
+async fn settles_at(endpoint: &iroh::Endpoint, n: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        if open_connections(endpoint) == n {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    open_connections(endpoint) == n
+}
+
+/// Every dial the daemon makes is closed when it is done with it, on
+/// the far side too.
+///
+/// Dropping a vox client closes its lane, not its connection, so each
+/// dial used to leave a QUIC connection and a far-side session open for
+/// as long as both processes lived. A laptop ticks against its server
+/// every thirty seconds, so that was a session per tick on the server.
+/// Counted here on the far machine's own endpoint.
+#[tokio::test(flavor = "multi_thread")]
+async fn dials_close_their_connections_and_a_redial_closes_the_old_one() {
+    let server = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = server.with_album(b"stems").await;
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    assert_eq!(open_connections(&server.endpoint), 0);
+
+    // One-shot dials: each closes when the answer is in.
+    for round in 0..3 {
+        laptop
+            .daemon
+            .peer_roots(&server.endpoint_id)
+            .await
+            .expect("ask the server what it holds");
+        assert!(
+            settles_at(&server.endpoint, 0).await,
+            "round {round}: {} connection(s) still open on the server",
+            open_connections(&server.endpoint)
+        );
+    }
+
+    // A stored lane stays up while it is the root's peer...
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("choose the album");
+    laptop.daemon.tick().await;
+    assert!(
+        settles_at(&server.endpoint, 1).await,
+        "the chosen root's lane should be the one connection: {}",
+        open_connections(&server.endpoint)
+    );
+
+    // ...and choosing the same machine again — what a redial is —
+    // replaces it rather than adding a second.
+    for _ in 0..3 {
+        laptop
+            .daemon
+            .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+            .await
+            .expect("choose the album again");
+        laptop.daemon.tick().await;
+    }
+    assert!(
+        settles_at(&server.endpoint, 1).await,
+        "a redial must close the connection it replaces: {} open",
+        open_connections(&server.endpoint)
     );
 }
 
