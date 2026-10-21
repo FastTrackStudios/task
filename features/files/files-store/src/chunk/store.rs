@@ -418,32 +418,31 @@ impl ChunkStore {
     /// entry point for content that is already a file on disk, as
     /// opposed to [`ChunkStore::write_stream`]'s arbitrary reader.
     ///
-    /// **The bytes are linked, not copied.** When the file and this
-    /// store are on the same filesystem, the content enters the store
-    /// as a second directory entry for the *same data*: a reflink
-    /// (`FICLONE`) where the filesystem can clone extents, otherwise a
-    /// plain hardlink. Either way the store gains a full, independent
-    /// reference to the content for **zero additional space**.
+    /// **The bytes are cloned, not copied, where the filesystem can.**
+    /// When the file and this store are on the same filesystem, the
+    /// content enters the store as a reflink (`FICLONE`): a separate
+    /// inode sharing the same extents, copy-on-write. The store gains a
+    /// full, independent version of the content for **zero additional
+    /// space**.
     ///
     /// This is what makes importing an existing archive possible at
     /// all. Copying is bounded by free space — a 5 TB tree needs 5 TB
-    /// to version — while linking is bounded by nothing: the bytes are
+    /// to version — while cloning is bounded by nothing: the bytes are
     /// already on the disk.
     ///
-    /// It also delivers the property that matters most here: **the
-    /// content cannot be lost by deleting the original.** A hardlink
-    /// keeps the inode alive, so removing the live file (by hand, by
-    /// accident, or by an app) frees nothing and the stored version
-    /// still reads back byte-for-byte. Measured on the production
-    /// array: 300 MB linked costs 0 MB, and deleting the source frees
-    /// 0 MB while the store returns the identical hash.
+    /// It also delivers the properties that matter most here: **the
+    /// content cannot be lost by deleting the original, nor by a
+    /// program rewriting it in place.** Separate inodes, so removing
+    /// the live file frees nothing the store needs, and a rewrite
+    /// copies-on-write rather than touching the stored version.
     ///
-    /// What a hardlink does NOT protect against is a program rewriting
-    /// the file **in place** — one inode, so both change together.
-    /// A reflink does protect against that (separate inodes sharing
-    /// extents, copy-on-write), which is why it is tried first, but it
-    /// is an optimization: the deployment is not required to provide a
-    /// cloning filesystem.
+    /// Where the filesystem cannot clone (ext4, tmpfs, most network
+    /// mounts) the placement is a real copy. It is never a hard link:
+    /// that is free too, but it is the same inode, so an in-place
+    /// rewrite changes the bytes under a blob named by their old hash
+    /// and the stored version is gone (STA-239; see `place_whole`).
+    /// Keeping history on a filesystem that cannot share blocks costs a
+    /// copy.
     ///
     /// Chunking still exists for the case linking cannot serve — a
     /// source on a *different* filesystem, where the content must be
@@ -1235,26 +1234,27 @@ pub enum Placement {
     /// of the source copies-on-write rather than touching the stored
     /// version.
     Reflinked,
-    /// Same inode, second directory entry — free, and the content
-    /// survives deletion of the original. An in-place rewrite of the
-    /// source is visible through both.
-    Hardlinked,
     /// A real copy. Correct everywhere, and the only option when the
-    /// filesystem refuses both links despite reporting the same device
-    /// (a bind mount of a different subvolume, a full disk, an
-    /// exhausted link count).
+    /// filesystem cannot share blocks (ext4, tmpfs, most network
+    /// mounts) or refuses a reflink despite reporting the same device
+    /// (a bind mount of a different subvolume, a full disk).
+    ///
+    /// There is deliberately no hard-link placement: a hard link is the
+    /// same inode, so rewriting the source **in place** changes the
+    /// bytes under a blob named by their old hash, and the stored
+    /// version is lost (see `place_whole`).
     Copied,
 }
 
-/// Place `src`'s content at `dst` as cheaply as the filesystem allows:
-/// reflink, else hardlink, else copy. Blocking; call from
+/// Place `src`'s content at `dst` as cheaply as the filesystem allows
+/// while keeping it immutable: reflink, else copy. Blocking; call from
 /// `spawn_blocking`.
 ///
 /// Writes through a unique temp name and renames, so a crash midway
 /// cannot leave a short file sitting at a content address — the same
-/// discipline `write_manifest` uses. (A reflink or hardlink is atomic
-/// in itself, but the rename costs nothing and keeps one path for all
-/// three cases.)
+/// discipline `write_manifest` uses. (A reflink is atomic
+/// in itself, but the rename costs nothing and keeps one path for both
+/// cases.)
 fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1272,7 +1272,7 @@ fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     ));
     let _ = std::fs::remove_file(&tmp);
 
-    // Reflink first, and a hard link only where there is no reflink.
+    // Reflink, else a real copy. Never a hard link.
     //
     // The order matters for correctness, not speed. A reflink is
     // copy-on-write: the store's blob is unaffected by anything done to
@@ -1290,13 +1290,19 @@ fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     // that, by rewriting a file in place and asking for the first
     // version back.
     //
+    // The revert of that inversion still kept a hard link as the
+    // fallback where reflink fails, so on any filesystem without
+    // reflink (ext4, tmpfs: the Mac Pro CI VM's temp dir, STA-239) the
+    // same in-place rewrite still corrupted the stored version, and
+    // replica sync then refused the blob as "chunk payload hashes to X,
+    // peer claimed Y". A copy is the only fallback that keeps the
+    // promise.
+    //
     // So the space problem on a filesystem with no real reflink is not
     // solved here, and is not solved by linking. It is a genuine cost of
     // keeping history where the filesystem cannot share blocks.
     let placement = if reflink_copy::reflink(src, &tmp).is_ok() {
         Placement::Reflinked
-    } else if std::fs::hard_link(src, &tmp).is_ok() {
-        Placement::Hardlinked
     } else {
         std::fs::copy(src, &tmp)?;
         Placement::Copied
