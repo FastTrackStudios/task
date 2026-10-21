@@ -24,6 +24,7 @@ pub mod admin_cli;
 pub mod agent_router;
 pub mod api_ref;
 pub mod attachments;
+pub mod attribution;
 #[cfg(feature = "plugin-scripture")]
 pub mod bible_cli;
 pub mod bots;
@@ -360,6 +361,9 @@ pub struct OrgAppState {
     pub actors: crate::activity::ActorLedger,
     /// User id → display name for the feed's bylines.
     pub people: crate::activity::People,
+    /// Account id → creator ref + name, for `created_by`
+    /// (`crate::attribution`).
+    pub creators: crate::attribution::Creators,
     /// Recall backend — spaced-repetition learning cards under
     /// `vault/Records/recall/`. Mounted for `Recall` so the deck UI +
     /// flashcard review round-trip FSRS-scheduled cards.
@@ -2151,6 +2155,10 @@ pub(crate) async fn build_org_state(
             resources.clone(),
         );
 
+        // Who a write is attributed to (`created_by`): this org's
+        // accounts, and the home org's — where bot accounts live.
+        let creators =
+            crate::attribution::Creators::new(auth.clone(), home_identity.map(|h| h.auth.clone()));
         Ok(OrgAppState {
             slug: org_root.slug().to_owned(),
             org_root: org_root.clone(),
@@ -2231,6 +2239,7 @@ pub(crate) async fn build_org_state(
             activity,
             actors: crate::activity::ActorLedger::default(),
             people: crate::activity::People::default(),
+            creators,
             #[cfg(feature = "plugin-recall")]
             recall,
             #[cfg(feature = "plugin-contacts")]
@@ -4021,6 +4030,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             inbox_proto::service::inbox::serve(crate::activity::AttributedInbox {
                 inner: org.inbox.clone(),
                 ledger: org.actors.clone(),
+                creators: org.creators.clone(),
             }),
         )
         // Live inbox changes — `Inbox`'s `#[subscribe]` stream
@@ -4296,6 +4306,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             task::serve_task_service(crate::activity::AttributedTasks {
                 inner: org.tasks.clone(),
                 ledger: org.actors.clone(),
+                creators: org.creators.clone(),
             }),
         )
         // Live task changes — the `#[subscribe]` stream sibling of

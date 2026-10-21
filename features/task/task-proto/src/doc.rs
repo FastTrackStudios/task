@@ -135,6 +135,8 @@ pub fn parse_task(rel_path: &str, basename: &str, raw: &str) -> Result<TaskInfo,
         )),
         date_created: take_str(&map, "dateCreated").and_then(|s| s.parse().ok()),
         date_modified: take_str(&map, "dateModified").and_then(|s| s.parse().ok()),
+        created_by: take_str(&map, "createdBy"),
+        created_by_name: take_str(&map, "createdByName"),
         // The writer sets the body off with one blank line; take exactly
         // that one back (see [`serialize_task`]), so details round-trip.
         details: body.strip_prefix('\n').unwrap_or(body).to_string(),

@@ -576,6 +576,48 @@ async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Resul
     );
     eyre::ensure!(queue.len() >= 4, "something to process today: {queue:?}");
 
+    // Who captured them (`attribution.seed`): the planted world mixes a
+    // person, a bot and the unattributed, and a replant kept each as it
+    // was first stamped.
+    // t[verify attribution.seed]
+    eyre::ensure!(
+        items.iter().any(|i| i
+            .created_by
+            .as_deref()
+            .is_some_and(|c| c.starts_with("bot:"))
+            && i.created_by_name.as_deref() == Some("Atlas")),
+        "a capture from Atlas: {items:?}"
+    );
+    eyre::ensure!(
+        items.iter().any(|i| i
+            .created_by
+            .as_deref()
+            .is_some_and(|c| c.starts_with("user:"))
+            && i.created_by_name.as_deref() == Some("Alice")),
+        "a capture from Alice: {items:?}"
+    );
+    eyre::ensure!(
+        items.iter().any(|i| i.created_by.is_none()),
+        "an unattributed capture: {items:?}"
+    );
+    let board = task::TaskBackend::new(org.vault_dir())
+        .list()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    let made_by = |title: &str| {
+        board
+            .iter()
+            .find(|t| t.title == title)
+            .and_then(|t| t.created_by_name.clone())
+    };
+    eyre::ensure!(
+        made_by("Master review with the label").as_deref() == Some("Atlas"),
+        "a task from Atlas"
+    );
+    eyre::ensure!(
+        made_by("Comp lead vocals — Track One").as_deref() == Some("Alice"),
+        "a task from Alice"
+    );
+
     // The day: a maintenance hour on both kinds of day.
     let scheduler =
         scheduling::VaultScheduler::new(org.vault_dir()).map_err(|e| eyre::eyre!("{e}"))?;

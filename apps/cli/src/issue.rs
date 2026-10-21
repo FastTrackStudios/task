@@ -1203,6 +1203,8 @@ pub(crate) async fn run_issue(cmd: IssueCmd) -> eyre::Result<()> {
                     dispatched_agent_tasks: task::model::StringList::default(),
                     date_created: None,
                     date_modified: None,
+                    created_by: None,
+                    created_by_name: None,
                     details: String::new(),
                     workflow: Some(task::model::WorkflowAttrs {
                         parent: Some(parent.id),
@@ -1648,6 +1650,8 @@ pub(crate) async fn run_issue(cmd: IssueCmd) -> eyre::Result<()> {
                 dispatched_agent_tasks: task::model::StringList::default(),
                 date_created: None,
                 date_modified: None,
+                created_by: None,
+                created_by_name: None,
                 details: body,
                 workflow,
             };
@@ -1916,6 +1920,8 @@ pub(crate) async fn run_issue(cmd: IssueCmd) -> eyre::Result<()> {
                     dispatched_agent_tasks: task::model::StringList::default(),
                     date_created: None,
                     date_modified: None,
+                    created_by: None,
+                    created_by_name: None,
                     details: body,
                     workflow: None,
                 };
@@ -2978,6 +2984,8 @@ fn build_pulled_task(
         dispatched_agent_tasks: task::model::StringList::default(),
         date_created: None,
         date_modified: None,
+        created_by: None,
+        created_by_name: None,
         details: ext.body.clone(),
         workflow,
     }

@@ -48,6 +48,10 @@ thread_local! {
     /// The caller of the sync RPC running on this blocking thread, set
     /// by [`ActorDispatcher`] for the closure's duration.
     static BLOCKING_CALLER: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// That caller as a creator (`crate::attribution`), resolved on the
+    /// request task by a dispatcher that carries a directory.
+    static BLOCKING_CREATOR: RefCell<Option<crate::attribution::Creator>> =
+        const { RefCell::new(None) };
 }
 
 /// The signed-in user (auth user id) behind the RPC running here, when
@@ -63,6 +67,14 @@ pub fn caller_user() -> Option<String> {
     BLOCKING_CALLER.with(|c| c.borrow().clone())
 }
 
+/// The creator the sync RPC running on this thread is attributed to:
+/// its gate caller, resolved by the dispatcher before the hop. `None`
+/// when no person or bot stands behind the call.
+#[must_use]
+pub fn caller_creator() -> Option<crate::attribution::Creator> {
+    BLOCKING_CREATOR.with(|c| c.borrow().clone())
+}
+
 /// Clears [`BLOCKING_CALLER`] however the closure ends — blocking
 /// threads are pooled, and a panicking write must not leave its caller
 /// behind for the next one.
@@ -70,27 +82,57 @@ struct ClearOnDrop;
 impl Drop for ClearOnDrop {
     fn drop(&mut self) {
         BLOCKING_CALLER.with(|c| *c.borrow_mut() = None);
+        BLOCKING_CREATOR.with(|c| *c.borrow_mut() = None);
     }
 }
 
 /// `spawn_blocking`, like architect's `TokioBlockingDispatcher`, but
-/// carrying the gate's caller across the thread hop.
+/// carrying the gate's caller across the thread hop — and, given a
+/// [`crate::attribution::Creators`] directory, who that caller is, so
+/// a create can be attributed without an async lookup on the blocking
+/// thread.
 ///
 /// The caller is read inside the returned future — that future is
 /// polled within the gate's scope, which is where the caller is set.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ActorDispatcher;
+#[derive(Default, Clone)]
+pub struct ActorDispatcher {
+    creators: Option<crate::attribution::Creators>,
+}
+
+impl ActorDispatcher {
+    /// A dispatcher that also resolves the caller as a creator.
+    #[must_use]
+    pub fn attributing(creators: crate::attribution::Creators) -> Self {
+        Self {
+            creators: Some(creators),
+        }
+    }
+}
+
+impl std::fmt::Debug for ActorDispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorDispatcher")
+            .field("attributing", &self.creators.is_some())
+            .finish()
+    }
+}
 
 impl Dispatcher for ActorDispatcher {
     fn dispatch(
         &self,
         f: Box<dyn FnOnce() -> BoxedAny + Send + 'static>,
     ) -> Pin<Box<dyn Future<Output = Result<BoxedAny, DispatchError>> + Send + 'static>> {
+        let creators = self.creators.clone();
         Box::pin(async move {
             let who = caller_user();
+            let creator = match (&creators, &who) {
+                (Some(dir), Some(id)) => Some(dir.resolve(id).await),
+                _ => None,
+            };
             tokio::task::spawn_blocking(move || {
                 let _clear = ClearOnDrop;
                 BLOCKING_CALLER.with(|c| *c.borrow_mut() = who);
+                BLOCKING_CREATOR.with(|c| *c.borrow_mut() = creator);
                 f()
             })
             .await
@@ -656,17 +698,19 @@ pub fn project_change(
 
 // ── the decorators ──────────────────────────────────────────────────
 
-/// `TaskService` with its writers noted — see the module docs.
+/// `TaskService` with its writers noted — see the module docs — and
+/// its creates attributed to the caller (`crate::attribution`).
 #[derive(Clone)]
 pub struct AttributedTasks {
     pub inner: task::TaskBackend,
     pub ledger: ActorLedger,
+    pub creators: crate::attribution::Creators,
 }
 
 impl architect::HasDispatcher for AttributedTasks {
     type Dispatcher = ActorDispatcher;
     fn dispatcher(&self) -> ActorDispatcher {
-        ActorDispatcher
+        ActorDispatcher::attributing(self.creators.clone())
     }
 }
 
@@ -692,12 +736,14 @@ impl task::TaskService for AttributedTasks {
     fn get_by_path(&self, path: &str) -> Result<task::TaskInfo, task::TaskError> {
         self.inner.get_by_path(path)
     }
-    fn create(&self, task: task::TaskInfo) -> Result<task::TaskInfo, task::TaskError> {
+    fn create(&self, mut task: task::TaskInfo) -> Result<task::TaskInfo, task::TaskError> {
         self.note(task.id);
         if !task.id.is_nil() {
             // A client-minted id is the create's key too.
             self.ledger.note("task:new", caller_user());
         }
+        // The caller made it — whatever the task it sent says.
+        crate::attribution::attribute_task(&mut task, caller_creator().as_ref());
         self.inner.create(task)
     }
     fn update(&self, task: task::TaskInfo) -> Result<task::TaskInfo, task::TaskError> {
@@ -735,17 +781,19 @@ impl task::TaskService for AttributedTasks {
     }
 }
 
-/// `Inbox` with its writers noted.
+/// `Inbox` with its writers noted, and its captures attributed to the
+/// caller (`crate::attribution`).
 #[derive(Clone)]
 pub struct AttributedInbox {
     pub inner: inbox::VaultInbox,
     pub ledger: ActorLedger,
+    pub creators: crate::attribution::Creators,
 }
 
 impl architect::HasDispatcher for AttributedInbox {
     type Dispatcher = ActorDispatcher;
     fn dispatcher(&self) -> ActorDispatcher {
-        ActorDispatcher
+        ActorDispatcher::attributing(self.creators.clone())
     }
 }
 
@@ -759,6 +807,12 @@ impl inbox_proto::Inbox for AttributedInbox {
     ) -> Result<Vec<inbox_proto::InboxItem>, inbox_proto::InboxError> {
         self.inner.review_queue(today)
     }
+    fn list_inbox_by(
+        &self,
+        created_by: String,
+    ) -> Result<Vec<inbox_proto::InboxItem>, inbox_proto::InboxError> {
+        self.inner.list_inbox_by(created_by)
+    }
     fn get_inbox_item(&self, id: &str) -> Result<inbox_proto::InboxItem, inbox_proto::InboxError> {
         self.inner.get_inbox_item(id)
     }
@@ -768,7 +822,11 @@ impl inbox_proto::Inbox for AttributedInbox {
     ) -> Result<(), inbox_proto::InboxError> {
         self.ledger
             .note(format!("inbox:{}", item.id), caller_user());
-        self.inner.upsert_inbox_item(item)
+        // A new capture is the caller's, whatever the item says; one
+        // already stored keeps its creator (the backend sees to that).
+        let mut item = item.clone();
+        crate::attribution::attribute_inbox(&mut item, caller_creator().as_ref());
+        self.inner.upsert_inbox_item(&item)
     }
     fn delete_inbox_item(&self, id: &str) -> Result<(), inbox_proto::InboxError> {
         self.ledger.note(format!("inbox:{id}"), caller_user());

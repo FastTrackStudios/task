@@ -132,6 +132,18 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
         )
         .await?;
     }
+    // The bots: accounts of their own under the bot domain, so what
+    // they captured or made says so (`attribution`).
+    for bot in example_org::bots_of(&slug) {
+        crate::admin_cli::seed_account(&auth, bot.email, PASSWORD, bot.name, None, None, "bot")
+            .await?;
+    }
+    // Who captured what, now that there is someone to say.
+    match example_org::stamp_capture_creators(&org.vault_dir(), &slug, &auth).await {
+        Ok(0) => {}
+        Ok(n) => println!("  inbox: {n} capture(s) attributed"),
+        Err(e) => println!("  inbox: creators not stamped ({e})"),
+    }
 
     // The Edit lane, now that the accounts it names exist: the owner
     // holds Editor on Music Theory, one request is open from a cast
@@ -300,6 +312,13 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
             t.status = (*status).to_owned();
             t.due = due;
             t.project_id = Some(info.id);
+            // Who made it, per the seed (`attribution`).
+            if let Some(email) = example_org::task_creator(title) {
+                if let Ok(Some(user)) = auth.auth.find_user_by_email(email).await {
+                    let creator = crate::attribution::Creator::of_account(&user);
+                    crate::attribution::attribute_task(&mut t, Some(&creator));
+                }
+            }
             tasks_backend
                 .create(t)
                 .map_err(|e| eyre::eyre!("seed task \"{title}\": {e}"))?;

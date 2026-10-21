@@ -44,6 +44,9 @@ pub fn parse_inbox_item(
         kind: yaml::str_at(&map, "kind").unwrap_or_else(|| InboxItem::KIND_FLEETING.to_string()),
         status: yaml::str_at(&map, "status").unwrap_or_else(|| InboxItem::STATUS_OPEN.to_string()),
         source: yaml::str_at(&map, "source").unwrap_or_default(),
+        // Absent on captures from before attribution: no creator.
+        created_by: yaml::str_at(&map, "created_by"),
+        created_by_name: yaml::str_at(&map, "created_by_name"),
         created: yaml::str_at(&map, "created").unwrap_or_default(),
         resurface_on: yaml::str_at(&map, "resurface_on"),
         processed_into: yaml::str_at(&map, "processed_into"),
