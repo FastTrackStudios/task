@@ -10,7 +10,7 @@ pub mod schedule;
 use thiserror::Error;
 
 pub use booking::serialize_booking;
-pub use cal_event::serialize_cal_event;
+pub use cal_event::{merge_cal_event_page, serialize_cal_event};
 pub use day_plan::serialize_day_plan;
 pub use day_template::serialize_day_template;
 pub use event_type::serialize_event_type;

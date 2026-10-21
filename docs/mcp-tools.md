@@ -127,7 +127,7 @@ holding `acme.test/songs` as `assets`, and ACME's wiki `songs` otherwise.
 
 | tool | does | wire permit |
 |---|---|---|
-| `list_events` / `create_event` / `reschedule_event` / `cancel_event` | calendar CRUD (cancel = audited delete) | `scheduling/events/**` |
+| `list_events` / `create_event` / `update_event` / `reschedule_event` / `cancel_event` | calendar CRUD (cancel = audited delete). `create_event` takes `links` (typed links to notes, stored as frontmatter wikilink properties so the note's backlinks and `.base` views find the event) and `external_ref` (`system:id`; a second create with the same ref returns the existing event). `update_event` changes title/description/location/links without moving the event, and `tombstone: true` marks an event removed upstream (kept, hidden). `list_events` filters by `external_ref`, `linked_to` and `include_tombstoned`. Rules: `features/scheduling/spec/scheduling.md` | `scheduling/events/**` |
 | `get_day_plan` / `upsert_day_plan` | the time-blocked day (upsert replaces the whole day) | `scheduling/day-plans/**` |
 | `list_open_slots` | free bookable slots for an event type | read `scheduling/slots/**` |
 | `list_bookings` / `book_slot` / `cancel_booking` | bookings against the user's bookable event types | `scheduling/bookings/**` |

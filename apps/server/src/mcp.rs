@@ -180,6 +180,25 @@ fn a_(desc: &str) -> Value {
     json!({ "type": "array", "items": { "type": "string" }, "description": desc })
 }
 
+/// An event's typed links to vault notes.
+#[cfg(feature = "plugin-scheduling")]
+fn links_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "Typed links to vault notes. Each relation becomes a frontmatter \
+                        property on the event (for: [[Gigs/caa-2026]]).",
+        "items": {
+            "type": "object",
+            "properties": {
+                "relation": s_("Lowercase slug, e.g. 'for', 'rehearsal-for', 'venue'."),
+                "target": s_("The note: 'Gigs/caa-2026' or '[[Gigs/caa-2026]]'."),
+            },
+            "required": ["relation", "target"],
+            "additionalProperties": false,
+        },
+    })
+}
+
 /// Every tool this server exposes, in the order the agent sees them.
 ///
 /// Descriptions are written *for the model*: they say when to reach
@@ -314,6 +333,13 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                     json!({
                         "from": s_("ISO date (YYYY-MM-DD). Keeps events starting on/after it."),
                         "to": s_("ISO date (YYYY-MM-DD). Keeps events starting on/before it."),
+                        "external_ref": s_("Only the event an integration made with this ref, \
+                                            'system:id' (e.g. 'pco:plan_time:123'). Finds it \
+                                            even when tombstoned — re-sync looks here first."),
+                        "linked_to": s_("Only events linking to this vault note \
+                                         (e.g. 'Gigs/caa-2026' or '[[Gigs/caa-2026]]')."),
+                        "include_tombstoned": b_("Also list events marked removed upstream \
+                                                  (hidden by default)."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -325,7 +351,11 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             plugin: "scheduling",
             description: "Put something on the calendar. Times are RFC-3339 with offset \
                           (e.g. '2026-07-25T14:00:00-05:00'); for an all-day event pass \
-                          plain dates and all_day: true.",
+                          plain dates and all_day: true. `links` ties the event to vault \
+                          notes (relation 'for' → 'Gigs/caa-2026'), so the note's backlinks \
+                          and .base views find it. An integration passes `external_ref`; \
+                          creating again with the same ref returns the existing event \
+                          (existing: true) instead of a duplicate.",
             schema: || {
                 obj(
                     json!({
@@ -334,8 +364,35 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "end": s_("RFC-3339 end (exclusive), or YYYY-MM-DD when all_day."),
                         "all_day": b_("True for an all-day event."),
                         "description": s_("Optional notes on the event."),
+                        "location": s_("Optional place, free text."),
+                        "links": links_schema(),
+                        "external_ref": s_("Optional upstream id, 'system:id' \
+                                            (e.g. 'pco:plan_time:123')."),
                     }),
                     &["title", "start", "end"],
+                )
+            },
+        },
+        ToolDef {
+            name: "update_event",
+            plugin: "scheduling",
+            description: "Change an event's title, description, location or links without \
+                          moving it (use reschedule_event to move it). Only the fields you pass \
+                          change; '' clears description/location; `links` replaces the whole \
+                          set. `tombstone: true` marks an event an integration found removed \
+                          upstream — kept on disk with its links, hidden from list_events; \
+                          `false` revives it.",
+            schema: || {
+                obj(
+                    json!({
+                        "id": s_("Event id from list_events."),
+                        "title": s_("New title."),
+                        "description": s_("New description ('' clears it)."),
+                        "location": s_("New location ('' clears it)."),
+                        "links": links_schema(),
+                        "tombstone": b_("true = removed upstream (hide, keep); false = live."),
+                    }),
+                    &["id"],
                 )
             },
         },
@@ -1705,7 +1762,8 @@ projects, priority, and dates the same way the app's quick-add does.\n\
 `capture_inbox`, not in a task. Captures arrive as suggestions the user accepts with one \
 tap, so err on the side of capturing.\n\
 - Rescheduling means `list_events` for the window, then one `reschedule_event` per move. \
-Say what you're about to move before you move it.\n\
+Say what you're about to move before you move it. Renaming or relinking an event is \
+`update_event` — it never moves it.\n\
 - Read before you write: `search_vault` then `read_note`. The user's notes are usually \
 better context than your assumptions.\n\
 - Taking on a task yourself? `claim_task` it first — claims are atomic, so parallel \
@@ -2868,7 +2926,11 @@ fn call_tool(
             let events_today = if org.plugins.contains("scheduling") {
                 org.scheduling
                     .list_events()
-                    .map(|evs| evs.iter().filter(|e| date_of(&e.start) == today).count())
+                    .map(|evs| {
+                        evs.iter()
+                            .filter(|e| e.tombstone.is_none() && date_of(&e.start) == today)
+                            .count()
+                    })
                     .unwrap_or(0)
             } else {
                 0
@@ -3159,16 +3221,27 @@ fn call_tool(
             })
         }
 
+        // t[impl scheduling.event.external-ref]
+        // t[impl scheduling.event.links.note-side]
         "list_events" => {
             let from = arg_str(args, "from");
             let to = arg_str(args, "to");
+            let external_ref = arg_external_ref(args)?;
+            let linked_to = arg_str(args, "linked_to");
+            // A ref lookup is how a re-sync finds what it made, so it
+            // sees tombstoned events too.
+            let include_tombstoned = arg_bool(args, "include_tombstoned") || external_ref.is_some();
             let mut rows = org
                 .scheduling
                 .list_events()
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
             rows.retain(|e| {
                 let day = date_of(&e.start);
-                from.as_deref().is_none_or(|f| day >= f) && to.as_deref().is_none_or(|t| day <= t)
+                from.as_deref().is_none_or(|f| day >= f)
+                    && to.as_deref().is_none_or(|t| day <= t)
+                    && external_ref.as_ref().is_none_or(|r| e.external_ref.as_ref() == Some(r))
+                    && linked_to.as_deref().is_none_or(|n| e.links_to(n))
+                    && (include_tombstoned || e.tombstone.is_none())
             });
             rows.sort_by(|a, b| a.start.cmp(&b.start));
             let out: Vec<Value> = rows.iter().take(arg_limit(args)).map(event_json).collect();
@@ -3176,21 +3249,89 @@ fn call_tool(
         }
 
         #[cfg(feature = "plugin-scheduling")]
+        // t[impl scheduling.event.external-ref.idempotent]
         "create_event" => {
-            let event = scheduling_proto::CalEvent {
-                id: uuid::Uuid::new_v4().to_string(),
-                title: required_str(args, "title")?,
-                start: required_str(args, "start")?,
-                end: required_str(args, "end")?,
-                all_day: arg_bool(args, "all_day"),
-                color: "primary".to_string(),
-                description: arg_str(args, "description"),
-                recurrence: None,
-            };
+            let external_ref = arg_external_ref(args)?;
+            if let Some(r) = &external_ref {
+                // Idempotent re-sync: the ref already has an event.
+                let existing = org
+                    .scheduling
+                    .list_events()
+                    .map_err(|e| ToolFailure::Message(format!("{e:?}")))?
+                    .into_iter()
+                    .find(|e| e.external_ref.as_ref() == Some(r));
+                if let Some(e) = existing {
+                    let mut out = event_json(&e);
+                    out["existing"] = json!(true);
+                    return Ok(out);
+                }
+            }
+            let mut event = scheduling_proto::CalEvent::new(
+                uuid::Uuid::new_v4().to_string(),
+                required_str(args, "title")?,
+                required_str(args, "start")?,
+                required_str(args, "end")?,
+            );
+            event.all_day = arg_bool(args, "all_day");
+            event.description = arg_str(args, "description");
+            event.location = arg_str(args, "location");
+            event.links = arg_event_links(args)?.unwrap_or_default();
+            event.external_ref = external_ref;
             org.scheduling
                 .upsert_event(&event)
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
             Ok(event_json(&event))
+        }
+
+        #[cfg(feature = "plugin-scheduling")]
+        // t[impl scheduling.event.update]
+        // t[impl scheduling.event.tombstone]
+        "update_event" => {
+            let id = required_str(args, "id")?;
+            let mut event = org
+                .scheduling
+                .list_events()
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?
+                .into_iter()
+                .find(|e| e.id == id)
+                .ok_or_else(|| ToolFailure::Message(format!("no event with id `{id}`")))?;
+            let mut changed: Vec<&str> = Vec::new();
+            if let Some(title) = arg_str(args, "title") {
+                event.title = title;
+                changed.push("title");
+            }
+            if let Some(d) = optional_field(args, "description") {
+                event.description = d;
+                changed.push("description");
+            }
+            if let Some(l) = optional_field(args, "location") {
+                event.location = l;
+                changed.push("location");
+            }
+            if let Some(links) = arg_event_links(args)? {
+                event.links = links;
+                changed.push("links");
+            }
+            if let Some(t) = args.get("tombstone").and_then(Value::as_bool) {
+                match (t, event.tombstone.is_some()) {
+                    (true, false) => event.tombstone = Some(chrono::Utc::now().to_rfc3339()),
+                    (false, true) => event.tombstone = None,
+                    _ => {}
+                }
+                changed.push("tombstone");
+            }
+            if changed.is_empty() {
+                return Err(ToolFailure::Message(
+                    "nothing to change: pass title, description, location, links or tombstone"
+                        .into(),
+                ));
+            }
+            org.scheduling
+                .upsert_event(&event)
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
+            let mut out = event_json(&event);
+            out["changed"] = json!(changed);
+            Ok(out)
         }
 
         #[cfg(feature = "plugin-scheduling")]
@@ -5342,7 +5483,75 @@ fn event_json(e: &scheduling_proto::CalEvent) -> Value {
         "end": e.end,
         "all_day": e.all_day,
         "description": e.description,
+        "location": e.location,
+        "links": e.links.iter().map(|l| json!({
+            "relation": l.relation,
+            "target": l.target,
+        })).collect::<Vec<_>>(),
+        "external_ref": e.external_ref.as_ref().map(|r| json!({
+            "system": r.system,
+            "id": r.id,
+        })),
+        "tombstone": e.tombstone,
     })
+}
+
+/// `external_ref` as `'system:id'` or `{system, id}`. Absent → `None`.
+#[cfg(feature = "plugin-scheduling")]
+fn arg_external_ref(args: &Value) -> Result<Option<scheduling_proto::ExternalRef>, ToolFailure> {
+    let bad = || {
+        ToolFailure::Message(
+            "`external_ref` must be 'system:id' (e.g. 'pco:plan_time:123') or {system, id}".into(),
+        )
+    };
+    match args.get("external_ref") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) => scheduling_proto::ExternalRef::parse(s).map(Some).ok_or_else(bad),
+        Some(Value::Object(o)) => {
+            let part = |k: &str| o.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("");
+            let (system, id) = (part("system"), part("id"));
+            if system.is_empty() || id.is_empty() || system.contains(':') {
+                return Err(bad());
+            }
+            Ok(Some(scheduling_proto::ExternalRef {
+                system: system.to_owned(),
+                id: id.to_owned(),
+            }))
+        }
+        Some(_) => Err(bad()),
+    }
+}
+
+/// `links` as `[{relation, target}]`. Absent → `None`; present (even
+/// empty) → the set, so "remove every link" is expressible.
+#[cfg(feature = "plugin-scheduling")]
+fn arg_event_links(args: &Value) -> Result<Option<scheduling_proto::EventLinks>, ToolFailure> {
+    let Some(v) = args.get("links").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let items = v
+        .as_array()
+        .ok_or_else(|| ToolFailure::Message("`links` must be an array of {relation, target}".into()))?;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let relation = item.get("relation").and_then(Value::as_str).unwrap_or("").trim();
+        let target = item.get("target").and_then(Value::as_str).unwrap_or("").trim();
+        if !scheduling_proto::EventLink::valid_relation(relation) {
+            return Err(ToolFailure::Message(format!(
+                "link relation `{relation}` must be a lowercase slug (e.g. 'for') and not one of \
+                 the event's own fields ({})",
+                scheduling_proto::CalEvent::RESERVED_KEYS.join(", ")
+            )));
+        }
+        if target.trim_matches(|c| c == '[' || c == ']').is_empty() {
+            return Err(ToolFailure::Message(format!(
+                "link `{relation}` needs a target note, e.g. 'Gigs/caa-2026'"
+            )));
+        }
+        out.push(scheduling_proto::EventLink::new(relation, target));
+    }
+    Ok(Some(out.into()))
 }
 
 fn project_json(p: &project::ProjectInfo) -> Value {

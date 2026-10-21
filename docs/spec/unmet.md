@@ -842,6 +842,20 @@ hangs. `lane::vault` keeps one adopter per vault per process; the second
 shares the first's binding, and `shutdown` releases it so a restart in
 the same process adopts afresh.
 
+## Calendar events ([`../../features/scheduling/spec/scheduling.md`](../../features/scheduling/spec/scheduling.md))
+
+Seven of the eight rules carry an implementation marker and are verified
+by `apps/server/tests/it/mcp_calendar_e2e.rs` (plus unit tests in the
+scheduling crates).
+
+### `scheduling.tombstone.notes` — a convention, not code
+
+The tombstone convention for mirrored *notes* (`external_ref`,
+`tombstone`, `tombstone_reason` properties) is carried by the property
+tools rather than by anything calendar-specific, so it has no impl
+marker of its own. It becomes checkable when an integration (the PCO
+mirror) writes notes; its tests should carry the verify marker.
+
 ## Running the suites
 
 The integration suite is written for **nextest** (one process per test),
