@@ -664,7 +664,12 @@ impl Actor {
             internal_cmd_tx: fs_commands_tx,
             protect,
         });
-        rt.spawn(db_actor.run());
+        // PATCH(task): spawn on the runtime this future runs on rather than
+        // through `rt`, which is empty when the store was opened on a
+        // caller-provided runtime (`load_with_opts_on`). For a store that
+        // owns its runtime this is the same runtime: `load_with_opts`
+        // spawns `Actor::new` onto it.
+        tokio::spawn(db_actor.run());
         Ok(Self {
             context: slot_context.clone(),
             cmd_rx,
@@ -1407,13 +1412,39 @@ impl FsStore {
             .enable_time()
             .build()?;
         let handle = rt.handle().clone();
+        Self::load_on(db_path, options, handle, rt.into()).await
+    }
+
+    /// PATCH(task): load or create a store whose actors run on an existing
+    /// tokio runtime instead of a private one.
+    ///
+    /// [`load_with_opts`](FsStore::load_with_opts) builds a multi-thread
+    /// runtime per store, sized to the number of cores, so a process with
+    /// many stores carries `stores × cores` threads. Passing one shared
+    /// runtime's handle here keeps the thread count independent of the
+    /// number of stores. The runtime must be multi-threaded, have the time
+    /// driver enabled, and outlive the store.
+    pub async fn load_with_opts_on(
+        db_path: PathBuf,
+        options: Options,
+        rt: tokio::runtime::Handle,
+    ) -> Result<FsStore> {
+        Self::load_on(db_path, options, rt, RtWrapper(None)).await
+    }
+
+    async fn load_on(
+        db_path: PathBuf,
+        options: Options,
+        handle: tokio::runtime::Handle,
+        rt: RtWrapper,
+    ) -> Result<FsStore> {
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let actor = handle
             .spawn(Actor::new(
                 db_path,
-                rt.into(),
+                rt,
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
