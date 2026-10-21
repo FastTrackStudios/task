@@ -76,7 +76,10 @@ async fn song(who: &Session) -> SongDoc {
 async fn seeded_set(who: &Session) -> Collection {
     who.collections()
         .await
-        .list("acme-audio".to_owned(), Some(CollectionKind::new("setlist")))
+        .list(
+            "acme-audio".to_owned(),
+            Some(CollectionKind::new("setlist")),
+        )
         .await
         .expect("list setlists")
         .into_iter()
@@ -161,7 +164,10 @@ async fn the_late_chart_save_is_stale_not_an_overwrite() {
         .expect("a save against the current revision lands");
     let after = chart(&phone).await;
     assert_eq!(after.source, merged);
-    assert_eq!(after.revision, landed.revision, "the revision handed back is the one on disk");
+    assert_eq!(
+        after.revision, landed.revision,
+        "the revision handed back is the one on disk"
+    );
 
     // An empty revision is the old, unconditional save — kept, because
     // every client written before revisions sends it.
@@ -304,7 +310,11 @@ async fn the_late_setlist_save_is_stale_not_an_overwrite() {
         .expect("a save against the current revision lands");
     assert_eq!(landed.revision, fresh.revision + 1);
     assert_eq!(
-        landed.items.iter().map(|it| it.node.clone()).collect::<Vec<_>>(),
+        landed
+            .items
+            .iter()
+            .map(|it| it.node.clone())
+            .collect::<Vec<_>>(),
         kept
     );
 }

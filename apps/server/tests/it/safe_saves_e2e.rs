@@ -14,8 +14,10 @@
 //! drives it).
 //!
 //! - A **chart** and a **song** written on A reach B. A client on each
-//!   node reads them and gets the *same* revision — a revision is the
-//!   document's sha, so it means one thing on every node. B's client
+//!   node reads them and gets the *same* revision — although B's
+//!   collaborative layer writes its copy back with the frontmatter in
+//!   another order, a revision digests what the document says, not its
+//!   bytes, so it means one thing on every node. B's client
 //!   saves first; the sweep brings that to A; A's client, still holding
 //!   the old revision, saves and is told `Stale`, and B's edit is what A
 //!   holds.
@@ -74,25 +76,36 @@ async fn sweep(node: &LocalNode) {
     .expect("the sweep did not finish");
 }
 
-/// A shelf document's text on `node`, or `None`.
-fn shelf_doc(node: &LocalNode, group: &str, rel: &str) -> Option<String> {
-    let org = node.state().org(ORG)?;
-    let vault_id = match group {
-        "charts" => resources_proto::assets::charts_vault_id(),
-        _ => resources_proto::assets::songs_vault_id(),
-    };
-    let root = org.vault_sync.root(&vault_id).ok()?;
-    std::fs::read_to_string(root.join(rel)).ok()
-}
-
-async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
+async fn eventually_at<T>(what: &str, mut read: impl AsyncFnMut() -> Option<T>) -> T {
     for _ in 0..300 {
-        if cond() {
-            return;
+        if let Some(found) = read().await {
+            return found;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("timed out waiting for: {what}");
+}
+
+/// The chart, once `res`'s node holds it at revision `want`.
+async fn chart_at(res: &ResourcesServiceClient, slug: &str, want: &str, what: &str) -> ChartDoc {
+    eventually_at(what, async || {
+        res.chart(slug.to_owned())
+            .await
+            .ok()
+            .filter(|c| c.revision == want)
+    })
+    .await
+}
+
+/// The song, once `res`'s node holds it at revision `want`.
+async fn song_at(res: &ResourcesServiceClient, slug: &str, want: &str, what: &str) -> SongDoc {
+    eventually_at(what, async || {
+        res.song(slug.to_owned())
+            .await
+            .ok()
+            .filter(|s| s.revision == want)
+    })
+    .await
 }
 
 fn resources_err(e: architect::vox::VoxError<ResourcesError>) -> ResourcesError {
@@ -187,30 +200,23 @@ async fn the_late_save_is_stale_with_no_host() {
         })
         .await
         .expect("A writes the chart");
+
+    // ── the sweeps carry them to B; one client on each node reads
+    // both, and gets one revision each ──
     sweep(&b).await;
     sweep(&a).await;
-    let on_a = |group: &str, rel: &str| shelf_doc(&a, group, rel);
-    let a_chart_text = on_a("charts", &chart.rel_path).expect("the chart on A");
-    let a_song_text = on_a("songs", &song.rel_path).expect("the song on A");
-    eventually("the chart on B", || {
-        shelf_doc(&b, "charts", &chart.rel_path).as_deref() == Some(a_chart_text.as_str())
-    })
-    .await;
-    eventually("the song on B", || {
-        shelf_doc(&b, "songs", &song.rel_path).as_deref() == Some(a_song_text.as_str())
-    })
-    .await;
-
-    // ── one client on each node reads both: one revision each ──
     let a_chart = a_res.chart(chart.slug.clone()).await.expect("A reads");
-    let b_chart = b_res.chart(chart.slug.clone()).await.expect("B reads");
+    let a_song = a_res.song(song.slug.clone()).await.expect("A reads");
     assert!(!a_chart.revision.is_empty());
+    // B's copy is written back by its collaborative layer, which orders
+    // the frontmatter its own way: byte-different, the same document —
+    // and so, by construction, the same revision.
+    let b_chart = chart_at(&b_res, &chart.slug, &a_chart.revision, "the chart on B").await;
+    let b_song = song_at(&b_res, &song.slug, &a_song.revision, "the song on B").await;
     assert_eq!(
         a_chart.revision, b_chart.revision,
         "one document, one revision, on every node"
     );
-    let a_song = a_res.song(song.slug.clone()).await.expect("A reads");
-    let b_song = b_res.song(song.slug.clone()).await.expect("B reads");
     assert_eq!(a_song.revision, b_song.revision);
 
     // ── B saves first ──
@@ -234,16 +240,8 @@ async fn the_late_save_is_stale_with_no_host() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     sweep(&a).await;
     sweep(&b).await;
-    let b_chart_text = shelf_doc(&b, "charts", &chart.rel_path).expect("B's chart");
-    let b_song_text = shelf_doc(&b, "songs", &song.rel_path).expect("B's song");
-    eventually("B's chart on A", || {
-        on_a("charts", &chart.rel_path).as_deref() == Some(b_chart_text.as_str())
-    })
-    .await;
-    eventually("B's song on A", || {
-        on_a("songs", &song.rel_path).as_deref() == Some(b_song_text.as_str())
-    })
-    .await;
+    chart_at(&a_res, &chart.slug, &b_saved.revision, "B's chart on A").await;
+    song_at(&a_res, &song.slug, &b_song_saved.revision, "B's song on A").await;
 
     // ── A's client, still on the old revisions, saves: Stale ──
     let late = a_res
@@ -267,7 +265,10 @@ async fn the_late_save_is_stale_with_no_host() {
         .await
         .map_err(resources_err)
         .expect_err("A's song save was made against an old revision");
-    assert_eq!(late_song, ResourcesError::Stale(b_song_saved.revision.clone()));
+    assert_eq!(
+        late_song,
+        ResourcesError::Stale(b_song_saved.revision.clone())
+    );
 
     // B's edits are what A holds; the refusals wrote nothing.
     let a_now = a_res.chart(chart.slug.clone()).await.expect("A re-reads");
@@ -292,7 +293,11 @@ async fn the_late_save_is_stale_with_no_host() {
     let cli: CollectionServiceClient =
         client(&a.caller(ORG, Some(sign_in(&a).await)).await.unwrap());
     let set = laptop
-        .create(ORG.into(), "Friday Set".into(), CollectionKind::new("setlist"))
+        .create(
+            ORG.into(),
+            "Friday Set".into(),
+            CollectionKind::new("setlist"),
+        )
         .await
         .expect("a setlist on A");
     for node in [
@@ -336,7 +341,10 @@ async fn the_late_save_is_stale_with_no_host() {
     let held = laptop.get(set.id.clone()).await.unwrap().unwrap();
     assert_eq!(held.title, "Friday Set", "the refused save wrote nothing");
     assert_eq!(
-        held.items.iter().map(|it| it.node.clone()).collect::<Vec<_>>(),
+        held.items
+            .iter()
+            .map(|it| it.node.clone())
+            .collect::<Vec<_>>(),
         order.into_iter().rev().collect::<Vec<_>>(),
         "the early save survived"
     );

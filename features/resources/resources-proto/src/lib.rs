@@ -258,10 +258,13 @@ pub struct ChartDoc {
     ///
     /// Server-issued, never computed by an app: [`ResourcesService::chart`]
     /// fills it, and [`ChartUpsert::revision`] hands back the new one
-    /// after a save. It is the sha-256 of the chart's document, the same
-    /// string `VaultSync` reports for that path, so it means the same
-    /// thing on every node holding the document — a revision read on a
-    /// laptop is checked correctly against a phone's copy.
+    /// after a save. It is a digest of what the chart's document *says*
+    /// — its frontmatter as data, then its body — rather than of its
+    /// bytes, so it means the same thing on every node holding the
+    /// document: the collaborative layer re-renders a synced chart with
+    /// its frontmatter keys in its own order, and that is not an edit. A
+    /// revision read on a laptop is checked correctly against a phone's
+    /// copy.
     ///
     /// On an upsert it is the *expected* revision:
     ///
@@ -936,7 +939,8 @@ pub trait ResourcesService {
     /// clients each hold the revision they read; the first save wins,
     /// and the second is told rather than overwriting it. The check and
     /// the write are one step on the node (the vault's write lock), so
-    /// there is no window between them. [`ChartUpsert::revision`] is the
+    /// there is no window between them (the read's bytes are what the
+    /// vault's conditional write is checked against). [`ChartUpsert::revision`] is the
     /// revision to hold next. An empty revision is the old,
     /// unconditional save.
     fn upsert_chart(&self, chart: ChartDoc) -> Result<ChartUpsert, ResourcesError>;

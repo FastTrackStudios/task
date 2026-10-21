@@ -102,8 +102,10 @@ record of what it already says.
 
 t[storage.save.revision]
 A chart or a song read through the library lane carries a server-issued
-revision: the sha-256 of its document, the same string the vault reports for
-the file, so it means the same thing on every node holding the document. A
+revision: a digest of what the document says — its frontmatter as data, keys
+in sorted order, then its body — so it means the same thing on every node
+holding the document, including after the collaborative layer re-renders the
+file with its keys in another order. A
 save that sends a revision lands only if the document is still at it; anything
 else — another client's save, a collaborative edit flushed, a change pulled
 from another device, the document deleted — is refused as `Stale` with the

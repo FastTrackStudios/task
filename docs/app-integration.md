@@ -359,11 +359,13 @@ match resources.upsert_chart(edited).await {
   unchanged; the upsert's answer (`ChartUpsert::revision`,
   `SongUpsert::revision`, the saved `Collection`) is the one to hold next, so
   a second save needs no re-read.
-- A chart's or song's revision is the sha-256 of its document — the same
-  string `VaultSync` reports for `rel_path` — so it means the same thing on
-  every node: a revision read on a laptop's node is checked correctly on a
-  phone's after the devices sync, with no host anywhere. Anything that changes
-  the document makes it stale: another app's save, a collaborative edit
+- A chart's or song's revision is a digest of what its document says (the
+  frontmatter as data, then the body), not the file's sha: the collaborative
+  layer re-renders a synced document with its frontmatter keys in its own
+  order, and that is not an edit. So a revision means the same thing on every
+  node — one read on a laptop's node is checked correctly on a phone's after
+  the devices sync, with no host anywhere. Anything that changes what the
+  document says makes it stale: another app's save, a collaborative edit
   flushed, a change pulled from another device, the chart deleted
   (`Stale("")`), or the server moving the song's default flag off it.
 - An **empty** revision is the unconditional save. That is what a create

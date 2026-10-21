@@ -55,8 +55,8 @@ where
     let schema = vox_phon::schema_bytes::<W>().expect("writer schema");
     let bundle = vox_phon::parse_schema_bytes(&schema).expect("parse writer schema");
     let wire = vox_phon::to_vec(old).expect("encode");
-    let program = vox_phon::build_decode_program::<R>(&bundle)
-        .expect("the older shape must stay compatible");
+    let program =
+        vox_phon::build_decode_program::<R>(&bundle).expect("the older shape must stay compatible");
     vox_phon::decode_owned_with_program(&program, &wire).expect("decode")
 }
 
@@ -87,7 +87,10 @@ fn an_old_chart_save_decodes_with_no_revision() {
             ..ChartDoc::default()
         }
     );
-    assert!(got.revision.is_empty(), "no revision: the old, unconditional save");
+    assert!(
+        got.revision.is_empty(),
+        "no revision: the old, unconditional save"
+    );
 }
 
 #[test]

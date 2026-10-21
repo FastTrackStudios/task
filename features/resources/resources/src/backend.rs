@@ -273,35 +273,31 @@ impl AssetShelf {
     /// [`crate::chart::refresh_document`] matters: the smaller the
     /// region a save rewrites, the less there is to merge.
     fn put(&self, rel: &str, text: &str) -> Result<(), ResourcesError> {
-        self.put_expecting(rel, text, "").map(|_sha| ())
+        self.put_expecting(rel, text, None)
     }
 
-    /// Write one asset document, conditionally on `expected` — the
-    /// revision a caller read — and answer the revision written.
+    /// Write one asset document, conditionally on `read_sha` — the raw
+    /// sha of the bytes a safe save checked its revision against.
     ///
-    /// An empty `expected` is [`Self::put`]'s unconditional write, for
-    /// the reasons given there. A non-empty one is the safe save: the
-    /// vault compares it with the document's current sha under its write
-    /// lock and refuses on a mismatch, so the check and the write cannot
-    /// be split by another writer. The refusal is
-    /// [`ResourcesError::Stale`] with the sha the document is at now.
+    /// `None` is [`Self::put`]'s unconditional write, for the reasons
+    /// given there. `Some` hands the vault `IfMatch::Sha`, so the vault
+    /// refuses under its write lock if anything changed the file since
+    /// that check, and the check and the write cannot be split by
+    /// another writer. The refusal is [`ResourcesError::Stale`] carrying
+    /// the revision the document is at now.
     fn put_expecting(
         &self,
         rel: &str,
         text: &str,
-        expected: &str,
-    ) -> Result<String, ResourcesError> {
-        let if_match = if expected.is_empty() {
-            IfMatch::Force
-        } else {
-            IfMatch::Sha(expected.to_owned())
-        };
+        read_sha: Option<&str>,
+    ) -> Result<(), ResourcesError> {
+        let if_match = read_sha.map_or(IfMatch::Force, |sha| IfMatch::Sha(sha.to_owned()));
         self.vault
             .put_file(&self.vault_id, rel, text.as_bytes().to_vec(), if_match)
-            .map(|ack| ack.sha256)
+            .map(|_ack| ())
             .map_err(|e| match e {
-                vault_proto::VaultSyncError::Conflict { server_sha, .. } => {
-                    ResourcesError::Stale(server_sha)
+                vault_proto::VaultSyncError::Conflict { server_bytes, .. } => {
+                    ResourcesError::Stale(revision_of(&String::from_utf8_lossy(&server_bytes)))
                 }
                 e => ResourcesError::Io(format!("write {rel}: {e}")),
             })
@@ -1129,11 +1125,8 @@ fn io_err(e: &ResourceError) -> ResourcesError {
     ResourcesError::Io(e.to_string())
 }
 
-/// A document's revision: the lowercase-hex sha-256 of its bytes —
-/// byte-for-byte the sha `VaultSync` reports for the same path, which
-/// is what lets a revision read here be checked by the vault's own
-/// conditional write, and read on one node be checked on another.
-fn revision_of(bytes: &[u8]) -> String {
+/// Lowercase-hex sha-256 — the vault's own spelling of a file's sha.
+fn sha_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
     Sha256::digest(bytes)
         .iter()
@@ -1144,27 +1137,119 @@ fn revision_of(bytes: &[u8]) -> String {
         })
 }
 
+/// A document's **revision**: the sha-256 of what it *says* — its
+/// frontmatter read as data, keys in sorted order, then its body — not
+/// of its bytes.
+///
+/// Not the file's sha, and the difference is load-bearing. A chart is a
+/// collaborative document: once it has been opened or exchanged with
+/// another device, the CRDT layer writes the file back from its own
+/// model, and that model keeps frontmatter as a map — so the same chart
+/// is re-rendered with its keys in a different order, byte-different and
+/// meaning-identical. A raw sha would call that a change: a revision read
+/// on a laptop would never match a phone's copy of the same chart, and a
+/// person's held revision would go stale because a write-behind
+/// re-rendered the file nobody edited. Hashing the content instead
+/// leaves exactly the changes a person could see.
+///
+/// A document with no readable frontmatter is hashed whole.
+fn revision_of(document: &str) -> String {
+    let parsed = crate::sermon::split(document).and_then(|(front, body)| {
+        serde_yaml::from_str::<serde_yaml::Value>(front)
+            .ok()
+            .map(|v| (v, body))
+    });
+    match parsed {
+        Some((front, body)) => {
+            let mut canon = String::new();
+            canonical_yaml(&front, &mut canon);
+            // A separator no YAML rendering produces, so a value can never
+            // run into the body.
+            canon.push('\u{0}');
+            canon.push_str(body);
+            sha_hex(canon.as_bytes())
+        }
+        None => sha_hex(document.as_bytes()),
+    }
+}
+
+/// One canonical spelling of a YAML value: maps in sorted key order,
+/// scalars in a fixed quoted form. Two renderings of the same data — the
+/// order a serializer chose, `''` against `""` — spell the same.
+fn canonical_yaml(v: &serde_yaml::Value, out: &mut String) {
+    use serde_yaml::Value;
+    use std::fmt::Write as _;
+    match v {
+        Value::Null => out.push('~'),
+        Value::Bool(b) => {
+            let _ = write!(out, "{b}");
+        }
+        Value::Number(n) => {
+            let _ = write!(out, "#{n}");
+        }
+        Value::String(s) => {
+            let _ = write!(out, "{s:?}");
+        }
+        Value::Sequence(items) => {
+            out.push('[');
+            for item in items {
+                canonical_yaml(item, out);
+                out.push(',');
+            }
+            out.push(']');
+        }
+        Value::Mapping(map) => {
+            let mut entries: Vec<(String, &Value)> = map
+                .iter()
+                .map(|(k, v)| {
+                    let mut key = String::new();
+                    canonical_yaml(k, &mut key);
+                    (key, v)
+                })
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            out.push('{');
+            for (k, v) in entries {
+                out.push_str(&k);
+                out.push(':');
+                canonical_yaml(v, out);
+                out.push(',');
+            }
+            out.push('}');
+        }
+        Value::Tagged(t) => {
+            let _ = write!(out, "!{}", t.tag);
+            canonical_yaml(&t.value, out);
+        }
+    }
+}
+
 /// The revision of the document at `abs`, or empty when there is none.
 fn revision_at(abs: &Path) -> String {
-    std::fs::read(abs)
-        .map(|bytes| revision_of(&bytes))
+    std::fs::read_to_string(abs)
+        .map(|d| revision_of(&d))
         .unwrap_or_default()
 }
 
 /// The safe-save check made *before* any work: a caller that sent a
 /// revision gets [`ResourcesError::Stale`] at once when the document
 /// is not at it — including when it is gone, which reads as the empty
-/// revision. The vault repeats the check atomically at the write; this
-/// one exists so a stale save rewrites nothing on the way (a sibling
-/// chart's default flag, say) before it is refused.
+/// revision. Passing, it answers the raw sha of the bytes it checked,
+/// which the write then hands the vault as `IfMatch::Sha`: so a change
+/// landing between this read and that write is refused too, atomically,
+/// under the vault's write lock. It runs first so a stale save rewrites
+/// nothing on the way (a sibling chart's default flag, say).
 // t[impl storage.save.revision]
-fn expect_revision(expected: &str, existing: Option<&str>) -> Result<(), ResourcesError> {
+fn expect_revision(
+    expected: &str,
+    existing: Option<&str>,
+) -> Result<Option<String>, ResourcesError> {
     if expected.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    let current = existing.map(|d| revision_of(d.as_bytes())).unwrap_or_default();
+    let current = existing.map(revision_of).unwrap_or_default();
     if current == expected {
-        Ok(())
+        Ok(existing.map(|d| sha_hex(d.as_bytes())))
     } else {
         Err(ResourcesError::Stale(current))
     }
@@ -1410,7 +1495,7 @@ impl ResourcesService for ResourcesBackend {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(ResourcesError::Io(e.to_string())),
         };
-        expect_revision(&song_doc.revision, old.as_deref())?;
+        let read_sha = expect_revision(&song_doc.revision, old.as_deref())?;
         let (md, created) = match old {
             Some(old) => (
                 song::refresh_document(&old, &song_doc).map_err(|e| io_err(&e))?,
@@ -1421,7 +1506,8 @@ impl ResourcesService for ResourcesBackend {
                 true,
             ),
         };
-        let revision = shelf.put_expecting(&rel, &md, &song_doc.revision)?;
+        shelf.put_expecting(&rel, &md, read_sha.as_deref())?;
+        let revision = revision_at(&abs);
         Ok(SongUpsert {
             slug,
             rel_path: rel,
@@ -1546,7 +1632,7 @@ impl ResourcesService for ResourcesBackend {
         };
         // A safe save against a chart that has moved on stops here,
         // before anything is written — this chart or a sibling's flag.
-        expect_revision(&chart_doc.revision, old.as_deref())?;
+        let read_sha = expect_revision(&chart_doc.revision, old.as_deref())?;
         let (md, created) = match old {
             Some(old) => (
                 chart::refresh_document(&old, &chart_doc).map_err(|e| io_err(&e))?,
@@ -1559,7 +1645,7 @@ impl ResourcesService for ResourcesBackend {
         };
         // One file, one write, through the vault — see [`AssetShelf::put`]
         // — and conditional on the caller's revision when it sent one.
-        shelf.put_expecting(&rel, &md, &chart_doc.revision)?;
+        shelf.put_expecting(&rel, &md, read_sha.as_deref())?;
 
         // The flag the caller asked for is a request; the invariant is
         // settled by re-reading the song's charts now that this one is
@@ -1598,7 +1684,7 @@ impl ResourcesService for ResourcesBackend {
         let source = chart::source_of(&document);
         // The revision of exactly the bytes the source came from, so a
         // save made against this read is checked against this read.
-        let revision = revision_of(document.as_bytes());
+        let revision = revision_of(&document);
         Ok(ChartDoc {
             slug: found.resource.slug,
             title: found.resource.title,
@@ -2477,7 +2563,7 @@ mod tests {
         );
     }
 
-    /// The safe save, at the lane: a read carries the document's sha,
+    /// The safe save, at the lane: a read carries the document's revision,
     /// the save that names it lands and hands back the next one, and a
     /// save against an old one is `Stale` and writes nothing — not the
     /// chart and not a sibling's default flag.
@@ -2492,9 +2578,34 @@ mod tests {
             })
             .unwrap();
         let read = be.chart(&made.slug).unwrap();
-        assert_eq!(read.revision, made.revision, "the save hands back what a read sees");
-        let on_disk = std::fs::read(chart_file(&dir, &made.slug)).unwrap();
-        assert_eq!(read.revision, revision_of(&on_disk), "the sha of the document");
+        assert_eq!(
+            read.revision, made.revision,
+            "the save hands back what a read sees"
+        );
+        let on_disk = std::fs::read_to_string(chart_file(&dir, &made.slug)).unwrap();
+        assert_eq!(
+            read.revision,
+            revision_of(&on_disk),
+            "the revision of the document"
+        );
+
+        // The collaborative layer re-renders a document with its
+        // frontmatter keys in its own order: same chart, same revision.
+        let (front, body) = crate::sermon::split(&on_disk).unwrap();
+        let mut lines: Vec<&str> = front.lines().collect();
+        lines.reverse();
+        let reordered = format!("---\n{}\n---\n{body}", lines.join("\n"));
+        assert_ne!(reordered, on_disk);
+        assert_eq!(
+            revision_of(&reordered),
+            read.revision,
+            "a key reorder is not an edit"
+        );
+        assert_ne!(
+            revision_of(&on_disk.replace("| G |", "| A |")),
+            read.revision,
+            "an edit is"
+        );
 
         let first = be
             .upsert_chart(ChartDoc {
@@ -2513,7 +2624,11 @@ mod tests {
         });
         assert_eq!(late, Err(ResourcesError::Stale(first.revision.clone())));
         let now = be.chart(&made.slug).unwrap();
-        assert_eq!(now.source, "| G | C |", "the refused save wrote nothing");
+        assert_eq!(
+            now.source.trim_end(),
+            "| G | C |",
+            "the refused save wrote nothing"
+        );
         assert_eq!(now.revision, first.revision);
 
         // Deleted since it was read: stale, at the empty revision, and

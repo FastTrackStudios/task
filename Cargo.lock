@@ -2700,6 +2700,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "vox",
+ "vox-phon",
  "vox-types",
 ]
 
@@ -17028,6 +17029,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "vault",
@@ -17046,6 +17048,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "vox",
+ "vox-phon",
  "vox-types",
 ]
 

@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collection_proto::{
-    Collection, CollectionError, CollectionItem, CollectionKind, CollectionSave, CollectionService, NodeKind,
-    NodeRef, Placement,
+    Collection, CollectionError, CollectionItem, CollectionKind, CollectionSave, CollectionService,
+    NodeKind, NodeRef, Placement,
 };
 use vault_live::lexorank;
 
@@ -824,7 +824,9 @@ mod tests {
             items: items.iter().map(|i| NodeRef::song(*i)).collect(),
         };
 
-        let first = s.save(save(read.revision, "Set", &["c", "a", "b"])).unwrap();
+        let first = s
+            .save(save(read.revision, "Set", &["c", "a", "b"]))
+            .unwrap();
         assert_eq!(first.revision, read.revision + 1);
         assert_eq!(nodes(&first), ["c", "a", "b"]);
         assert!(
@@ -866,7 +868,9 @@ mod tests {
             Err(CollectionError::BadRequest(_))
         ));
         let mut into_itself = save(moved.revision, "Set", &["a"]);
-        into_itself.items.push(NodeRef::parse(&format!("collection:{}", c.id)).unwrap());
+        into_itself
+            .items
+            .push(NodeRef::parse(&format!("collection:{}", c.id)).unwrap());
         assert!(matches!(
             s.save(into_itself),
             Err(CollectionError::BadRequest(_))

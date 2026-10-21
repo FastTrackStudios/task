@@ -18,8 +18,8 @@ resources-proto = { workspace = true }
 # write goes through `VaultSync::put_file` so `vault-collab` sees it.
 vault = { workspace = true }
 vault-proto = { workspace = true }
-# A chart's or song's revision is the sha-256 of its document — the same
-# hex the vault reports, so the vault's conditional write checks it.
+# A chart's or song's revision is a sha-256 digest of its document's
+# content (frontmatter as data, then body) — see `backend::revision_of`.
 sha2 = { workspace = true }
 # Book table + OSIS ids for the caption scripture-reference extractor.
 scripture-proto = { workspace = true }
