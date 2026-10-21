@@ -73,14 +73,14 @@ impl WorkstreamBackend {
     fn list_inner(&self) -> Result<Vec<Workstream>, WorkstreamError> {
         let vault = self.open_vault()?;
         let mut out = Vec::new();
-        for page in &vault.pages {
-            let proto = page.to_proto();
+        for page in vault.pages {
+            let proto = page.into_proto();
             if !looks_like_workstream(&proto) {
                 continue;
             }
             match parse_page(&proto) {
                 Ok(w) => out.push(w),
-                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "workstream parse failed"),
+                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "workstream parse failed"),
             }
         }
         Ok(out)
@@ -97,14 +97,14 @@ impl WorkstreamBackend {
     fn org_tasks(&self) -> Result<Vec<task::TaskInfo>, WorkstreamError> {
         let vault = self.open_vault()?;
         let mut out = Vec::new();
-        for page in &vault.pages {
-            let proto = page.to_proto();
+        for page in vault.pages {
+            let proto = page.into_proto();
             if !task::parse::looks_like_task(&proto) {
                 continue;
             }
             match task::parse_page(&proto) {
                 Ok(t) => out.push(t),
-                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "task parse failed"),
+                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "task parse failed"),
             }
         }
         Ok(out)
@@ -119,8 +119,8 @@ impl WorkstreamBackend {
     {
         let vault = self.open_vault()?;
         let mut out = std::collections::HashMap::new();
-        for page in &vault.pages {
-            let proto = page.to_proto();
+        for page in vault.pages {
+            let proto = page.into_proto();
             if !project::looks_like_project(&proto) {
                 continue;
             }
@@ -128,7 +128,7 @@ impl WorkstreamBackend {
                 Ok(p) => {
                     out.insert(p.id, p.states);
                 }
-                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "project parse failed"),
+                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "project parse failed"),
             }
         }
         Ok(out)

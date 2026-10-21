@@ -10,6 +10,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    // `--version`, `--help`, `service …`, `self-update …` — and a refusal
+    // for anything unknown. First of all: a question about the binary
+    // must never open its data or bind a port (see node_cli.rs).
+    if task_server::node_cli::dispatch().await? {
+        return Ok(());
+    }
     // Operator subcommands run against this server's own data root and
     // exit; only a bare invocation boots the server. Handled before
     // telemetry so an admin command doesn't open exporters it will never

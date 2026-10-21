@@ -31,6 +31,12 @@
 #[allow(dead_code)]
 mod support;
 
+/// Every allocation in this binary is counted (live bytes and their
+/// high-water mark), so `memory_budget` can hold the server to a heap
+/// budget. Two relaxed atomics per allocation; see `support::alloc`.
+#[global_allocator]
+static ALLOC: support::alloc::Counting = support::alloc::Counting;
+
 mod account_devices_e2e;
 mod activity_e2e;
 mod anonymous_lane_stays_anonymous;
@@ -70,6 +76,7 @@ mod mcp_telemetry_e2e;
 mod mcp_wiki_e2e;
 mod media_auth;
 mod media_stream_e2e;
+mod memory_budget;
 mod node_resolver_e2e;
 mod notes_search_e2e;
 mod notify_e2e;
@@ -100,6 +107,7 @@ mod task_files_e2e;
 mod vault_collab_e2e;
 mod vault_graph_e2e;
 mod vault_sync_e2e;
+mod version_cli;
 mod watch_bridge_auth;
 mod watch_suggested_e2e;
 mod webdav_auth;

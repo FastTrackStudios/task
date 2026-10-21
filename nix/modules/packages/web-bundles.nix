@@ -40,7 +40,8 @@
       mkDxWebBundle = { pname, appDir, dxName, preBuild ? "" }:
         craneLib.buildPackage (commonArgs // dxWebEnv // {
           inherit pname;
-          version = "0.1.0";
+          # The release's version, from `[workspace.package]`.
+          version = (lib.importTOML ../../../Cargo.toml).workspace.package.version;
           cargoArtifacts = null;
           cargoExtraArgs = "--manifest-path ${appDir}/Cargo.toml";
           nativeBuildInputs = dxWebNativeInputs;

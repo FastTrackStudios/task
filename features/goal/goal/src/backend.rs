@@ -71,14 +71,14 @@ impl GoalBackend {
         let vault = Vault::open(&self.vault_root)
             .map_err(|e| GoalError::Io(format!("open vault {}: {e}", self.vault_root.display())))?;
         let mut out = Vec::new();
-        for page in &vault.pages {
-            let proto = page.to_proto();
+        for page in vault.pages {
+            let proto = page.into_proto();
             if !looks_like_goal(&proto) {
                 continue;
             }
             match parse_page(&proto) {
                 Ok(g) => out.push(g),
-                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "goal parse failed"),
+                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "goal parse failed"),
             }
         }
         Ok(out)

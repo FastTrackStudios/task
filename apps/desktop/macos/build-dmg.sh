@@ -14,7 +14,7 @@
 #     bash apps/desktop/macos/build-dmg.sh
 #
 # Env knobs (all optional):
-#   MARKETING_VER   CFBundleShortVersionString (default 0.0.2)
+#   MARKETING_VER   CFBundleShortVersionString (default: the release version)
 #   BUILD_NO        CFBundleVersion (default: unix time)
 #   SKIP_BUILD=1    reuse the existing .app (iterate on sign/dmg)
 #   DRY_RUN=1       stop after the signed .dmg — no notarization, no upload
@@ -46,7 +46,9 @@ OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
 # "No such file or directory" (editor, ui). That's why the desktop-release
 # job never built. Keep the value in this shell, but don't export it.
 export -n OUT_DIR
-MARKETING_VER="${MARKETING_VER:-0.0.3}"
+# Default: the release version (`[workspace.package]` in Cargo.toml), the
+# one every artifact of a release reports (scripts/check-versions.sh).
+MARKETING_VER="${MARKETING_VER:-$(cd "$ROOT" && bash scripts/release.sh version)}"
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
 
 # Notarization credentials live where the TestFlight flow already keeps
@@ -167,6 +169,12 @@ if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
         "$APP/Contents/PlugIns/TaskFileProvider.appex"
     cp "$ROOT/target/fileprovider/TaskFileProviderDomains" \
         "$APP/Contents/MacOS/TaskFileProviderDomains"
+    # The extension reports the release's version like the app around it
+    # (its Info.plist template carries a placeholder). Before the signing
+    # below, which seals the plist.
+    APPEX_PLIST="$APP/Contents/PlugIns/TaskFileProvider.appex/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$APPEX_PLIST"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$APPEX_PLIST"
 fi
 
 # ── Info.plist ──────────────────────────────────────────────────────────────

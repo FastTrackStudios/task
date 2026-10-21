@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A headless Task node. Rendered by `task-server service write`; see https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>app.fasttrackstudio.task-server.update</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.local/bin/task-server</string>
+    <string>self-update</string>
+    <string>--then</string>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>/bin/launchctl kickstart -k gui/$(/usr/bin/id -u)/app.fasttrackstudio.task-server</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>86400</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/task-server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/task-server.log</string>
+</dict>
+</plist>

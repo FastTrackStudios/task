@@ -6695,7 +6695,7 @@ dependencies = [
 
 [[package]]
 name = "files-daemon"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "axum",

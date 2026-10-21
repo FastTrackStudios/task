@@ -377,6 +377,13 @@ ci-fmt:
 ci-manifests:
     cargo metadata --locked --format-version 1 > /dev/null
 
+# One version everywhere: every shipped artifact takes the release's
+# version from `[workspace.package]` (static; compiles nothing). The
+# built binaries are checked where they are built: the deploy and
+# node-binaries.yml run `scripts/check-versions.sh --bin`.
+ci-versions:
+    bash scripts/check-versions.sh
+
 ci-tests: css
     cargo nextest run --profile ci --workspace
 
@@ -400,7 +407,7 @@ ci-docs: css
 # card: on a PR into dev this IS the gate (CI does not run there), and
 # its output is the evidence the reviewer checks on the card. (`ci-docs`
 # runs only on release PRs; `just ci-release` adds it.)
-ci: ci-fmt ci-manifests ci-tests ci-clippy ci-wasm
+ci: ci-fmt ci-manifests ci-versions ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
 #

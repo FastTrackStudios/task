@@ -127,8 +127,11 @@ The Captain merges it with **Create a merge commit**. Then, automatically:
 `deploy` builds the merge commit (same tree as the tested head), pushes
 images tagged `sha-<short>` and `vX.Y.Z`, waits for Verify live, and
 `release.yml` tags `vX.Y.Z` on the release branch tip and publishes the
-GitHub Release; `task-ios` and `task-macos` upload TestFlight builds with
-marketing version X.Y.Z.
+GitHub Release; `node-binaries.yml` then attaches the standalone headless
+node binaries (`task-server-linux-x86_64`, `-linux-aarch64`,
+`-macos-aarch64` + `SHA256SUMS`) to it, on hosted runners
+(docs/headless-node.md); `task-ios` and `task-macos` upload TestFlight
+builds with marketing version X.Y.Z.
 
 Then the release owner **back-merges** (the publish job's summary reminds):
 
@@ -175,6 +178,13 @@ it into a card PR as well; the back-merge then merges cleanly.
   `Cargo.toml`. Server and web read it as `CARGO_PKG_VERSION`; the Apple
   workflows read it through `just version`. `desktop-v*` tags (the macOS
   in-app updater's feed, `just release-desktop`) use the same number.
+  Every artifact reports it — `task-server --version`, `task --version`,
+  `fts-files-daemon --version`, `task-app-desktop --version`, the iOS and
+  macOS marketing versions, the `v<version>` image tag and the Nix
+  packages — and `just ci-versions` (scripts/check-versions.sh, in
+  `just ci` and the release checks) fails when one takes its version from
+  anywhere else; the deploy and node-binaries.yml run it with `--bin` on
+  the binaries they built.
 - **Patch bumps only** (v0.2.2, v0.2.3, …) until the Captain or Commander
   explicitly calls a minor or a major. `just release-prepare` bumps the
   patch whatever the commits say: a `feat` or a breaking change does not

@@ -91,6 +91,38 @@ deletion anywhere).
 | `append_note` | append-only add to an existing note | write `vault/{path}` |
 | `write_note` | create **or replace** a note (flagged destructive in its description) | write `vault/{path}` |
 
+### Wiki (core) — subscriptions
+
+The wiki tools (`list_wikis` … `search_wiki`) call the `wiki/*` backends the
+vox lane serves. The two subscription tools are the cross-org half:
+
+| tool | does | wire permit |
+|---|---|---|
+| `list_wiki_subscriptions` | what the vault (or `wiki`) subscribes to, each with its `kind` (as a noun: `wiki`, `resource`, `asset shelf`, `project`) and local-copy state | read `wiki/subscriptions/**` (`list_subscriptions`) |
+| `subscribe_wiki` | subscribe the vault (or `wiki`) to `qualified_id` = `domain/slug`, as `kind` | write `wiki/subscriptions/**` (`subscribe`) |
+
+`subscribe_wiki` takes `kind`, one of:
+
+| `kind` | source | slug | example |
+|---|---|---|---|
+| `wiki` (default) | `<org>/wikis/<slug>/` | one segment | `acme.test/music-theory` |
+| `resource` | `<org>/resources/<slug>/`, read-only | one segment | `fasttrackstudio.app/bible` |
+| `assets` | an asset shelf, `<org>/assets/<kind>/` | the shelf kind | `acme.test/songs` |
+| `projects` | `<org>/projects/<path>/` | a path; projects nest | `acme.test/album/track-two` |
+
+- `resource: true` is kept as an alias for `kind: "resource"`. Passing it
+  beside a different `kind` is refused instead of guessed.
+- An unknown `kind`, or a slash in a flat tier's slug, is refused before any
+  backend work, and the message lists the valid shapes.
+- Shelves and projects are private to their org unless they are unlisted,
+  public, or the owner granted the subscribing org (ADR 0004 amendment,
+  2026-10-21). A refused source reads the same whether or not it exists.
+- The answer echoes the `kind` it subscribed as.
+
+Once a source is held, a reference resolves into the kind it is held as:
+`[[acme.test/songs::hallelujah]]` is the song on ACME's shelf for an org
+holding `acme.test/songs` as `assets`, and ACME's wiki `songs` otherwise.
+
 ### Calendar & scheduling (`scheduling` plugin)
 
 | tool | does | wire permit |

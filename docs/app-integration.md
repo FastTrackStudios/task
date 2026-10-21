@@ -292,6 +292,27 @@ a root, referenced by `ContentRef`.
 anchors `lighting:<slug>#cue:<label>` addresses; the console's show file is
 bytes in `ignition/shows`, bound by `ContentRef`.
 
+**A gig on another org's songs.** A band playing a venue's (or a
+publisher's) song library does not copy the songs in. It subscribes to the
+shelf and links to it:
+
+1. The owner of the shelf admits the band: the shelf is unlisted or public,
+   or the owner grants the band's org (`AccessGrants`, ADR 0004 amendment).
+   A private shelf is refused, and the refusal reads like a missing one.
+2. The band subscribes to the shelf as an asset shelf, for instance over MCP:
+   `subscribe_wiki { "qualified_id": "acme.test/songs", "kind": "assets" }`.
+   A refresh brings the songs into `subscribed/acme.test/songs/`.
+3. The gig note or setlist links each song as `[[<domain>/songs::<slug>]]`,
+   for example `[[acme.test/songs::hallelujah]]`. Because the band holds
+   `acme.test/songs` as `assets`, the link resolves to the song on the shelf
+   (`Subscriptions::resolve_reference`). Without that subscription the same
+   text would mean a wiki named `songs`.
+
+If the grant is revoked, the links stop resolving and the next refresh is
+refused. The copy already held stays. Today step 3 resolves when the
+publisher is on the same server. Across servers the copy is held, but a
+`::` link does not resolve from it yet (ADR 0004 amendment, open edge 3).
+
 ## Reference
 
 ### Saving safely

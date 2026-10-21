@@ -12,7 +12,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::TaskInfo;
-use crate::parse::{looks_like_task, parse_page};
+use crate::parse::{looks_like_task_raw, parse_page};
 use crate::service::{
     ClaimResult, TaskError, TaskEvent, TaskListFilter, TaskReverseRelations, TaskService,
 };
@@ -146,13 +146,17 @@ impl TaskBackend {
         let vault = Vault::open(&self.vault_root)
             .map_err(|e| TaskError::Io(format!("open vault {}: {e}", self.vault_root.display())))?;
         let mut out = Vec::new();
-        for page in &vault.pages {
-            // The parser consumes the wasm-clean
-            // `vault_proto::VaultPage`; convert the live page first.
-            let proto = page.to_proto();
-            if !looks_like_task(&proto) {
+        // By value, and tested on the raw text first: a page that is not
+        // a task is dropped without being copied, and one that is moves
+        // into the proto shape instead of being cloned into it. This
+        // runs over the whole vault on every list and every get.
+        for page in vault.pages {
+            if !looks_like_task_raw(&page.raw) {
                 continue;
             }
+            // The parser consumes the wasm-clean
+            // `vault_proto::VaultPage`; convert the live page first.
+            let proto = page.into_proto();
             match parse_page(&proto) {
                 Ok(t) => {
                     self.remember(&t.path, t.id);
