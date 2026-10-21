@@ -14,23 +14,27 @@ use dioxus::prelude::*;
 use crate::format::status_variant;
 use crate::routes::Route;
 use crate::stores;
-use crate::task_sort::is_active;
 
 /// One project's own navigation column.
 #[component]
 pub fn ProjectSidebar(id: String) -> Element {
     let project_res = stores::use_project(id.clone());
-    let project_store = stores::use_project_store();
+    // Load the list if no page has yet: the neighbours come from it.
+    let _projects = stores::use_project_list();
+    let recent = crate::recent_projects::use_sidebar_projects(
+        crate::recent_projects::SIDEBAR_LIMIT + 1,
+    );
 
-    // The neighbours: every other active project, for one-click moves
-    // between pieces of work without a detour through /projects.
-    let others: Vec<(String, String)> = project_store
-        .list()
-        .iter()
-        .filter(|r| {
-            !r.project.archived && is_active(&r.project.status) && r.project.id.to_string() != id
-        })
-        .map(|r| (r.project.id.to_string(), r.project.title.clone()))
+    // The neighbours: the same recent top-level projects the work
+    // sidebar lists (`recent_projects`), less this one, for one-click
+    // moves between pieces of work. A subproject's own parts and
+    // children are on its page; every project is under "All projects".
+    let others: Vec<(String, String)> = recent()
+        .rows
+        .into_iter()
+        .filter(|r| r.id.to_string() != id)
+        .take(crate::recent_projects::SIDEBAR_LIMIT)
+        .map(|r| (r.id.to_string(), r.title))
         .collect();
 
     rsx! {

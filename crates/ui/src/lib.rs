@@ -59,6 +59,7 @@ pub mod presence;
 pub mod process;
 pub mod project_declaration;
 pub mod reading;
+pub mod recent_projects;
 pub mod routes;
 pub mod search;
 pub mod server_registry;

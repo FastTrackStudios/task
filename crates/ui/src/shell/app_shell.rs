@@ -18,6 +18,7 @@ pub fn AppShell() -> Element {
     crate::process::provide_process_now();
     crate::new_issue::provide_new_issue();
     crate::favorites::provide_favorites();
+    crate::recent_projects::provide_recent_projects();
     crate::nav_layout::provide_nav_layout();
     // The docked player a citation's timestamp plays in.
     crate::source_dock::provide_source_dock();
@@ -37,6 +38,20 @@ pub fn AppShell() -> Element {
             seen.set(at);
             phone.close();
         }
+    }
+    {
+        // Opening a project is what makes it recent in the sidebar
+        // (`recent_projects`). Once per arrival, not per render.
+        let opened = match &current {
+            Route::ProjectDetailRoute { id } => id.parse::<uuid::Uuid>().ok(),
+            _ => None,
+        };
+        let opened = use_memo(use_reactive!(|(opened,)| opened));
+        use_effect(move || {
+            if let Some(pid) = opened() {
+                crate::recent_projects::touch(pid);
+            }
+        });
     }
     // Obsidian-style route tabs (the strip lives in the TopBar) —
     // restores the persisted strip and seeds it with the boot route.
