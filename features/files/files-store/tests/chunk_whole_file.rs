@@ -1,6 +1,8 @@
-//! Content on the same filesystem is stored WHOLE and *linked* in
-//! rather than copied — reflink where extents can be cloned, hardlink
-//! otherwise. See `ChunkStore::write_path`.
+//! Content on the same filesystem is stored WHOLE and *cloned* in
+//! rather than copied — reflink where extents can be cloned, a real
+//! copy otherwise (never a hard link: an in-place rewrite of the
+//! original would change the stored version). See
+//! `ChunkStore::write_path`.
 //!
 //! Which rung of that ladder a given filesystem offers is not
 //! something a test can assume, so these assert the properties that
@@ -8,8 +10,8 @@
 //!
 //! - **the content cannot be lost by deleting the original** — the
 //!   reason a link is acceptable instead of a copy at all;
-//! - **linking consumes no space**, at any size — what makes importing
-//!   a multi-terabyte archive possible;
+//! - **cloning consumes no space** where the filesystem can clone, at
+//!   any size — what makes importing a multi-terabyte archive possible;
 //! - probe and write agree on whole-vs-chunked, the invariant that
 //!   silently ruins everything if it breaks (every capture would
 //!   re-import every file, forever);
@@ -284,9 +286,9 @@ async fn storing_a_large_file_does_not_consume_a_second_copy() {
 }
 
 /// The requirement in one test: **the content cannot be lost by
-/// deleting the original.** Not "cheap to store" — safe. A hardlinked
-/// blob keeps the inode alive, so removing the live file frees nothing
-/// and the store still returns the exact bytes.
+/// deleting the original.** Not "cheap to store" — safe. A reflinked
+/// or copied blob is its own inode, so removing the live file leaves
+/// the store's bytes where they are.
 ///
 /// This is the property that makes a link acceptable instead of a copy,
 /// and it is the one that would silently disappear if the placement
@@ -323,11 +325,20 @@ async fn deleting_the_original_does_not_lose_the_stored_content() {
 /// (essentially) nothing, at ANY size — the property that makes
 /// importing an existing multi-terabyte archive possible at all.
 ///
-/// No reflink probe here, unlike the measurement below it: a hardlink
-/// needs only one filesystem, which a tempdir always satisfies.
+/// Only where the filesystem can clone: elsewhere the placement is a
+/// real copy, by decision (a hard link would be free but loses the
+/// stored version to an in-place rewrite; see
+/// `a_stored_version_survives_an_in_place_rewrite`).
 #[tokio::test]
 async fn linking_content_in_consumes_no_space() {
     let dir = tempfile::tempdir().unwrap();
+    if !supports_reflink(dir.path()) {
+        eprintln!(
+            "skipping: {} is not on a reflink-capable filesystem",
+            dir.path().display()
+        );
+        return;
+    }
     let store = store_at(dir.path()).await;
     let bytes = incompressible(256 * 1024 * 1024);
     let path = dir.path().join("archive-original.wav");
@@ -413,13 +424,10 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
 /// truncate and rewrite — versions correctly, and the previous version
 /// stays readable.
 ///
-/// Scoped deliberately to *replacement*, because that is what the
-/// placement ladder actually guarantees everywhere. A reflink gives
-/// separate inodes sharing extents, so even an in-place rewrite leaves
-/// the stored version untouched; a hardlink does not, and asserting the
-/// stronger property here would pass on btrfs/XFS and fail on ext4 —
-/// green for the wrong reason, which is worse than not testing it.
-/// In-place rewriting is out of scope by decision, not by accident.
+/// Scoped to *replacement*; the in-place rewrite has its own test
+/// below (`a_stored_version_survives_an_in_place_rewrite`), which holds
+/// on every filesystem now that the placement is a reflink or a copy,
+/// never a hard link.
 #[tokio::test]
 async fn replacing_the_live_file_versions_it_and_keeps_the_old_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -451,12 +459,14 @@ async fn replacing_the_live_file_versions_it_and_keeps_the_old_one() {
 /// A version already stored survives the live file being rewritten
 /// **in place**.
 ///
-/// The whole tier places a blob by linking rather than copying, and
-/// which kind of link decides whether this holds. A reflink is
-/// copy-on-write and the stored bytes are safe from anything done to
-/// the original; a hard link is the same inode, so an in-place rewrite
-/// — what `std::fs::write` does — changes the bytes under a blob named
-/// by their hash, and the old version is gone.
+/// The whole tier places a blob by reflink, else by copy. A reflink is
+/// copy-on-write and a copy is separate bytes, so the stored version
+/// is safe from anything done to the original. A hard link would be
+/// the same inode: an in-place rewrite — what `std::fs::write` does —
+/// would change the bytes under a blob named by their hash. Before
+/// STA-239 the store still fell back to a hard link where reflink
+/// failed, so this failed on ext4/tmpfs temp dirs (the Mac Pro CI VM)
+/// while passing on btrfs.
 ///
 /// That inversion was made deliberately once, to buy back space on a
 /// NAS where `reflink` silently duplicates, and it cost this. The
