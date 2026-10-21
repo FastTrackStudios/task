@@ -62,6 +62,13 @@ pub trait Inbox {
     fn upsert_inbox_item(&self, item: &InboxItem) -> Result<(), InboxError>;
     /// Permanently remove an item from the vault.
     fn delete_inbox_item(&self, id: &str) -> Result<(), InboxError>;
+    /// What is due for processing on `today` (ISO `YYYY-MM-DD`): the
+    /// review queue plus the suggestions awaiting a yes or no, oldest
+    /// capture first ([`crate::inbox_item::due_queue`]). What every
+    /// "captures to process" count reads — the review queue alone is
+    /// the trusted half, and a caller counting from it would restate
+    /// the `suggested` clause.
+    fn due_queue(&self, today: String) -> Result<Vec<InboxItem>, InboxError>;
 
     /// Every inbox change, as it happens — fires on each successful
     /// upsert / delete. See [`InboxEvent`] for the

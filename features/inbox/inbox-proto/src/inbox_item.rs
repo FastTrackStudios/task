@@ -220,6 +220,27 @@ impl InboxItem {
     }
 }
 
+/// What is due for processing on `today`: every [`InboxItem::is_due`]
+/// item, oldest capture first. The one queue behind the inbox deck, the
+/// tab badge, Home's "captures to process", the watch's Suggested count
+/// and the brief — so a count and the list under it can't disagree.
+/// [`crate::Inbox::due_queue`] serves it; clients with a store call it
+/// on theirs.
+// t[impl process.due]
+#[must_use]
+pub fn due_queue<'a>(
+    items: impl IntoIterator<Item = &'a InboxItem>,
+    today: &str,
+) -> Vec<InboxItem> {
+    let mut out: Vec<InboxItem> = items
+        .into_iter()
+        .filter(|i| i.is_due(today))
+        .cloned()
+        .collect();
+    out.sort_by(|a, b| a.created.cmp(&b.created).then_with(|| a.id.cmp(&b.id)));
+    out
+}
+
 /// Client-side optimistic cache identity (`architect::Store`): keyed by
 /// the stable `id`.
 #[cfg(feature = "atom")]

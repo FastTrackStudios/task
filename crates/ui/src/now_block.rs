@@ -93,15 +93,49 @@ pub fn use_focus_mode() -> Memo<Option<FocusMode>> {
     })
 }
 
-/// The focus the board should apply: the running mode's, or nothing.
-/// The hour alone never changes the list.
-pub fn use_focus() -> Memo<Vec<String>> {
-    let mode = use_focus_mode();
+/// "Now" for every board surface — Home, the Tasks page and the Work
+/// sidebar read this one memo, so they pass the same context to the
+/// same functions (`process.focus.everywhere`): the clock, where the
+/// person says they are, this device (`process.context.device`, via
+/// [`crate::task_board::this_device`]), and the person's open session —
+/// the timer's project, and the mode's focus when the session is one.
+/// The hour alone never changes the list; only a started mode does.
+/// Re-read every minute so the clock-gated contexts follow the time.
+pub fn use_now_ctx() -> Memo<task_proto::RelevanceContext> {
+    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
+    let orgs = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
+    let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
+    let phone = try_use_context::<crate::shell::phone_gestures::PhonePanels>().map(|p| p.phone);
+    let _sessions = stores::use_session_list();
+    let session_store = stores::use_session_store();
+    let mut tick = use_signal(|| 0u64);
+    use_future(move || async move {
+        loop {
+            architect::sleep(architect::Duration::from_secs(60)).await;
+            tick += 1;
+        }
+    });
     use_memo(move || {
-        mode.read()
-            .as_ref()
-            .map(|m| m.focus.clone())
-            .unwrap_or_default()
+        tick();
+        let location = prefs.read().location.clone();
+        let device = crate::task_board::this_device(phone.is_some_and(|p| p()));
+        let open = crate::chrome::resolve_org(&selection.read(), &orgs.read()).and_then(
+            |(slug, org_id)| {
+                let owner = crate::chrome::owner_id(org_id);
+                session_store
+                    .list()
+                    .iter()
+                    .find(|r| {
+                        r.slug == slug && r.session.user_id == owner && r.session.end_time.is_none()
+                    })
+                    .map(|r| (r.session.description.clone(), r.session.project_id))
+            },
+        );
+        crate::task_board::relevance_ctx(
+            &location,
+            device,
+            open.as_ref().map(|(d, p)| (d.as_str(), *p)),
+        )
     })
 }
 

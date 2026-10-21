@@ -67,6 +67,8 @@ struct BoardData {
     held: (usize, Vec<String>),
     /// `(task id, org)` when the board spans several orgs.
     org_of: Vec<(uuid::Uuid, String)>,
+    /// The due queue's order, for the list's Today section.
+    today_order: Vec<uuid::Uuid>,
     /// The running work session (the unified timer source), if any —
     /// what the Now bar reflects. `None` when nothing is tracking.
     now: Option<NowInfo>,
@@ -343,6 +345,7 @@ fn TaskBoard(scope: Scope) -> Element {
     // from today's day plan — it steers relevance and heads the list.
     let now_hint = crate::now_block::use_now_hint();
     let focus_mode = crate::now_block::use_focus_mode();
+    let now_ctx = crate::now_block::use_now_ctx();
     let process_now = use_context::<crate::process::ProcessNow>();
     // Whose list this is: Tasks shows what is assigned to them.
     let account = use_context::<crate::auth::AuthCtx>().active;
@@ -354,26 +357,13 @@ fn TaskBoard(scope: Scope) -> Element {
         let prefs = prefs_signal.read();
         let active_only = prefs.tasks_active;
         let relevant_only = prefs.tasks_relevant;
-        let at_location = prefs.location.clone();
         drop(prefs);
 
-        // The running timer session's project — relevance boosts its
-        // sibling tasks to the top ("if my timer is on a project,
-        // prioritize that project's items").
-        let active_project = session_store
-            .list()
-            .iter()
-            .find(|r| r.session.end_time.is_none())
-            .and_then(|r| r.session.project_id);
-
-        // Only a mode the person started steers the list; the hour on
-        // its own just suggests one (`crate::now_block`).
-        let focus = focus_mode
-            .read()
-            .as_ref()
-            .map(|m| m.focus.clone())
-            .unwrap_or_default();
-        let ctx = crate::task_board::relevance_ctx(&at_location, active_project, focus);
+        // "Now" — the clock, the place, this device, and the open
+        // session (its project; the mode's focus when it is one). The
+        // same memo Home and the Work sidebar read, so the three agree.
+        // The hour on its own just suggests a mode (`crate::now_block`).
+        let ctx = now_ctx();
         // One row per task id — see `stores::unique_tasks`.
         let unique = stores::unique_tasks(&rows);
         let all: Vec<&task_proto::TaskInfo> = unique.iter().map(|r| &r.task).collect();
@@ -392,6 +382,17 @@ fn TaskBoard(scope: Scope) -> Element {
         // counts with, so the two agree (`crate::task_board`).
         let filtered =
             crate::task_board::filter(&all, scope, me.as_deref(), active_only, relevant_only, &ctx);
+        // Today's order is the due queue's — the order Home's rail and
+        // the CLI's `--due` show (`task_proto::due`). Project work has
+        // no Today of its own to order.
+        let today_order: Vec<uuid::Uuid> = if scope == Scope::Actions {
+            crate::task_board::due_queue(&all, me.as_deref(), &ctx)
+                .iter()
+                .map(|t| t.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let other_scope = filtered.other_scope;
         let hidden = filtered.hidden_done + filtered.hidden_elsewhere;
         let hidden_note = filtered.hidden_note();
@@ -560,6 +561,7 @@ fn TaskBoard(scope: Scope) -> Element {
             hidden_note,
             held,
             org_of,
+            today_order,
             now,
             for_hour,
             other_scope,
@@ -603,6 +605,7 @@ fn TaskBoard(scope: Scope) -> Element {
                 hidden_note,
                 held: (held_count, held_by),
                 org_of,
+                today_order,
                 now,
                 for_hour,
                 other_scope,
@@ -735,6 +738,7 @@ fn TaskBoard(scope: Scope) -> Element {
                             header_extra: chips,
                             projects: project_choices,
                             org_of,
+                            today_order,
                             hidden_note,
                             held_count,
                             held_by,

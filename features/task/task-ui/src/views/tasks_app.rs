@@ -69,6 +69,10 @@ pub struct TasksAppProps {
     /// row says whose it is. Empty in a single org.
     #[props(default)]
     pub org_of: Vec<(Uuid, String)>,
+    /// Today's order from the page's due queue (`task_proto::due_queue`)
+    /// — forwarded to the list. Empty = the list's own date order.
+    #[props(default)]
+    pub today_order: Vec<Uuid>,
     /// `(user id, name)` of the people a task can be given to — the
     /// detail sheet's owner picker. Empty = no picker.
     #[props(default)]
@@ -339,6 +343,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                             tasks: props.tasks.clone(),
                             anchors: props.anchors.clone(),
                             org_of: props.org_of.clone(),
+                            today_order: props.today_order.clone(),
                             on_event: props.on_event,
                             // The checkbox completes (or reopens) —
                             // `task_proto::click_transition`.

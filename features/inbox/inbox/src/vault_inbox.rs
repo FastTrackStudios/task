@@ -194,6 +194,10 @@ impl Inbox for VaultInbox {
             .publish(inbox_proto::InboxEvent::Deleted(id.to_owned()));
         Ok(())
     }
+
+    fn due_queue(&self, today: String) -> Result<Vec<InboxItem>, InboxError> {
+        Ok(inbox_proto::due_queue(&self.list_inbox()?, &today))
+    }
 }
 
 /// The `#[subscribe]` backend contract: hand the emitted stream host

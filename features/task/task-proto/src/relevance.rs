@@ -124,6 +124,12 @@ pub fn is_relevant(task: &TaskInfo, ctx: &RelevanceContext) -> bool {
             return true;
         }
     }
+    // The work in hand trumps gates too: a task already in progress is
+    // on the due queue (`crate::due`) wherever you are, so the Relevant
+    // filter can't hide what Home and the sidebar count as due.
+    if crate::model::Status::from_str(&task.status) == Some(crate::model::Status::InProgress) {
+        return true;
+    }
     let gates: Vec<String> = task.contexts.iter().map(|c| context_name(c)).collect();
     if gates.is_empty() {
         return true;
@@ -293,6 +299,28 @@ mod tests {
         working.status = "in-progress".into();
         assert!(relevance_rank(&working, &hour) < relevance_rank(&chore, &hour));
         assert!(relevance_rank(&chore, &hour) < relevance_rank(&mix, &hour));
+    }
+
+    #[test]
+    fn work_in_hand_trumps_gates() {
+        let mut phoning = task(&["@phone"]);
+        assert!(!is_relevant(&phoning, &at("14:00")));
+        phoning.status = "in-progress".into();
+        assert!(
+            is_relevant(&phoning, &at("14:00")),
+            "a task already in progress is never held back by its gate"
+        );
+    }
+
+    // t[verify process.context.device]
+    #[test]
+    fn the_device_the_client_fills_in_opens_its_gate() {
+        let call = task(&["@phone"]);
+        let on = |device: &str| {
+            RelevanceContext::now("2026-07-01", Some("14:00".into()), None, Some(device))
+        };
+        assert!(is_relevant(&call, &on("phone")));
+        assert!(!is_relevant(&call, &on("computer")));
     }
 
     #[test]

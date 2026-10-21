@@ -792,7 +792,7 @@ table!(ACTIVITY, "activity-feed", "notifications/activity/**", [rd "list"]);
 table!(ACTIVITY_STREAM, "activity-feed-stream", "notifications/activity/**", [rd "events"]);
 table!(INBOX, "inbox", "inbox/**", [
     rd "list_inbox", rd "review_queue", rd "list_inbox_by", rd "get_inbox_item",
-    wr "upsert_inbox_item", wa "delete_inbox_item",
+    wr "upsert_inbox_item", wa "delete_inbox_item", rd "due_queue",
 ]);
 table!(INBOX_STREAM, "inbox-stream", "inbox/**", [rd "events"]);
 #[cfg(feature = "plugin-recall")]

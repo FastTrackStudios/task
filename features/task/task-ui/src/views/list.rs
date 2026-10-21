@@ -40,6 +40,11 @@ pub struct TaskListProps {
     /// than one org, so a row says whose it is.
     #[props(default)]
     pub org_of: Vec<(Uuid, String)>,
+    /// Today's order, as the page's due queue (`task_proto::due_queue`)
+    /// has it — ids in order. Empty = the list orders Today itself by
+    /// `task_proto::due_order` on the date alone.
+    #[props(default)]
+    pub today_order: Vec<Uuid>,
     pub on_toggle: EventHandler<Uuid>,
     pub on_open: EventHandler<Uuid>,
     /// Start / stop work on a task.
@@ -95,20 +100,43 @@ impl TaskSection {
 
 const ORDER: &[Group] = &[Group::Today, Group::Upcoming, Group::Anytime, Group::Done];
 
-/// Which section a task belongs in on `today`.
+/// Which section a task belongs in on `today`. Today is the due queue's
+/// rule (`task_proto::is_due_now`), so the section and Home's rail
+/// and the sidebar's count hold the same tasks.
 #[must_use]
 pub fn classify(t: &TaskInfo, today: NaiveDate) -> TaskSection {
     if t.is_done() {
         return Group::Done;
     }
-    if t.status_enum() == Status::InProgress {
+    if task_proto::is_due_now(t, &today.to_string()) {
         return Group::Today;
     }
     match t.due_date() {
-        Some(d) if d <= today => Group::Today,
         Some(_) => Group::Upcoming,
         None => Group::Anytime,
     }
+}
+
+/// Today in the due queue's order: `order` (the page's
+/// `task_proto::due_queue`, which knows the running mode and the timer's
+/// project) when it has it, else `task_proto::due_order` with what the
+/// list knows — the date.
+fn sort_today(bucket: &mut [TaskInfo], order: &[Uuid], today: NaiveDate) {
+    let ctx = task_proto::RelevanceContext {
+        local_date: Some(today.to_string()),
+        ..Default::default()
+    };
+    let pos = |t: &TaskInfo| {
+        order
+            .iter()
+            .position(|id| *id == t.id)
+            .unwrap_or(usize::MAX)
+    };
+    bucket.sort_by(|a, b| {
+        pos(a)
+            .cmp(&pos(b))
+            .then_with(|| task_proto::due_order(a, b, &ctx))
+    });
 }
 
 fn priority_rank(p: Priority) -> u8 {
@@ -213,8 +241,12 @@ pub fn TaskList(props: TaskListProps) -> Element {
             slot.1.push(t.clone());
         }
     }
-    for (_, bucket) in &mut groups {
-        sort_bucket(bucket);
+    for (group, bucket) in &mut groups {
+        if *group == Group::Today {
+            sort_today(bucket, &props.today_order, today);
+        } else {
+            sort_bucket(bucket);
+        }
     }
     let groups: Vec<(Group, Vec<TaskInfo>)> = groups
         .into_iter()
@@ -247,20 +279,17 @@ pub fn TaskList(props: TaskListProps) -> Element {
                     initially_open: group != Group::Done,
                     match group {
                         Group::Today => {
+                            // The band says how much is late and offers
+                            // to move it; the rows keep the due queue's
+                            // one order beneath it (work in hand, what
+                            // the mode is for, then oldest due), the
+                            // same order Home and the CLI show.
                             let overdue = overdue_of(&items, today);
-                            let rest: Vec<TaskInfo> = items
-                                .iter()
-                                .filter(|t| !overdue.iter().any(|o| o.id == t.id))
-                                .cloned()
-                                .collect();
                             rsx! {
                                 if !overdue.is_empty() {
                                     OverdueBand { overdue: overdue.clone(), today, on_event: props.on_event }
-                                    {rows(overdue, None)}
                                 }
-                                if !rest.is_empty() {
-                                    {rows(rest, None)}
-                                }
+                                {rows(items, None)}
                             }
                         }
                         Group::Anytime => {
@@ -308,7 +337,6 @@ fn OverdueBand(
         div { class: "flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-500/10 px-3 py-2",
             span { class: "text-sm font-semibold text-foreground",
                 span { class: "text-rose-500", "{n} overdue" }
-                span { class: "font-normal text-muted-foreground", " · oldest first" }
             }
             div { class: "flex items-center gap-1.5",
                 button {
@@ -475,6 +503,25 @@ mod tests {
         sort_bucket(&mut bucket);
         let titles: Vec<&str> = bucket.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["overdue", "due today", "working", "undated"]);
+    }
+
+    #[test]
+    fn today_is_the_due_queue_order_and_follows_the_page() {
+        let today = day("2026-10-06");
+        let mut bucket = vec![
+            task("due today", "open", Some("2026-10-06"), None),
+            task("overdue", "open", Some("2026-08-27"), None),
+            task("working", "in-progress", None, None),
+        ];
+        // On the date alone: the work in hand, then oldest due.
+        sort_today(&mut bucket, &[], today);
+        let titles: Vec<&str> = bucket.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["working", "overdue", "due today"]);
+        // The page's queue (a mode running, say) has the last word.
+        let order = vec![bucket[2].id, bucket[0].id, bucket[1].id];
+        sort_today(&mut bucket, &order, today);
+        let titles: Vec<&str> = bucket.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["due today", "working", "overdue"]);
     }
 
     #[test]

@@ -131,16 +131,15 @@ pub enum Outcome {
     Skipped,
 }
 
-/// How many inbox items are waiting to be processed today — the deck's
-/// own rule ([`crate::pages::inbox::is_due`]), so the tab badge, Home's
-/// card and the deck never disagree.
+/// How many inbox items are waiting to be processed today — the inbox
+/// lane's one due queue (`inbox_proto::due_queue`, what
+/// `Inbox::due_queue` serves the brief and the watch counts), so the tab
+/// badge, Home's card, the deck and the brief never disagree.
 pub fn use_to_process_count() -> usize {
     let rows = stores::use_inbox_list();
     let today = Utc::now().date_naive().to_string();
     rows.value().map_or(0, |rows| {
-        rows.iter()
-            .filter(|(_, it)| crate::pages::inbox::is_due(it, &today))
-            .count()
+        inbox_proto::due_queue(rows.iter().map(|(_, it)| it), &today).len()
     })
 }
 

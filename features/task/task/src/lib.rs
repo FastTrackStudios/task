@@ -73,6 +73,9 @@ pub mod scan;
 pub mod write;
 
 pub use capture::{capture, infer_project_id};
+/// The one due queue (see [`task_proto::due`]).
+pub use task_proto::due;
+pub use task_proto::due::{due_order, due_queue, is_due_now, mode_focus, overdue_count};
 pub use task_proto::is_mine;
 /// The Suggested slot's pick (see [`task_proto::suggest`]).
 pub use task_proto::suggest;

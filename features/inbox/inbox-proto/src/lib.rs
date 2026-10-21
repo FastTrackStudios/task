@@ -23,7 +23,7 @@ pub mod service;
 
 pub use decision::{Decision, Write};
 pub use error::InboxError;
-pub use inbox_item::InboxItem;
+pub use inbox_item::{InboxItem, due_queue};
 pub use schedule::{ReviewResponse, review, schedule};
 pub use service::Inbox;
 pub use service::inbox::InboxEvent;

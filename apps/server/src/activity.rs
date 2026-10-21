@@ -832,6 +832,12 @@ impl inbox_proto::Inbox for AttributedInbox {
         self.ledger.note(format!("inbox:{id}"), caller_user());
         self.inner.delete_inbox_item(id)
     }
+    fn due_queue(
+        &self,
+        today: String,
+    ) -> Result<Vec<inbox_proto::InboxItem>, inbox_proto::InboxError> {
+        self.inner.due_queue(today)
+    }
 }
 
 /// `TimerService` with its writers noted, per timer user.

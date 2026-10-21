@@ -1,9 +1,10 @@
 //! `task brief` — the morning digest. Aggregates six existing
 //! org-scoped surfaces into one read: today's day plan + calendar
-//! events, due/overdue + in-progress tasks, the active timer,
-//! blocked agent tasks (awaiting input), open inbox items, and
-//! today's meals + bookings. Zero new services — every section is
-//! a client-side filter over an RPC the server already mounts.
+//! events, the due queue (the one Home and the Tasks list show —
+//! `task_proto::due`, with the running mode's focus), the active
+//! timer, blocked agent tasks (awaiting input), the inbox's due queue,
+//! and today's meals + bookings. Zero new services — every section is
+//! an RPC the server already mounts.
 //!
 //! Each section degrades independently: a failing service lands
 //! in `errors` (and a warning line in human output) instead of
@@ -31,10 +32,18 @@ struct BriefView {
     org: String,
     plan: Option<scheduling_proto::DayPlan>,
     events: Vec<scheduling_proto::CalEvent>,
+    /// The due queue (`task_proto::due`) — what Home's Today rail and
+    /// the Tasks list's Today section hold, in their order.
     due_tasks: Vec<task::TaskInfo>,
+    /// How many of `due_tasks` are late.
+    overdue: usize,
+    /// The work in hand — the in-progress part of `due_tasks`.
     in_progress: Vec<task::TaskInfo>,
+    /// What the running mode brings forward (empty when none runs).
+    focus: Vec<String>,
     active_timer: Option<timer_proto::WorkSession>,
     blocked_agent_tasks: Vec<agent_proto::tasks::AgentTask>,
+    /// The inbox's due queue — open and resurfaced, or suggested.
     inbox_open: Vec<inbox_proto::InboxItem>,
     meals: Vec<mealplan::Meal>,
     bookings: Vec<scheduling_proto::Booking>,
@@ -65,7 +74,9 @@ pub async fn run_brief(args: BriefArgs) -> eyre::Result<()> {
         plan: None,
         events: Vec::new(),
         due_tasks: Vec::new(),
+        overdue: 0,
         in_progress: Vec::new(),
+        focus: Vec::new(),
         active_timer: None,
         blocked_agent_tasks: Vec::new(),
         inbox_open: Vec::new(),
@@ -99,43 +110,29 @@ pub async fn run_brief(args: BriefArgs) -> eyre::Result<()> {
         Err(e) => view.errors.push(format!("calendar events: {e}")),
     }
 
-    // ── Tasks: due/overdue + in-progress ────────────────────────
-    // "Open + due-on-or-before-today" and the open/terminal status set
-    // are domain rules — query them server-side (TaskService) so the
-    // brief and the web agenda agree. Display order (by due date) is a
-    // presentation choice and stays here.
+    // ── Tasks: the due queue ────────────────────────────────────
+    // The one due answer (`task_proto::due`): in progress or due today
+    // or before, yours, in the order Home's Today rail and the Tasks
+    // list show — asked of the server with the same context the app
+    // builds (clock, this computer, the running session: its project,
+    // and a mode's focus), so the brief's count is Home's count.
+    let ctx = crate::now::context(org.as_deref(), None, None, None).await;
+    view.focus = ctx.focus.clone();
     match crate::establish_for_url::<task::TaskServiceClient>(&url).await {
         Ok(c) => {
-            match c
-                .query(task::TaskListFilter {
-                    open_only: true,
-                    due_on_or_before: Some(today.clone()),
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(mut due) => {
-                    due.sort_by(|a, b| {
-                        let key = |t: &task::TaskInfo| {
-                            t.due
-                                .clone()
-                                .or_else(|| t.scheduled.clone())
-                                .unwrap_or_default()
-                        };
-                        key(a).cmp(&key(b))
-                    });
+            let me = crate::now::signed_in_user(&url, &slug);
+            match crate::now::due_queue(&c, me, &ctx).await {
+                Ok(due) => {
+                    view.overdue = task::overdue_count(&due, &today);
+                    view.in_progress = due
+                        .iter()
+                        .filter(|t| {
+                            task::Status::from_str(&t.status) == Some(task::Status::InProgress)
+                        })
+                        .cloned()
+                        .collect();
                     view.due_tasks = due;
                 }
-                Err(e) => view.errors.push(format!("tasks: {e:?}")),
-            }
-            match c
-                .query(task::TaskListFilter {
-                    status: Some("in-progress".into()),
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(rows) => view.in_progress = rows,
                 Err(e) => view.errors.push(format!("tasks: {e:?}")),
             }
         }
@@ -170,11 +167,14 @@ pub async fn run_brief(args: BriefArgs) -> eyre::Result<()> {
         Err(e) => view.errors.push(format!("agent queue: {e}")),
     }
 
-    // ── Inbox: today's review queue (open, not snoozed) ─────────
-    // The queue rule (open + resurface ≤ today, oldest first) is the
-    // inbox domain's — ask the service for it rather than re-deriving.
+    // ── Inbox: what is due for processing ───────────────────────
+    // The inbox lane's due queue (open and resurfaced, or suggested and
+    // awaiting a yes or no) — the count Home's "captures to process"
+    // and the tab badge show. Asked of the service, not re-derived — on
+    // the inbox's own calendar (UTC days, as the app's inbox counts).
+    let inbox_today = chrono::Utc::now().date_naive().to_string();
     match crate::establish_for_url::<inbox_proto::InboxClient>(&url).await {
-        Ok(c) => match c.review_queue(today.clone()).await {
+        Ok(c) => match c.due_queue(inbox_today).await {
             Ok(items) => view.inbox_open = items,
             Err(e) => view.errors.push(format!("inbox: {e:?}")),
         },
@@ -264,22 +264,23 @@ fn render_human(v: &BriefView) {
     }
     println!();
 
-    // Tasks.
-    println!("Due / overdue ({})", v.due_tasks.len());
-    for t in &v.due_tasks {
+    // Tasks — the due queue, in its order (work in hand marked [~]).
+    if v.focus.is_empty() {
+        println!("Due now ({}, {} overdue)", v.due_tasks.len(), v.overdue);
+    } else {
         println!(
-            "  {}  {}  [{}]",
-            t.due
-                .as_deref()
-                .or(t.scheduled.as_deref())
-                .unwrap_or("????-??-??"),
-            t.title,
-            t.status
+            "Due now ({}, {} overdue) — mode running, leading with {}",
+            v.due_tasks.len(),
+            v.overdue,
+            v.focus
+                .iter()
+                .map(|f| format!("@{f}"))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
     }
-    println!("In progress ({})", v.in_progress.len());
-    for t in &v.in_progress {
-        println!("  {}  ({})", t.title, t.id);
+    for t in &v.due_tasks {
+        println!("  {}", crate::task_cmd::list_line(t, 0));
     }
     println!();
 
@@ -293,7 +294,7 @@ fn render_human(v: &BriefView) {
     }
 
     // Inbox.
-    println!("Inbox open ({})", v.inbox_open.len());
+    println!("Inbox to process ({})", v.inbox_open.len());
     for i in &v.inbox_open {
         let first_line = i.body.lines().next().unwrap_or("");
         let trimmed: String = first_line.chars().take(72).collect();

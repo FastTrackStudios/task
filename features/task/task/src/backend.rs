@@ -362,9 +362,12 @@ impl TaskService for TaskBackend {
                 // Unfiled work is triage, not "what should I do now"
                 // — the same exclusion `filter_relevant` applies for
                 // the UI, so `--relevant` means one thing everywhere.
-                filter.relevance.as_ref().is_none_or(|ctx| {
-                    task_proto::is_filed(t) && crate::relevance::is_relevant(t, ctx)
-                })
+                // The due queue reads relevance only for its date and
+                // rank: what is due is never gated away.
+                filter.due_now
+                    || filter.relevance.as_ref().is_none_or(|ctx| {
+                        task_proto::is_filed(t) && crate::relevance::is_relevant(t, ctx)
+                    })
             })
             .filter(|t| {
                 filter.created_by.as_deref().is_none_or(|who| {
@@ -388,7 +391,12 @@ impl TaskService for TaskBackend {
         // pages don't shear between calls. Relevance rank (when
         // asked for) sorts on top of that stable order.
         rows.sort_by(|a, b| a.path.cmp(&b.path));
-        if let Some(ctx) = &filter.relevance {
+        if filter.due_now {
+            // The due queue — the one Home, Tasks and the sidebar
+            // compute client-side (`task_proto::due`).
+            let ctx = filter.relevance.clone().unwrap_or_default();
+            rows = task_proto::due_queue(&rows, filter.me.as_deref(), &ctx);
+        } else if let Some(ctx) = &filter.relevance {
             // Relevant = the condensed "right now" view: one next
             // action per project, ranked.
             crate::relevance::condense_next_per_project(&mut rows);

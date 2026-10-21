@@ -10,15 +10,16 @@
 //! how much is open in each ([`crate::recent_projects`]; the Projects
 //! page keeps the full list), and every other section of the workspace.
 //!
-//! Its counts come from the same rules as the list itself — the
-//! person's filters ([`crate::task_board::filter`]) and the same section
-//! rule ([`task_ui::task_section`]) — so a sidebar number and the list
+//! Its counts come from the same rules as the list itself — the Tasks
+//! row is the due queue ([`crate::task_board::due_queue`], the list
+//! Home's Today rail shows and the Tasks list's Today section holds),
+//! projects count through the person's filters
+//! ([`crate::task_board::filter`]) — so a sidebar number and the list
 //! beneath it can't disagree.
 
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
-use task_ui::TaskSection;
 
 use crate::routes::Route;
 use crate::stores;
@@ -43,33 +44,29 @@ pub fn WorkSidebar(current: Route) -> Element {
     let _sessions = stores::use_session_list();
     let task_store = stores::use_task_store();
     let project_store = stores::use_project_store();
-    let session_store = stores::use_session_store();
     let recent =
         crate::recent_projects::use_sidebar_projects(crate::recent_projects::SIDEBAR_LIMIT);
     let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
-    // The same hour as the Tasks page, so its counts and these agree.
-    let focus = crate::now_block::use_focus();
+    // The same "now" as the Tasks page and Home, so its counts and
+    // theirs agree.
+    let now_ctx = crate::now_block::use_now_ctx();
     let account = use_context::<crate::auth::AuthCtx>().active;
 
     let counts = use_memo(move || {
         let me = account.read().as_ref().map(|a| a.user_id.to_string());
-        let today = chrono::Local::now().date_naive();
         let p = prefs.read();
-        let (active_only, relevant_only, location) =
-            (p.tasks_active, p.tasks_relevant, p.location.clone());
+        let (active_only, relevant_only) = (p.tasks_active, p.tasks_relevant);
         drop(p);
-        let active_project = session_store
-            .list()
-            .iter()
-            .find(|r| r.session.end_time.is_none())
-            .and_then(|r| r.session.project_id);
-        let focus = focus();
-        let ctx = crate::task_board::relevance_ctx(&location, active_project, focus);
+        let ctx = now_ctx();
+        let today = ctx.local_date.clone().unwrap_or_default();
         let entries = task_store.entries();
         let all: Vec<&task_proto::TaskInfo> = stores::unique_tasks(&entries)
             .into_iter()
             .map(|r| &r.task)
             .collect();
+        // The Tasks row's number is the due queue — the list Home's
+        // Today rail shows and the Tasks list's Today section holds.
+        let due = crate::task_board::due_queue(&all, me.as_deref(), &ctx);
         // Open work on the board, through the person's own filters.
         let board: Vec<&task_proto::TaskInfo> = crate::task_board::filter(
             &all,
@@ -90,8 +87,8 @@ pub fn WorkSidebar(current: Route) -> Element {
                 .map(|r| (r.project.id, r.project.title.clone())),
         );
         let mut c = Counts {
-            today: 0,
-            overdue: 0,
+            today: due.len(),
+            overdue: task_proto::overdue_count(&due, &today),
             projects: Vec::new(),
             listed: 0,
         };
@@ -100,12 +97,6 @@ pub fn WorkSidebar(current: Route) -> Element {
         let ranked = recent();
         let mut open: HashMap<uuid::Uuid, usize> = HashMap::new();
         for t in &board {
-            if task_ui::task_section(t, today) == TaskSection::Today {
-                c.today += 1;
-                if task_ui::display::TaskDisplay::due_date(*t).is_some_and(|d| d < today) {
-                    c.overdue += 1;
-                }
-            }
             if let Some(task_proto::Anchor::Project(pid)) = index.anchor(t)
                 && let Some(top) = ranked.tops.get(&pid)
             {
