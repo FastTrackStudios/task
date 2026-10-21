@@ -50,6 +50,8 @@ indexmap = { workspace = true, features = ["serde"] }
 serde_yaml = { workspace = true }
 # `bases.rs` uses `regex` for its filter-expression tokenizer.
 regex = { workspace = true }
+# `bases.rs` evaluates the `transpose_key(key, offset)` formula with it.
+music-key = { workspace = true }
 # `VaultSync` wire trait + payload types. The `sync` module impls
 # `vault_proto::VaultSync` on the backend, making this crate the
 # canonical filesystem backend mounted on a `task-server` vox route.

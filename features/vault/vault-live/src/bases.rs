@@ -2349,9 +2349,39 @@ fn eval_call(
                 };
                 V::Bool(row.tags.iter().any(|t| t == &needle))
             }
+            // `transpose_key(key, offset)` — a key name moved by
+            // semitones (`4`, `"+4"`, `"-4"`) in its own spelling, or
+            // replaced by an absolute key (`"D"`). See `music_key`.
+            "transpose_key" if arg_vals.len() == 2 => {
+                transpose_key_value(&arg_vals[0], &arg_vals[1])
+            }
             _ => V::Null,
         }
     }
+}
+
+/// The `transpose_key(key, offset)` formula over JSON values.
+///
+/// A missing or empty offset means "no change", so a setlist entry
+/// without `key_offset` shows the song's key. A non-integer number or
+/// an unparseable key/offset is `null`, like every other type mismatch
+/// in this evaluator. An absolute key offset is returned as written,
+/// whatever `key` holds.
+fn transpose_key_value(key: &serde_json::Value, offset: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value as V;
+    let offset = match offset {
+        V::Null => "0".to_string(),
+        V::String(s) if s.trim().is_empty() => "0".to_string(),
+        V::String(s) => s.clone(),
+        V::Number(n) => match (n.as_i64(), n.as_f64()) {
+            (Some(i), _) => i.to_string(),
+            (None, Some(f)) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{f:.0}"),
+            _ => return V::Null,
+        },
+        _ => return V::Null,
+    };
+    let key = key.as_str().unwrap_or("");
+    music_key::transpose_key(key, &offset).map_or(V::Null, V::String)
 }
 
 fn num_pair(a: &serde_json::Value, b: &serde_json::Value) -> Option<(f64, f64)> {
@@ -2653,5 +2683,90 @@ mod executor_tests {
             ],
         };
         assert_eq!(eval_expr(&expr, &r), serde_json::json!("yes"));
+    }
+
+    fn transpose_call(key: Expr, offset: Expr) -> Expr {
+        Expr::Call {
+            receiver: None,
+            name: "transpose_key".into(),
+            args: vec![key, offset],
+        }
+    }
+
+    fn lit(v: serde_json::Value) -> Expr {
+        Expr::Literal { value: v }
+    }
+
+    #[test]
+    fn transpose_key_formula_values() {
+        use serde_json::json;
+        let r = row("x", json!({}));
+        let cases = [
+            (json!("f#m"), json!(2), json!("g#m")),
+            (json!("D"), json!("+4"), json!("F#")),
+            (json!("D"), json!("-4"), json!("Bb")),
+            (json!("Eb"), json!(3), json!("Gb")),
+            (json!("Bb minor"), json!(-1), json!("A minor")),
+            (json!("G"), json!(4.0), json!("B")),
+            // Absolute key: passed through unchanged.
+            (json!("C"), json!("D"), json!("D")),
+            (json!(null), json!("Ebm"), json!("Ebm")),
+            // No offset: the key itself.
+            (json!("Ab"), json!(null), json!("Ab")),
+            (json!("Ab"), json!(""), json!("Ab")),
+            // Bad input: null.
+            (json!("H"), json!(2), json!(null)),
+            (json!("Cmaj7"), json!(2), json!(null)),
+            (json!("C"), json!(1.5), json!(null)),
+            (json!("C"), json!("four"), json!(null)),
+            (json!("C"), json!(true), json!(null)),
+            (json!(null), json!(2), json!(null)),
+        ];
+        for (key, offset, want) in cases {
+            let expr = transpose_call(lit(key.clone()), lit(offset.clone()));
+            assert_eq!(eval_expr(&expr, &r), want, "transpose_key({key}, {offset})");
+        }
+        // Arity is checked: one argument is not a call we know.
+        let one = Expr::Call {
+            receiver: None,
+            name: "transpose_key".into(),
+            args: vec![lit(json!("C"))],
+        };
+        assert_eq!(eval_expr(&one, &r), json!(null));
+    }
+
+    #[test]
+    fn transpose_key_reads_properties_in_a_filter() {
+        use serde_json::json;
+        // The setlist shape: each use has the song key (until link
+        // follow lands, a plain property) and a per-use offset or key.
+        let rows = vec![
+            row(
+                "1 Opener",
+                json!({ "kind": "use", "key": "D", "key_offset": 4 }),
+            ),
+            row(
+                "2 Ballad",
+                json!({ "kind": "use", "key": "Bb", "key_offset": "D" }),
+            ),
+            row(
+                "3 Closer",
+                json!({ "kind": "use", "key": "f#m", "key_offset": "+2" }),
+            ),
+            row("4 Default", json!({ "kind": "use", "key": "F#" })),
+        ];
+        let f = expr_parser::parse_filter(r#"transpose_key(key, key_offset) == "F#""#).unwrap();
+        let hits: Vec<_> = rows
+            .iter()
+            .filter(|r| filter_matches(&f, r))
+            .map(|r| r.basename.clone())
+            .collect();
+        assert_eq!(hits, vec!["1 Opener", "4 Default"]);
+
+        let f = expr_parser::parse_filter(r#"transpose_key(note.key, note.key_offset) == "g#m""#)
+            .unwrap();
+        assert!(filter_matches(&f, &rows[2]));
+        let f = expr_parser::parse_filter(r#"transpose_key(key, key_offset) == "D""#).unwrap();
+        assert!(filter_matches(&f, &rows[1]));
     }
 }
