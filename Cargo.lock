@@ -13366,6 +13366,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "music-key"
+version = "0.2.0"
+
+[[package]]
 name = "mutants"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22190,6 +22194,7 @@ dependencies = [
  "facet",
  "files-proto",
  "indexmap 2.14.0",
+ "music-key",
  "notify 8.2.0",
  "notify-debouncer-mini 0.7.0",
  "org-proto",
