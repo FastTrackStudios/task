@@ -178,7 +178,7 @@ fn one_page(root: &Path, rel: &str, body: &str) -> Vault {
                 .parent()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default(),
-            raw: body.to_string(),
+            raw: body.into(),
             mtime: std::time::SystemTime::now(),
         }],
         bases: Vec::new(),
@@ -205,7 +205,8 @@ pub fn save_page(vault: &mut Vault, page_rel_path: &str) -> Result<(), MutateErr
         .position(|p| p.rel_path == page_rel_path)
         .ok_or_else(|| MutateError::NotFound(page_rel_path.to_string()))?;
     let abs = vault.root.join(page_rel_path);
-    let body = vault.pages[idx].raw.clone();
+    // An `Arc` bump: the text is shared, so this does not copy it.
+    let body = std::sync::Arc::clone(&vault.pages[idx].raw);
     write_page(vault, page_rel_path, body.as_bytes()).map_err(MutateError::Io)?;
     let mtime = std::fs::metadata(&abs)
         .and_then(|m| m.modified())
@@ -220,7 +221,7 @@ pub fn save_page(vault: &mut Vault, page_rel_path: &str) -> Result<(), MutateErr
 pub fn create_page(
     vault: &mut Vault,
     rel_path: &str,
-    body: impl Into<String>,
+    body: impl Into<std::sync::Arc<str>>,
 ) -> Result<usize, MutateError> {
     if vault.pages.iter().any(|p| p.rel_path == rel_path) {
         return Err(MutateError::AlreadyExists(rel_path.to_string()));
@@ -255,10 +256,13 @@ pub fn append_to_page(vault: &mut Vault, rel_path: &str, text: &str) -> Result<(
         .position(|p| p.rel_path == rel_path)
         .ok_or_else(|| MutateError::NotFound(rel_path.to_string()))?;
     let page = &mut vault.pages[idx];
-    if !page.raw.is_empty() && !page.raw.ends_with('\n') {
-        page.raw.push('\n');
+    let mut raw = String::with_capacity(page.raw.len() + 1 + text.len());
+    raw.push_str(&page.raw);
+    if !raw.is_empty() && !raw.ends_with('\n') {
+        raw.push('\n');
     }
-    page.raw.push_str(text);
+    raw.push_str(text);
+    page.raw = raw.into();
     save_page(vault, rel_path)
 }
 
@@ -356,7 +360,7 @@ mod tests {
         let (_tmp, mut v) = fresh_vault();
         create_page(&mut v, "p.md", "first").unwrap();
         append_to_page(&mut v, "p.md", "second").unwrap();
-        assert_eq!(v.pages[0].raw, "first\nsecond");
+        assert_eq!(&*v.pages[0].raw, "first\nsecond");
     }
 
     #[test]

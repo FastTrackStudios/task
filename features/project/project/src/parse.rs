@@ -19,6 +19,13 @@ pub fn looks_like_project(page: &VaultPage) -> bool {
     crate::entity::matches_raw(&page.raw)
 }
 
+/// [`looks_like_project`] on a page's raw text, for a scan that borrows
+/// the cached vault snapshot instead of building a `VaultPage`.
+#[must_use]
+pub fn looks_like_project_raw(raw: &str) -> bool {
+    crate::entity::matches_raw(raw)
+}
+
 /// Parse a `VaultPage` into a `ProjectInfo`. The page must
 /// carry frontmatter; missing optional fields default.
 pub fn parse_page(page: &VaultPage) -> Result<ProjectInfo, ParseError> {

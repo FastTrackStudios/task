@@ -9,7 +9,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::Milestone;
-use crate::parse::{looks_like_milestone, parse_page};
+use crate::parse::{looks_like_milestone_raw, parse_milestone};
 use crate::service::{MilestoneError, MilestoneService};
 use crate::write::{default_milestone_path, write_milestone};
 
@@ -63,18 +63,19 @@ impl MilestoneBackend {
     }
 
     fn list_inner(&self) -> Result<Vec<Milestone>, MilestoneError> {
-        let vault = Vault::open(&self.vault_root).map_err(|e| {
+        // The cached snapshot, borrowed: only pages changed since the
+        // last list are read, and none is copied (zero-copy audit V12).
+        let vault = Vault::snapshot(&self.vault_root).map_err(|e| {
             MilestoneError::Io(format!("open vault {}: {e}", self.vault_root.display()))
         })?;
         let mut out = Vec::new();
-        for page in vault.pages {
-            let proto = page.into_proto();
-            if !looks_like_milestone(&proto) {
+        for page in &vault.pages {
+            if !looks_like_milestone_raw(&page.raw) {
                 continue;
             }
-            match parse_page(&proto) {
+            match parse_milestone(&page.rel_path, &page.basename, &page.raw) {
                 Ok(m) => out.push(m),
-                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "milestone parse failed"),
+                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "milestone parse failed"),
             }
         }
         Ok(out)
@@ -85,7 +86,7 @@ impl MilestoneBackend {
     /// to derive the default milestone path. Walks the vault
     /// for the one project page whose frontmatter `id` matches.
     fn project_path(&self, project_id: Uuid) -> Result<String, MilestoneError> {
-        let vault = Vault::open(&self.vault_root).map_err(|e| {
+        let vault = Vault::snapshot(&self.vault_root).map_err(|e| {
             MilestoneError::Io(format!("open vault {}: {e}", self.vault_root.display()))
         })?;
         for page in &vault.pages {
@@ -221,7 +222,7 @@ impl MilestoneService for MilestoneBackend {
         // Refuse if any task points at this milestone — drop
         // the link first, otherwise downstream rollups would
         // silently float to the project root.
-        let vault = Vault::open(&self.vault_root)
+        let vault = Vault::snapshot(&self.vault_root)
             .map_err(|e| MilestoneError::Io(format!("open vault: {e}")))?;
         for page in &vault.pages {
             let Some((map, _)) = vault_entity::frontmatter::mapping(&page.raw) else {

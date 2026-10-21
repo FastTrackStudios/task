@@ -15,7 +15,14 @@ use crate::model::Workstream;
 /// True when `page` carries `type: workstream` (or the tag).
 #[must_use]
 pub fn looks_like_workstream(page: &VaultPage) -> bool {
-    vault_entity::frontmatter::has_type(&page.raw, Workstreams::TYPE)
+    looks_like_workstream_raw(&page.raw)
+}
+
+/// [`looks_like_workstream`] on a page's raw text, for a scan that borrows
+/// the cached vault snapshot instead of building a `VaultPage`.
+#[must_use]
+pub fn looks_like_workstream_raw(raw: &str) -> bool {
+    vault_entity::frontmatter::has_type(raw, Workstreams::TYPE)
 }
 
 pub fn parse_page(page: &VaultPage) -> Result<Workstream, ParseError> {

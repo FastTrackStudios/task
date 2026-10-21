@@ -387,7 +387,7 @@ impl SubstitutionService for Store {
         rule.path = guard.pages[idx].rel_path.clone();
         rule.date_modified = Some(Utc::now());
         let body = serialize(&rule)?;
-        guard.pages[idx].raw = body;
+        guard.pages[idx].raw = body.into();
         let path = rule.path.clone();
         vault::save_page(&mut guard, &path).map_err(map_io)?;
         Ok(rule)

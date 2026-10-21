@@ -79,8 +79,8 @@ whole vault per request.
 | V9 | `vault_live::watcher::is_markdown` | lowered extension copy per raw fs event | 724 k allocs; per fs event | **done** (PR 1) |
 | V10 | `vault_obsidian::walker::{walk_vault, is_hard_skip, classify}` | `Vec` of every path's components per entry; lowered extension copy; path copied | 482 k + 84 k allocs | **done** (PR 1) |
 | V11 | `files_proto::consts::is_private_dir`, `shelf_boundary::is_nested_shelf` | `dir.join(marker)` per directory per walk | 231 k + 157 k allocs; small | **leave** for now: a `PathBuf` per directory to `stat`; only worth a reused buffer if the walk is still hot after V12 |
-| V12 | `Vault::open` per list call | re-reads every page of the vault on every list | **vault × list calls**: the largest remaining churn in this area | **later**: cache the snapshot per org, invalidated by the watcher (needs its own PR; changes no format) |
-| V13 | `VaultPage` / `VaultBase` derive `Clone`, `Vault` derives `Clone` | a cloned `Vault` copies every page | unknown; callers not yet audited | **later**: find the callers under `redundant_clone`, then hold pages as `Arc<str>` if a cache (V12) shares them |
+| V12 | `Vault::open` per list call | re-reads every page of the vault on every list | **vault × list calls**: the largest remaining churn in this area | **done** (PR 4: `Vault::snapshot`, one cached snapshot per root, stat-validated, invalidated by the vault watcher) |
+| V13 | `VaultPage` / `VaultBase` derive `Clone`, `Vault` derives `Clone` | a cloned `Vault` copies every page | unknown; callers not yet audited | **done** (PR 4: `raw: Arc<str>`; a cloned page or vault shares the text, `create_page` takes `Into<Arc<str>>` so a rename moves no text) |
 | V14 | `vault_live::sync` `put_file` / `move` paths | `fs::read` of source and destination to compare and hash | file size × writes | **later**: stream-compare (equal length, then 16 KiB chunks) |
 | V15 | `lexorank` | `String::from_utf8(bytes.to_vec())` | tiny | **leave** |
 
@@ -124,7 +124,7 @@ rather than with request count — fewer calls, far more bytes each.
 
 | # | Site | Copy | Bytes × frequency | Status |
 |---|------|------|-------------------|--------|
-| W1 | 66 `fs::read`/`read_to_string` sites | whole pages read per operation | page × calls | **later**: reuse the vault snapshot (V12) instead of re-reading |
+| W1 | 66 `fs::read`/`read_to_string` sites | whole pages read per operation | page × calls | **done for `list_pages`** (PR 4: the one site that read every page per call now reads the wiki root's snapshot). The rest read one named file each (a page, `purpose.md`, a source) or run once per ingest: **leave** until measured; `index::rebuild` (every page, per ingest) is the next candidate |
 | W2 | 105 `to_owned` / 143 `clone` | mostly path and title strings | small each | **later**, with the lint |
 
 ### Bases (`vault_live::bases`, `vault_obsidian::base_query`)
@@ -273,3 +273,34 @@ run noise, and growth is noise around zero. The budget is tightened
 anyway, since every run since PR 1 measured under 51 MiB peak: heap
 96 → 80 MiB. Growth goes 4 → 3 MiB, about twice the worst run seen
 (1.4 MiB). RssAnon stays at 200 MiB.
+
+### PR 4: the vault snapshot cache
+
+Branch `perf/zero-copy-vault-cache`. Fixes V12, V13, W1 (`list_pages`).
+
+- `vault_live::snapshot`: `Vault::snapshot(root)` returns an
+  `Arc<Vault>` from a process-wide cache keyed by root. Each call walks
+  the root and `stat`s every page (length, mtime, and on Unix inode and
+  ctime); a page whose stamp is unchanged is reused, any other is read
+  again, and when nothing changed the previous `Arc` comes back as is.
+  A page read within `RACY` (2 s) of its mtime is not trusted on its
+  stamp (git's racily-clean rule), so a same-length rewrite in one
+  timestamp tick is still seen. The vault watcher calls
+  `snapshot::invalidate_path` for every file it reports. The cache keeps
+  at most `MAX_CACHED_BYTES` (64 MiB) of page text, least recently used
+  roots dropped first. No format changes: nothing on disk or on the wire
+  moves.
+- `VaultPage::raw` and `VaultBase::raw` are `Arc<str>`. Snapshots share
+  unchanged pages' text, a cloned `Vault` no longer copies the vault,
+  and `create_page` takes `impl Into<Arc<str>>`, so the entity stores'
+  rename (`delete_page` + `create_page` of the same text) moves no text.
+- On the snapshot: task, goal, milestone and workstream lists (and the
+  workstream rollup's task and project scans, the milestone project and
+  task lookups), the vault folder index, base views and full-text
+  search (`vault_live::sync::Backend`), the file-version entity stores
+  (a private copy of the snapshot, which now costs the path strings and
+  not the text), and the wiki's `list_pages`.
+- Scans borrow the snapshot: `looks_like_*_raw` + `parse_*` on
+  `&page.raw` replace `into_proto()` + `parse_page`.
+
+Numbers: see the PR body (memory_budget before/after, lint counts).

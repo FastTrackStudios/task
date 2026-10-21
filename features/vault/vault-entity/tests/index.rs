@@ -299,7 +299,7 @@ fn concurrent_writes_to_one_page_serialise() {
         rel_path: note.path.clone(),
         basename: "note-0".into(),
         folder: "Notes".into(),
-        raw: raw.clone(),
+        raw: raw.as_str().into(),
         mtime: std::time::SystemTime::now(),
     };
     let parsed = Notes::from_page(&page).unwrap_or_else(|e| {

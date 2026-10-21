@@ -68,7 +68,7 @@ pub mod write;
 
 pub use entity::Projects;
 pub use model::{ProjectInfo, Status};
-pub use parse::{ParseError, looks_like_project, parse_page, parse_str};
+pub use parse::{ParseError, looks_like_project, looks_like_project_raw, parse_page, parse_str};
 pub use parts::{
     Audience, Capabilities, Capability, Cardinality, Component, ComponentKind, Conflict,
     Deliverable, DeliverableItem, Deliverables, Divergence, Form, Medium, Merged, Part, Parts,

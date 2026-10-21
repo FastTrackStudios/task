@@ -70,6 +70,9 @@ pub mod write_guard;
 /// Where one registered root stops and a nested one begins — the
 /// prune that lets a shelf hold a shelf.
 pub mod shelf_boundary;
+/// The cached [`Vault`] snapshot per vault root, re-read only where the
+/// disk changed (zero-copy audit V12).
+pub mod snapshot;
 pub mod vault;
 pub mod walker;
 pub mod watcher;

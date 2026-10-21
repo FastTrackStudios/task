@@ -19,7 +19,14 @@ use crate::model::Goal;
 /// True when `page` carries `type: goal` (or the tag).
 #[must_use]
 pub fn looks_like_goal(page: &VaultPage) -> bool {
-    vault_entity::frontmatter::has_type(&page.raw, Goals::TYPE)
+    looks_like_goal_raw(&page.raw)
+}
+
+/// [`looks_like_goal`] on a page's raw text, for a scan that borrows
+/// the cached vault snapshot instead of building a `VaultPage`.
+#[must_use]
+pub fn looks_like_goal_raw(raw: &str) -> bool {
+    vault_entity::frontmatter::has_type(raw, Goals::TYPE)
 }
 
 /// Parse a goal page.
