@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# wt-new — a card worktree with a warm target dir, seeded by reflink.
+#
+#   wt-new <name> [<base-ref>=origin/dev] [-b <branch>]
+#
+# Makes $WT_ROOT/<name> (default /run/media/Development/wt/<name>) as a git
+# worktree of the canonical checkout $WT_REPO (default
+# /run/media/Development/task), then:
+#   1. copies the canonical tree's generated, git-ignored inputs the build
+#      needs (the tailwind sheets) — with their mtimes;
+#   2. gives every tracked file whose content is identical to the canonical
+#      tree's the canonical file's mtime (wt-mtime-sync), so cargo sees those
+#      crates as fresh. Files that differ keep "now" and rebuild. Without
+#      this step every workspace crate rebuilds: a new checkout is newer
+#      than every dep-info in the copied target;
+#   3. reflinks the canonical target/ into it (`cp --reflink=always`, a
+#      copy-on-write clone: seconds, and no disk until either side rewrites
+#      a file) while holding the canonical debug dir's cargo lock, so it never
+#      copies a half-written unit.
+#
+# Order matters for correctness: the checkout and the mtime sync happen
+# BEFORE the target is copied. A target dropped into a checkout whose files
+# are OLDER than the target's fingerprints makes cargo trust artifacts built
+# from different sources (measured: it reported crates Fresh that no longer
+# compiled). Never re-seed an existing worktree's target; wt-rm and wt-new.
+#
+# Unit hashes do not include the checkout path, so a worktree at the
+# canonical commit rebuilds nothing; one at another commit rebuilds only
+# the crates its diff touches (plus their dependents), unless the
+# workspace version differs (a release bump renames every workspace unit).
+#
+# Needs a reflink-capable filesystem (btrfs, xfs, APFS via cp -c). Refuses
+# to fall back to a real copy: a full target is ~100 GB.
+set -euo pipefail
+
+usage() { sed -n '2,4p' "$0" >&2; exit 2; }
+[ $# -ge 1 ] || usage
+name=$1; shift
+base=origin/dev; branch=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -b) branch=$2; shift 2 ;;
+    -h|--help) usage ;;
+    *) base=$1; shift ;;
+  esac
+done
+case "$name" in */*|.*|'') echo "wt-new: bad name '$name'" >&2; exit 2 ;; esac
+
+REPO=${WT_REPO:-/run/media/Development/task}
+ROOT=${WT_ROOT:-/run/media/Development/wt}
+dir=$ROOT/$name
+[ -e "$dir" ] && { echo "wt-new: $dir exists (wt-rm it first)" >&2; exit 1; }
+mkdir -p "$ROOT"
+
+git -C "$REPO" fetch -q origin 2>/dev/null || echo "wt-new: fetch failed; using local refs" >&2
+if [ -n "$branch" ]; then
+  git -C "$REPO" worktree add -q -b "$branch" "$dir" "$base"
+else
+  git -C "$REPO" worktree add -q --detach "$dir" "$base"
+fi
+
+# 1. generated inputs (git-ignored) the build reads
+for f in apps/desktop/assets/tailwind.css apps/mobile/assets/tailwind.css apps/web/assets/tailwind.css; do
+  if [ -f "$REPO/$f" ]; then mkdir -p "$(dirname "$dir/$f")"; cp -p "$REPO/$f" "$dir/$f"; fi
+done
+
+# 2. identical files take the canonical mtimes
+"$(dirname "$(readlink -f "$0")")/wt-mtime-sync" "$REPO" "$dir"
+
+# 3. reflink the warm target under the canonical debug lock
+t0=$(date +%s.%N)
+if [ -d "$REPO/target" ]; then
+  lock=$REPO/target/debug/.cargo-lock
+  if [ -e "$lock" ]; then
+    flock -w 900 "$lock" cp -a --reflink=always "$REPO/target" "$dir/target"
+  else
+    cp -a --reflink=always "$REPO/target" "$dir/target"
+  fi
+  echo "wt-new: seeded target by reflink in $(python3 -c "import time;print(f'{time.time()-$t0:.1f}')")s"
+else
+  echo "wt-new: canonical has no target/ yet; this worktree builds cold" >&2
+fi
+
+echo "wt-new: $dir at $(git -C "$dir" rev-parse --short HEAD)${branch:+ on $branch}"
+echo "        build with: cd $dir && build-lease acquire <owner> && nix develop --command cargo …"

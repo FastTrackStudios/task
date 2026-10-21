@@ -821,6 +821,11 @@ inherits = "dev"
 debug = 2
 split-debuginfo = "packed"
 
+# `inherits` carries dev's package overrides along, including the
+# dependencies' `debug = false` — put their DWARF back here too.
+[profile.dev-dbg.package."*"]
+debug = 2
+
 # The desktop app's release build. dx makes this profile ad hoc
 # (`inherits = "release"`, and always `strip = false`) unless it is defined
 # here; defining it exactly so lets the bundle's other binaries — the sync
@@ -876,8 +881,19 @@ strip = "none"
 # Dependencies at opt-level 1: gets rid of the pathological O0 debug
 # codegen at a fraction of the compile cost. Applies to dependencies only
 # — workspace members are governed by profile.dev's base opt-level.
+#
+# And no debuginfo for dependencies: workspace crates keep line tables, so
+# a panic's backtrace still names our file:line; a frame inside a
+# dependency shows its function name without a line. Measured on
+# THEBATTLESHIP (docs/agents/build-strategy.md): a cold workspace test
+# build 471 s -> 430 s, the target after check + test build 93 -> 56 GB
+# (42 -> 36 GB on disk under zstd), the server's `it` test binary
+# 541 -> 375 MB; relinking it is unchanged (~6.4 s — split-debuginfo
+# already kept the DWARF out of the link). Need a dependency's lines or
+# locals? Use `--profile dev-dbg`, which sets debug = 2 for everything.
 [profile.dev.package."*"]
 opt-level = 1
+debug = false
 
 # phon's JIT engine — generates and runs the DSP graph itself. Reaches
 # this tree transitively through vox.
