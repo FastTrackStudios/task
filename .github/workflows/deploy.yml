@@ -275,3 +275,14 @@ jobs:
     uses: ./.github/workflows/node-binaries.yml
     # TASK_RELEASE_MINISIGN_KEY signs the release's SHA256SUMS.
     secrets: inherit
+
+  # The release is tagged: build the Linux desktop package at the tag and
+  # push it to fasttrackstudio.cachix.org, so NixOS hosts (nix-fleet's
+  # task-desktop timer) download the release instead of compiling it.
+  desktop-cache:
+    name: Linux desktop -> cachix
+    needs: release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    uses: ./.github/workflows/desktop-cache.yml
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
