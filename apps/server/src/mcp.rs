@@ -64,6 +64,13 @@ const LATEST_PROTOCOL: &str = "2025-06-18";
 /// scarce resource — a 400-task vault must not land in one message.
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
+/// `query_base` reads at most this many notes per call (the row set
+/// and the link universe); past it the result says `capped`.
+const QUERY_BASE_MAX_NOTES: usize = 5_000;
+/// …and at most this many bytes of them, by manifest size.
+const QUERY_BASE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// The longest inline base `query_base` accepts.
+const QUERY_BASE_MAX_YAML: usize = 64 * 1024;
 
 /// Per-task body cap in `list_untriaged_tasks`. The body is where a
 /// bare title's missing context usually hides, so it's worth sending
@@ -3409,6 +3416,12 @@ fn call_tool(
                         .map_err(|e| backend_err("base", &path, &e))?;
                     (path, String::from_utf8_lossy(&bytes.0).into_owned())
                 }
+                (None, Some(yaml)) if yaml.len() > QUERY_BASE_MAX_YAML => {
+                    return Err(ToolFailure::Message(format!(
+                        "an inline base may be at most {QUERY_BASE_MAX_YAML} bytes; this one is {}",
+                        yaml.len()
+                    )));
+                }
                 (None, Some(yaml)) => ("(inline)".to_owned(), yaml),
                 _ => {
                     return Err(ToolFailure::Message(
@@ -3427,15 +3440,39 @@ fn call_tool(
                 .vault_sync
                 .manifest(VAULT_ID)
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            let notes: Vec<(String, String)> = manifest
+            // Bounded: at most QUERY_BASE_MAX_NOTES notes and
+            // QUERY_BASE_MAX_BYTES bytes, in path order so a capped
+            // result is the same on every call. Notes that fail to
+            // read are logged and reported, not silently dropped.
+            let mut md: Vec<_> = manifest
                 .files
                 .iter()
                 .filter(|f| f.path.ends_with(".md"))
-                .filter_map(|f| {
-                    let bytes = org.vault_sync.get_file(VAULT_ID, &f.path).ok()?;
-                    Some((f.path.clone(), String::from_utf8_lossy(&bytes.0).into_owned()))
-                })
                 .collect();
+            md.sort_by(|a, b| a.path.cmp(&b.path));
+            let md_total = md.len();
+            let mut notes: Vec<(String, String)> = Vec::new();
+            let mut unreadable: Vec<String> = Vec::new();
+            let mut bytes_read: u64 = 0;
+            let mut capped = false;
+            for f in md {
+                if notes.len() >= QUERY_BASE_MAX_NOTES
+                    || bytes_read.saturating_add(f.size) > QUERY_BASE_MAX_BYTES
+                {
+                    capped = true;
+                    break;
+                }
+                match org.vault_sync.get_file(VAULT_ID, &f.path) {
+                    Ok(bytes) => {
+                        bytes_read = bytes_read.saturating_add(bytes.0.len() as u64);
+                        notes.push((f.path.clone(), String::from_utf8_lossy(&bytes.0).into_owned()));
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = %f.path, error = ?e, "query_base: note unreadable, skipped");
+                        unreadable.push(f.path.clone());
+                    }
+                }
+            }
             let rows = vault::obsidian::rows_from_markdown(
                 notes.iter().map(|(p, s)| (p.as_str(), s.as_str())),
             );
@@ -3451,6 +3488,10 @@ fn call_tool(
                 .into_iter()
                 .map(|mut t| {
                     let total: usize = t.groups.iter().map(|g| g.rows.len()).sum();
+                    // Spend one row budget across the groups in order:
+                    // truncate first, then subtract what was kept, so
+                    // `budget` never underflows and later groups get
+                    // what is left (possibly nothing).
                     let mut budget = limit;
                     for g in &mut t.groups {
                         g.rows.truncate(budget);
@@ -3467,7 +3508,16 @@ fn call_tool(
                     })
                 })
                 .collect();
-            Ok(json!({ "base": source, "views": views }))
+            Ok(json!({
+                "base": source,
+                "views": views,
+                "notes": {
+                    "total": md_total,
+                    "read": notes.len(),
+                    "unreadable": unreadable,
+                    "capped": capped,
+                },
+            }))
         }
 
         "append_note" => {

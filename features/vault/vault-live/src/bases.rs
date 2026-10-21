@@ -2155,9 +2155,17 @@ fn value_contains(haystack: &serde_json::Value, needle: &serde_json::Value) -> b
 // (`"[[Song A]]"`) can be followed to the note it names.
 
 /// How deep formula references (and the link hops inside them) may
-/// nest before the evaluator gives up with `null` — the guard against
-/// a formula that names itself, directly or through another.
+/// nest before the evaluator gives up with `null`. Cycles are caught
+/// earlier by the in-progress marker in [`BaseEval::formula`]; this
+/// bounds long link-follow chains and the stack.
 const MAX_EVAL_DEPTH: u8 = 16;
+
+/// One memoized formula value for one row.
+enum FormulaSlot {
+    /// Being evaluated right now: a reference back to it is a cycle.
+    InProgress,
+    Done(serde_json::Value),
+}
 
 /// Evaluation context for one base over one row set.
 // t[impl vault.bases.links]
@@ -2165,13 +2173,22 @@ pub struct BaseEval<'a> {
     rows: &'a [BaseRow],
     /// Lower-cased vault path without `.md` → row index.
     by_path: std::collections::HashMap<String, usize>,
-    /// Lower-cased basename → row index (first wins).
-    by_name: std::collections::HashMap<String, usize>,
+    /// Lower-cased basename → row index, or `None` when two notes
+    /// share the basename (an ambiguous `[[Name]]` resolves to nothing).
+    by_name: std::collections::HashMap<String, Option<usize>>,
     /// Formula name → parsed expression (or its parse error).
     formulas: std::collections::HashMap<String, Result<Expr, String>>,
     /// The base's top-level `filters:`; [`FilterNode::None`] without a base.
     global_filter: FilterNode,
     depth: std::cell::Cell<u8>,
+    /// `(formula, row index)` → value, so each formula is evaluated at
+    /// most once per row however often it is referenced: evaluation is
+    /// linear in formulas × rows, even for a caller-written base whose
+    /// formulas fan out (`a: b + b`, `b: c + c`, …).
+    memo: std::cell::RefCell<std::collections::HashMap<(String, usize), FormulaSlot>>,
+    /// Formula evaluations actually run (memo misses); a cost probe
+    /// for the tests.
+    formula_evals: std::cell::Cell<u64>,
 }
 
 impl<'a> BaseEval<'a> {
@@ -2204,7 +2221,10 @@ impl<'a> BaseEval<'a> {
                     .entry(normalize_link_target(&r.path).to_lowercase())
                     .or_insert(i);
             }
-            by_name.entry(r.basename.to_lowercase()).or_insert(i);
+            by_name
+                .entry(r.basename.to_lowercase())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(i));
         }
         Self {
             rows,
@@ -2213,6 +2233,8 @@ impl<'a> BaseEval<'a> {
             formulas: std::collections::HashMap::new(),
             global_filter: FilterNode::None,
             depth: std::cell::Cell::new(0),
+            memo: std::cell::RefCell::new(std::collections::HashMap::new()),
+            formula_evals: std::cell::Cell::new(0),
         }
     }
 
@@ -2230,10 +2252,20 @@ impl<'a> BaseEval<'a> {
                 if key.contains('/') {
                     None
                 } else {
-                    self.by_name.get(&key)
+                    self.by_name.get(&key).and_then(Option::as_ref)
                 }
             })
             .map(|&i| &self.rows[i])
+    }
+
+    /// `row`'s index when it is one of this context's rows (by
+    /// address, O(1)); `None` for a row from elsewhere.
+    fn slot_of(&self, row: &BaseRow) -> Option<usize> {
+        let size = std::mem::size_of::<BaseRow>();
+        let start = self.rows.as_ptr() as usize;
+        let at = std::ptr::from_ref(row) as usize;
+        let off = at.checked_sub(start)?;
+        (size > 0 && off % size == 0 && off / size < self.rows.len()).then_some(off / size)
     }
 
     /// Filter, sort, group and limit `view` (AND-ed with the base's
@@ -2323,13 +2355,38 @@ impl<'a> BaseEval<'a> {
     }
 
     /// One formula's value for `row`; `null` for an unknown or
-    /// unparseable formula, or one that recurses too deep.
+    /// unparseable formula, one that refers back to itself (directly
+    /// or through others), or one nested deeper than [`MAX_EVAL_DEPTH`].
+    ///
+    /// Values are memoized per `(formula, row)`, so a formula runs at
+    /// most once per row. A formula met again while it is still being
+    /// evaluated is a cycle and reads as `null`.
     #[must_use]
     pub fn formula(&self, name: &str, row: &BaseRow) -> serde_json::Value {
-        match self.formulas.get(name) {
-            Some(Ok(expr)) => self.nested(|| self.eval(expr, row)),
-            _ => serde_json::Value::Null,
+        let Some(Ok(expr)) = self.formulas.get(name) else {
+            return serde_json::Value::Null;
+        };
+        let Some(i) = self.slot_of(row) else {
+            // Not one of our rows (a caller-built row): no memo key.
+            // Still bounded by the depth guard.
+            self.formula_evals.set(self.formula_evals.get() + 1);
+            return self.nested(|| self.eval(expr, row));
+        };
+        let key = (name.to_owned(), i);
+        match self.memo.borrow().get(&key) {
+            Some(FormulaSlot::Done(v)) => return v.clone(),
+            Some(FormulaSlot::InProgress) => return serde_json::Value::Null,
+            None => {}
         }
+        self.memo
+            .borrow_mut()
+            .insert(key.clone(), FormulaSlot::InProgress);
+        self.formula_evals.set(self.formula_evals.get() + 1);
+        let v = self.nested(|| self.eval(expr, row));
+        self.memo
+            .borrow_mut()
+            .insert(key, FormulaSlot::Done(v.clone()));
+        v
     }
 
     /// Run `f` one level deeper; `null` past [`MAX_EVAL_DEPTH`].
@@ -3356,6 +3413,62 @@ views:
     groupBy:
       property: formula.song_key
 "#;
+
+    #[test]
+    fn fanned_out_formulas_run_once_per_row() {
+        // f0 = f1 + f1, f1 = f2 + f2, … f14 = f15 + f15, f15 = 1.
+        // Without a memo that is 2^16 - 1 evaluations per row; with
+        // it, one per formula per row.
+        let mut yaml = String::from("formulas:\n");
+        for i in 0..15 {
+            yaml.push_str(&format!("  f{i}: \"formula.f{n} + formula.f{n}\"\n", n = i + 1));
+        }
+        yaml.push_str("  f15: \"1\"\nviews:\n  - type: table\n    name: All\n    order:\n      - formula.f0\n");
+        let base = parse(&yaml).unwrap();
+        let rows = vec![
+            page("A.md", serde_json::json!({}), &[]),
+            page("B.md", serde_json::json!({}), &[]),
+        ];
+        let cx = BaseEval::new(&base, &rows);
+        for r in &rows {
+            assert_eq!(cx.formula("f0", r), serde_json::json!(32768.0));
+        }
+        assert_eq!(cx.formula_evals.get(), 16 * 2);
+        // Asking again is free.
+        let _ = cx.column(&rows[0], "formula.f0");
+        assert_eq!(cx.formula_evals.get(), 16 * 2);
+
+        // A fanned-out cycle is still null, and still cheap.
+        let mut yaml = String::from("formulas:\n");
+        for i in 0..12 {
+            yaml.push_str(&format!(
+                "  c{i}: \"formula.c{n} + formula.c{n}\"\n",
+                n = (i + 1) % 12
+            ));
+        }
+        let base = parse(&yaml).unwrap();
+        let cx = BaseEval::new(&base, &rows);
+        assert_eq!(cx.formula("c0", &rows[0]), serde_json::Value::Null);
+        assert_eq!(cx.formula_evals.get(), 12, "{}", cx.formula_evals.get());
+    }
+
+    #[test]
+    fn an_ambiguous_basename_resolves_to_nothing() {
+        let rows = vec![
+            page("Songs/Intro.md", serde_json::json!({ "key": "C" }), &[]),
+            page("Drafts/Intro.md", serde_json::json!({ "key": "D" }), &[]),
+            page("Songs/Outro.md", serde_json::json!({ "key": "E" }), &[]),
+        ];
+        let cx = BaseEval::over(&rows);
+        // Two notes are called Intro: a bare [[Intro]] names neither.
+        assert!(cx.resolve("Intro").is_none());
+        assert!(cx.resolve("[[Intro]]").is_none());
+        // A path still picks one.
+        assert_eq!(cx.resolve("Songs/Intro").unwrap().path, "Songs/Intro.md");
+        assert_eq!(cx.resolve("[[Drafts/Intro]]").unwrap().path, "Drafts/Intro.md");
+        // A unique basename resolves as before.
+        assert_eq!(cx.resolve("Outro").unwrap().path, "Songs/Outro.md");
+    }
 
     #[test]
     fn formulas_evaluate_reference_each_other_and_follow_links() {

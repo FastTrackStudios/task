@@ -204,6 +204,42 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
         })
         .collect();
     assert_eq!(fast, [("Night Drive", true), ("Paper Moon", false)], "{inline}");
+    // The note read is reported: the whole (small) seeded vault, none
+    // unreadable, not capped.
+    let notes = &inline["notes"];
+    assert!(notes["read"].as_u64().unwrap_or(0) >= 5, "{notes}");
+    assert_eq!(notes["read"], notes["total"], "{notes}");
+    assert_eq!(notes["unreadable"], json!([]), "{notes}");
+    assert_eq!(notes["capped"], false, "{notes}");
+
+    // ── a caller-written base that fans out answers ──
+    // f0 = f1 + f1, …, f15 = 1: 2^16 evaluations per row without the
+    // per-row formula memo, 16 with it.
+    let mut fan = String::from("filters:\n  and:\n    - file.inFolder(\"Gigs/Songs\")\nformulas:\n");
+    for i in 0..15 {
+        fan.push_str(&format!("  f{i}: \"formula.f{n} + formula.f{n}\"\n", n = i + 1));
+    }
+    fan.push_str("  f15: \"1\"\nviews:\n  - type: table\n    name: Fan\n    order: [file.name, formula.f0]\n");
+    // (The evaluation count is asserted in vault_live's
+    // `fanned_out_formulas_run_once_per_row`; a wall-clock bound here
+    // would flake on a loaded host.)
+    let (err, fanned) = call(&http, &url, &key, json!({ "org": "acme-audio", "yaml": fan })).await;
+    assert!(!err, "fan-out base: {fanned}");
+    let fan_rows = rows(&fanned, "Fan");
+    assert_eq!(fan_rows.len(), 2, "{fanned}");
+    for r in &fan_rows {
+        assert_eq!(r["values"]["formula.f0"], 32768.0, "{r}");
+    }
+    // An oversized inline base is refused before it is parsed.
+    let (err, said) = call(
+        &http,
+        &url,
+        &key,
+        json!({ "org": "acme-audio", "yaml": "#".repeat(64 * 1024 + 1) }),
+    )
+    .await;
+    assert!(err, "an oversized inline base: {said}");
+    assert!(said.to_string().contains("at most"), "{said}");
 
     // ── bad requests are tool errors the model can act on ──
     let (err, said) = call(&http, &url, &key, json!({ "org": "acme-audio" })).await;

@@ -104,8 +104,12 @@ always does). A property path through a link value follows it:
 maps the read over each, and a link that resolves to nothing reads as
 `null`. Formulas (`formula.<name>`) evaluate per row, may reference each
 other, and a formula that refers to itself evaluates to `null` rather than
-failing the view. Links resolve by vault path first, then by basename, so
-`[[Song A]]` and `[[Songs/Song A|A]]` name the same note.
+failing the view. Each formula is evaluated at most once per row, however
+often it is referenced, so a base costs at most formulas × rows formula
+evaluations. Links resolve by vault path first, then by basename, so
+`[[Song A]]` and `[[Songs/Song A|A]]` name the same note. A basename two
+notes share is ambiguous: a bare `[[Name]]` resolves to neither (it reads
+as `null` and `exists()` is false), and only a path link names one of them.
 
 ### An agent can run a base
 
@@ -118,6 +122,13 @@ as `vault.bases.links` describes. The rows, and the notes links resolve to,
 are the notes of the one org the call was admitted to, read through that
 org's vault. A caller with no standing in an org is refused before anything
 is read. It is a read of the notes, so a library bot is offered it.
+
+One call is bounded: an inline base is at most 64 KiB; at most 5,000 notes
+and 64 MiB of them are read, in path order; and each view returns at most
+`limit` rows (default 50, at most 200) with its `total` and `truncated`.
+The answer reports the notes it read (`total`, `read`, `unreadable` paths,
+`capped`), so a note that failed to read, or a vault past the cap, is
+visible to the caller rather than silently missing.
 
 Checked by: `apps/server/tests/it/mcp_query_base_e2e.rs` (the seeded
 `Vault/Gigs/Gigs.base`, run by a library bot of a person in `acme-audio`
