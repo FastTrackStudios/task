@@ -1100,6 +1100,8 @@ pub fn tool_catalog() -> Vec<ToolDef> {
     v.extend(patch_tool_catalog());
     v.extend(sample_tool_catalog());
     v.extend(lighting_tool_catalog());
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    v.extend(live_tool_catalog());
     #[cfg(feature = "plugin-wiki")]
     v.extend(wiki_tool_catalog());
     v
@@ -1426,6 +1428,94 @@ fn lighting_tool_catalog() -> Vec<ToolDef> {
                         "content_id": s_("Optional pin: the content address a Files upload reported for exactly these bytes."),
                     }),
                     &["title", "body", "scope"],
+                )
+            },
+        },
+    ]
+}
+
+/// The live-set tools (spec §7 S3): an agent in a live set, without
+/// speaking Loro. `live_observe` lists a set's songs with each song
+/// doc's ref and version, `doc_read` reads one as JSON, `doc_apply`
+/// edits it live — applied at once (the Captain's §11 Q2), checked
+/// against the doc's shape, attributed to the caller in the CRDT
+/// history, undoable. The rules are [`crate::live_docs`]'s.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn live_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "live_observe",
+            plugin: "fasttrackstudio",
+            description: "Watch a live set (a setlist the band plays together in Task): its \
+                          songs in order, each with the `doc_ref` of its shared doc and that \
+                          doc's current `version`, plus whether you may edit (`read_only`). \
+                          Call this FIRST — doc_read and doc_apply take a `doc_ref` from here \
+                          (`live:<setlist>/<song>`). Opens the set if nobody is in it.",
+            schema: || {
+                obj(
+                    json!({
+                        "setlist": s_("The setlist's id: a song list or set list of this org."),
+                    }),
+                    &["setlist"],
+                )
+            },
+        },
+        ToolDef {
+            name: "doc_read",
+            plugin: "fasttrackstudio",
+            description: "Read a live song's doc as JSON, with its `version` and the latest \
+                          applies (who made each, and its apply id for undo). Read before \
+                          writing: pass the `version` you read as doc_apply's \
+                          `expected_version`, so an edit made over a newer doc is refused \
+                          rather than applied blind.",
+            schema: || {
+                obj(
+                    json!({
+                        "doc_ref": s_("live:<setlist>/<song>, from live_observe (a song \
+                                       doc's bare id works too)."),
+                    }),
+                    &["doc_ref"],
+                )
+            },
+        },
+        ToolDef {
+            name: "doc_apply",
+            plugin: "fasttrackstudio",
+            description: "Edit a live song's doc. APPLIES AT ONCE: every peer in the set sees \
+                          it live, attributed to you. `ops` is a list, checked as a batch \
+                          against the doc's current shape (one bad op refuses all, nothing \
+                          changes): \
+                          {\"op\":\"set\",\"path\":[\"song\",\"tempo\"],\"value\":78} sets a field \
+                          (a field keeps its kind: set it to null first to change it); \
+                          {\"op\":\"insert\",\"path\":[\"song\",\"sections\"],\"index\":1,\"value\":\"bridge\"} \
+                          inserts into a list (no index: append); \
+                          {\"op\":\"delete\",\"path\":[\"song\",\"sections\",2]} deletes a field \
+                          or item; {\"op\":\"splice\",\"path\":[\"song\",\"lyrics\"],\"index\":0,\
+                          \"delete\":5,\"insert\":\"Grace\"} edits a text; \
+                          {\"op\":\"undo\",\"apply\":\"<id>\"} (alone) reverts an earlier apply, \
+                          newest first. Pass `expected_version` from doc_read: a doc that \
+                          moved on since is refused as stale. `mode: \"propose\"` checks and \
+                          previews without applying. Observers (read-only keys) are refused.",
+            schema: || {
+                obj(
+                    json!({
+                        "doc_ref": s_("live:<setlist>/<song>, from live_observe."),
+                        "ops": {
+                            "type": "array",
+                            "items": { "type": "object" },
+                            "description": "The ops, in order (set, insert, delete, splice; \
+                                            or one undo).",
+                        },
+                        "expected_version": s_("The `version` you read. Omit to apply \
+                                                whatever the doc is now."),
+                        "mode": {
+                            "type": "string",
+                            "enum": ["apply", "propose"],
+                            "description": "apply (the default) edits live; propose only \
+                                            checks and shows what the doc would become.",
+                        },
+                    }),
+                    &["doc_ref", "ops"],
                 )
             },
         },
@@ -1952,14 +2042,21 @@ async fn mcp_dispatch(
                 && let Some(tools) = bot_tools(&state, &headers).await
                 && !tools.allows(name)
             {
-                return Json(rpc_result(
-                    id,
-                    tool_err(&format!(
+                // t[impl mcp.live.observer]
+                // A key that may watch a live set but not edit it is an
+                // observer (spec §7 S1): say so, not "notes and wikis".
+                let refusal = if tools.allows("doc_read") && LIVE_WRITE_TOOLS.contains(&name) {
+                    format!(
+                        "`{name}` is refused: this bot's key only observes live sets \
+                         (live_observe, doc_read). Editing one needs a key with every tool."
+                    )
+                } else {
+                    format!(
                         "`{name}` is not offered to this bot — its key is for notes and wikis. \
                          Call `tools/list` for what it may use."
-                    )),
-                ))
-                .into_response();
+                    )
+                };
+                return Json(rpc_result(id, tool_err(refusal))).into_response();
             }
             let args_peek = params
                 .get("arguments")
@@ -2098,6 +2195,7 @@ async fn mcp_dispatch(
                 Some(id) => Some(org.creators.resolve(id).await),
                 None => None,
             };
+            let tools = bot_tools(&state, &headers).await;
             let called = name.to_string();
             // Email links live in the person's own org, never in the org
             // being acted on. That is what keeps them private: a project
@@ -2116,6 +2214,7 @@ async fn mcp_dispatch(
                     ToolCaller {
                         principal: principal.as_deref(),
                         creator: creator.as_ref(),
+                        tools,
                     },
                     &called,
                     &args,
@@ -2894,6 +2993,10 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
 struct ToolCaller<'a> {
     principal: Option<&'a str>,
     creator: Option<&'a crate::attribution::Creator>,
+    /// The tool scope of the bot behind the key, when it is one — what
+    /// tells a live set's observer from an editor (`live_observe`).
+    #[cfg_attr(not(feature = "plugin-fasttrackstudio"), allow(dead_code))]
+    tools: Option<crate::bots::Tools>,
 }
 
 /// Dispatch one tool call. Synchronous on purpose — the backends
@@ -2907,7 +3010,9 @@ fn call_tool(
     name: &str,
     args: &Value,
 ) -> Result<Value, ToolFailure> {
-    let ToolCaller { principal, creator } = caller;
+    let ToolCaller {
+        principal, creator, ..
+    } = caller;
     // Only the wiki lane is caller-sensitive today; a build without it
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
@@ -4533,10 +4638,128 @@ fn call_tool(
         n if PATCH_TOOLS.contains(&n) => patch_tool(org, n, args),
         n if SAMPLE_TOOLS.contains(&n) => sample_tool(org, n, args),
         n if LIGHTING_TOOLS.contains(&n) => lighting_tool(org, n, args),
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        n if LIVE_TOOLS.contains(&n) => live_tool(org, caller, n, args),
 
         #[cfg(feature = "plugin-wiki")]
         n if WIKI_TOOLS.contains(&n) => wiki_tool(org, principal, n, args),
 
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+// ── Live-set tools ───────────────────────────────────────────────
+
+/// The live-set tools that edit — what an observer's key is refused.
+/// Not behind the plugin's feature: the dispatcher names them either way.
+const LIVE_WRITE_TOOLS: &[&str] = &["doc_apply"];
+
+/// The tools [`live_tool`] answers; must match [`live_tool_catalog`].
+#[cfg(feature = "plugin-fasttrackstudio")]
+const LIVE_TOOLS: &[&str] = &["live_observe", "doc_read", "doc_apply"];
+
+/// Whether this caller may `action` (`read` / `write`) live set
+/// `setlist`: the org's permission engine — its roles, and the grants
+/// the engine carries — asked about `live/<setlist>`. Asked here, not
+/// left to the gate: the MCP lane has no vox gate in front of it, and
+/// the gate is observe-only until enforcement is switched on, while a
+/// live edit is refused for real. No principal is the static MCP token
+/// (the server acting as itself), which may.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn live_permit(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    setlist: &str,
+    action: &str,
+) -> Result<(), ToolFailure> {
+    use architect_permissions::{Action, Decision, Principal, Resource};
+    let Some(user_id) = principal else {
+        return Ok(());
+    };
+    let who = Principal::User {
+        user_id: user_id.to_owned(),
+    };
+    match org.permissions.engine().check(
+        &who,
+        &Resource::new(format!("live/{setlist}")),
+        &Action::new(action),
+    ) {
+        Decision::Allow => Ok(()),
+        Decision::Deny { reason } => Err(ToolFailure::Message(format!(
+            "not allowed to {action} live set `{setlist}`: {reason}"
+        ))),
+    }
+}
+
+/// One live-set tool call, onto the org's live host — the same served
+/// docs every peer's `DocSync` reaches, so an apply is live the moment
+/// it returns. The rules are [`crate::live_docs`]'s; this is argument
+/// decoding, the permission check and attribution.
+///
+/// An observer — a key that only watches live sets — never gets here
+/// for `doc_apply`: the dispatcher refuses a bot the tool its key
+/// doesn't offer ([`crate::bots::Tools::allows`]).
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn live_tool(
+    org: &crate::OrgAppState,
+    caller: ToolCaller<'_>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, ToolFailure> {
+    use crate::live_docs;
+    let host = &org.live;
+    match name {
+        "live_observe" => {
+            let setlist = required_str(args, "setlist")?;
+            live_permit(org, caller.principal, &setlist, "read")?;
+            // An observer's key watches: it may not apply, whatever its role.
+            let can_apply = live_permit(org, caller.principal, &setlist, "write").is_ok()
+                && caller
+                    .tools
+                    .is_none_or(|t| LIVE_WRITE_TOOLS.iter().all(|w| t.allows(w)));
+            Ok(live_docs::observe(host, &setlist, can_apply)?)
+        }
+        "doc_read" => {
+            let doc_ref = required_str(args, "doc_ref")?;
+            let setlist = live_docs::setlist_of(host, &doc_ref)?;
+            live_permit(org, caller.principal, &setlist, "read")?;
+            Ok(live_docs::read(host, &doc_ref)?)
+        }
+        "doc_apply" => {
+            let doc_ref = required_str(args, "doc_ref")?;
+            let setlist = live_docs::setlist_of(host, &doc_ref)?;
+            live_permit(org, caller.principal, &setlist, "write")?;
+            let propose = match arg_str(args, "mode").as_deref() {
+                None | Some("apply") => false,
+                Some("propose") => true,
+                Some(other) => {
+                    return Err(ToolFailure::Message(format!(
+                        "`mode` is apply or propose, not `{other}`"
+                    )));
+                }
+            };
+            let ops = args.get("ops").cloned().unwrap_or(Value::Null);
+            let expected = arg_str(args, "expected_version");
+            // Who it is from: the authenticated caller, never the
+            // arguments. Whom an assistant acts for rides with its
+            // creator once bot keys say so; until then it stays empty
+            // rather than guessed.
+            let by = live_docs::Attribution {
+                created_by: caller.creator.map(|c| c.r#ref.clone()),
+                created_by_name: caller.creator.and_then(|c| c.name.clone()),
+                on_behalf_of: None,
+            };
+            Ok(live_docs::apply(
+                host,
+                &doc_ref,
+                &live_docs::ApplyRequest {
+                    ops: &ops,
+                    expected_version: expected.as_deref(),
+                    propose,
+                    by,
+                },
+            )?)
+        }
         _ => Err(ToolFailure::Unknown),
     }
 }
@@ -5920,6 +6143,32 @@ mod tests {
         let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
         for tool in CHART_TOOLS {
             assert!(names.contains(tool), "`{tool}` missing from the catalog");
+        }
+    }
+
+    /// The same agreement for the live-set tools, and that an observer's
+    /// refusal names every tool that edits.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    #[test]
+    fn live_tools_match_their_dispatch_list() {
+        let listed: Vec<&str> = live_tool_catalog().iter().map(|t| t.name).collect();
+        assert_eq!(listed, LIVE_TOOLS);
+        assert!(
+            live_tool_catalog()
+                .iter()
+                .all(|t| t.plugin == "fasttrackstudio"),
+            "live sets are the fasttrackstudio plugin's"
+        );
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for tool in LIVE_TOOLS {
+            assert!(names.contains(tool), "`{tool}` missing from the catalog");
+        }
+        for tool in LIVE_WRITE_TOOLS {
+            assert!(LIVE_TOOLS.contains(tool));
+            assert!(
+                !crate::bots::Tools::Library.allows(tool),
+                "an observer can't edit"
+            );
         }
     }
 

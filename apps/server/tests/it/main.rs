@@ -65,6 +65,8 @@ mod entity_events_stream;
 mod guest_review_e2e;
 mod iroh_peer_dir;
 #[cfg(feature = "plugin-fasttrackstudio")]
+mod live_docs_e2e;
+#[cfg(feature = "plugin-fasttrackstudio")]
 mod live_e2e;
 mod local_node_e2e;
 mod local_transport;
