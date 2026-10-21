@@ -81,7 +81,7 @@ whole vault per request.
 | V11 | `files_proto::consts::is_private_dir`, `shelf_boundary::is_nested_shelf` | `dir.join(marker)` per directory per walk | 231 k + 157 k allocs; small | **leave** for now: a `PathBuf` per directory to `stat`; only worth a reused buffer if the walk is still hot after V12 |
 | V12 | `Vault::open` per list call | re-reads every page of the vault on every list | **vault × list calls**: the largest remaining churn in this area | **done** (PR 4: `Vault::snapshot`, one cached snapshot per root, stat-validated, invalidated by the vault watcher) |
 | V13 | `VaultPage` / `VaultBase` derive `Clone`, `Vault` derives `Clone` | a cloned `Vault` copies every page | unknown; callers not yet audited | **done** (PR 4: `raw: Arc<str>`; a cloned page or vault shares the text, `create_page` takes `Into<Arc<str>>` so a rename moves no text) |
-| V14 | `vault_live::sync` `put_file` / `move` paths | `fs::read` of source and destination to compare and hash | file size × writes | **later**: stream-compare (equal length, then 16 KiB chunks) |
+| V14 | `vault_live::sync` `put_file` / `move` paths | `fs::read` of source and destination to compare and hash | file size × writes | **done** (PR 5a: `put_file` already streamed its `If-Match` hash; `move_file` now hashes the source by streaming, copies it with `fs::copy` instead of a buffer, and reads bytes only for a refusal) |
 | V15 | `lexorank` | `String::from_utf8(bytes.to_vec())` | tiny | **leave** |
 
 ### task-server (MCP, sharing, request plumbing)
@@ -117,8 +117,8 @@ rather than with request count — fewer calls, far more bytes each.
 
 | # | Site | Copy | Bytes × frequency | Status |
 |---|------|------|-------------------|--------|
-| D1 | `peer`/`replica` update channels (`vox::Rx<Vec<u8>>`, `UnboundedReceiver<Vec<u8>>`) | each update fanned out by cloning its `Vec` | update size × subscribers | **later**: `Bytes` in memory; the wire stays `Vec<u8>` (vox encoding unchanged) |
-| D2 | `load_updates` → `Vec<Vec<u8>>` | every stored update for a doc loaded at once | doc history × opens | **later**: stream updates into the doc |
+| D1 | `peer`/`replica` update channels (`vox::Rx<Vec<u8>>`, `UnboundedReceiver<Vec<u8>>`) | each update fanned out by cloning its `Vec` | update size × subscribers | **moved** (PR 5a): the fan-out is `crdt`'s document registry, in `FastTrackStudios/architect`, not in this repo. vault-doc holds one copy per local update (Loro's `subscribe_local_update` lends `&Vec<u8>`, so the outbox must own it) and moves it to `up` without another clone. `Bytes` in the registry is an architect change |
+| D2 | `load_updates` → `Vec<Vec<u8>>` | every stored update for a doc loaded at once | doc history × opens | **moved** (PR 5a): `load_updates` is `crdt::Persistence`, defined in architect and called by `CrdtDoc::open` there; `SharedStore` here only forwards it. Streaming needs the trait changed in architect, then each store (architect's `FilePersistence` and in-memory store, `ui::doc_replica` here) |
 
 ### wiki-live
 
@@ -131,7 +131,7 @@ rather than with request count — fewer calls, far more bytes each.
 
 | # | Site | Copy | Bytes × frequency | Status |
 |---|------|------|-------------------|--------|
-| B1 | query execution | evaluates over owned `Value`s of every page's frontmatter | vault × base views | **later**: evaluate over borrowed frontmatter (`#[serde(borrow)]` into `Cow<str>`) |
+| B1 | query execution | evaluates over owned `Value`s of every page's frontmatter | vault × base views | **part done** (PR 5a): rows are built from the frontmatter map (`BaseRow::from_frontmatter`) where both vault paths printed it to JSON and parsed it back, and a base's views share one row set (`execute_view_on`) where each view got a `rows.clone()`. Parity tests pin both against the JSON reading. **later**: evaluate over borrowed frontmatter (`Cow<str>`), a rewrite of `BaseEval` |
 
 ## Guardrails
 
@@ -304,3 +304,52 @@ Branch `perf/zero-copy-vault-cache`. Fixes V12, V13, W1 (`list_pages`).
   `&page.raw` replace `into_proto()` + `parse_page`.
 
 Numbers: see the PR body (memory_budget before/after, lint counts).
+
+### PR 5a: vault sync moves, Bases rows, vault-doc
+
+Branch `perf/zero-copy-long-tail` (STA-307). Fixes V14 and the copies
+around B1; moves D1/D2 to architect.
+
+- `vault_live::sync::move_file`: the `If-Match` check hashes the source
+  through the 16 KiB stream (`sha256_file`), the move copies the file with
+  `fs::copy` into the same temp-then-rename shape `write_file_atomic`
+  has, and the ack's hash and the event's size are read from the file
+  that landed. A refusal (stale `If-Match`, occupied destination) reads
+  the file once, through `conflict`, as `put_file` already did. One
+  visible difference: the copy keeps the source's permission bits,
+  where the write made the file with the default mode.
+- `vault_live::bases`: `BaseRow::from_frontmatter` takes the decoded map
+  by value (`from_parts_full` parses its JSON and delegates);
+  `execute_view_on` runs a view over borrowed rows (`execute_view`
+  collects and delegates).
+- `vault_live::sync::base_views` and `vault_obsidian::base_query` build
+  rows from the map and run every view over one row set. The key order
+  the rows saw is kept: serde_json is built without `preserve_order`, so
+  the JSON string was always printed in sorted key order (the old
+  comment in `row_of` said otherwise), and the map is still collected
+  through a `serde_json::Map`. `frontmatter_map_matches_the_json_round_trip`
+  and `rows_match_the_json_round_trip` pin both readings.
+- D1/D2: the copies are in architect's `crdt` (registry fan-out,
+  `Persistence::load_updates`); see the table.
+
+Still open from PR 5's list (STA-309), held back because they share
+crates with PRs 2–4: F4–F6 (files; PR 3 did F3), S6 (task-server), W2
+(wiki-live), and the move of the four lints into
+`[workspace.lints.clippy]`.
+
+Numbers (THEBATTLESHIP, canonical checkout under the build lease, dev
+319e410c against 7ce7ff82):
+
+| | dev 319e410c | PR 5a |
+|---|---|---|
+| copy lints `vault-live` / `vault-obsidian` | 13 / 2 | 13 / 2 |
+| memory_budget peak heap | 48.1 MiB | 51.0 MiB |
+| memory_budget growth (12 rounds) | 0.5 MiB | 0.8 MiB |
+| memory_budget RssAnon | 110636 KiB | 108344 KiB |
+
+The seeded scenario makes no base view and no move, so it never runs
+the changed code. The 2.9 MiB rise in peak isn't from this change; the
+rebased tip is measured again in the PR body. Both runs are well under
+the 80 MiB / 3 MiB budget, which this PR leaves as it is. The copy-lint hits in these two crates are
+older than this change (none sit on the lines it touched). Clearing them
+and adding the deny is STA-309.

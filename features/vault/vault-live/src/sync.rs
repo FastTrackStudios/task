@@ -714,15 +714,13 @@ impl VaultSync for Backend {
         if !src.exists() {
             return Err(VaultSyncError::NotFound);
         }
-        let bytes = std::fs::read(&src).map_err(io_err)?;
-        let have = sha256_hex(&bytes);
+        // Hashed by streaming: the bytes are read whole only on a
+        // refusal, which ships them (zero-copy audit V14).
+        let (have, _) = sha256_file(&src).map_err(io_err)?;
         if let IfMatch::Sha(want) = &if_match
             && *want != have
         {
-            return Err(VaultSyncError::Conflict {
-                server_sha: have,
-                server_bytes: bytes,
-            });
+            return Err(conflict(&src));
         }
         if from == to {
             return Ok(MoveAck {
@@ -734,13 +732,9 @@ impl VaultSync for Backend {
         // case-only rename on a case-insensitive filesystem finds the
         // source here, which is the one "existing" file it may replace.
         if dst.exists() && !from.eq_ignore_ascii_case(to) {
-            let existing = std::fs::read(&dst).map_err(io_err)?;
-            return Err(VaultSyncError::Conflict {
-                server_sha: sha256_hex(&existing),
-                server_bytes: existing,
-            });
+            return Err(conflict(&dst));
         }
-        let (sha256, mtime_ms) = write_file_atomic(&dst, &bytes)?;
+        let (sha256, size, mtime_ms) = copy_file_atomic(&src, &dst)?;
         if !src.eq(&dst) {
             std::fs::remove_file(&src).map_err(io_err)?;
             prune_empty_parents(&self.root(vault_id)?, &src);
@@ -758,7 +752,7 @@ impl VaultSync for Backend {
                 path: to.to_string(),
                 sha256: sha256.clone(),
                 mtime_ms,
-                size: bytes.len() as u64,
+                size,
             },
         );
         let relinked = self.relink_after_move(vault_id, from, to)?;
@@ -855,15 +849,14 @@ impl VaultSync for Backend {
             .pages
             .iter()
             .map(|p| {
-                let fm_json = frontmatter_json(&p.raw);
                 let ext = p.rel_path.rsplit_once('.').map_or("", |(_, e)| e);
-                crate::bases::BaseRow::from_parts_full(
+                crate::bases::BaseRow::from_frontmatter(
                     Uuid::new_v4(),
                     &p.basename,
                     &p.rel_path,
                     &p.folder,
                     ext,
-                    &fm_json,
+                    frontmatter_map(&p.raw),
                     &[],
                 )
             })
@@ -895,7 +888,7 @@ impl VaultSync for Backend {
             .views
             .iter()
             .map(|v| {
-                let executed = crate::bases::execute_view(parsed, v, rows.clone());
+                let executed = crate::bases::execute_view_on(parsed, v, &rows);
                 let columns = v.order.clone();
                 let groups = executed
                     .groups
@@ -1066,26 +1059,29 @@ impl VaultSyncStreamSource for Backend {
     }
 }
 
-/// A page's YAML frontmatter (the leading `---` … `---` block) as a JSON
-/// object string for [`crate::bases::BaseRow::from_parts_full`]. Empty
-/// object when there's no frontmatter or it doesn't parse to a map.
-fn frontmatter_json(raw: &str) -> String {
-    let Some(rest) = raw.strip_prefix("---") else {
-        return "{}".into();
-    };
-    let Some(rest) = rest
-        .strip_prefix('\n')
-        .or_else(|| rest.strip_prefix("\r\n"))
-    else {
-        return "{}".into();
-    };
-    let Some(end) = rest.find("\n---") else {
-        return "{}".into();
-    };
-    match serde_yaml::from_str::<serde_json::Value>(&rest[..end]) {
-        Ok(v @ serde_json::Value::Object(_)) => v.to_string(),
-        _ => "{}".into(),
+/// A page's YAML frontmatter (the leading `---` … `---` block) as the
+/// map [`crate::bases::BaseRow::from_frontmatter`] takes. Empty when
+/// there's no frontmatter or it doesn't parse to a map.
+///
+/// Keys come out in `serde_json::Map`'s order (sorted: the workspace
+/// builds serde_json without `preserve_order`), which is the order the
+/// JSON string this replaced gave once parsed back; the parity test
+/// `frontmatter_map_matches_the_json_round_trip` pins the two readings.
+fn frontmatter_map(raw: &str) -> indexmap::IndexMap<String, serde_json::Value> {
+    match frontmatter_value(raw) {
+        Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+        _ => indexmap::IndexMap::new(),
     }
+}
+
+/// The frontmatter block of `raw` decoded as YAML, if it has one.
+fn frontmatter_value(raw: &str) -> Option<serde_json::Value> {
+    let rest = raw.strip_prefix("---")?;
+    let rest = rest
+        .strip_prefix('\n')
+        .or_else(|| rest.strip_prefix("\r\n"))?;
+    let end = rest.find("\n---")?;
+    serde_yaml::from_str::<serde_json::Value>(&rest[..end]).ok()
 }
 
 /// A File Root's own bookkeeping at the vault's top level — the marker
@@ -1223,6 +1219,32 @@ fn write_file_atomic(abs: &Path, bytes: &[u8]) -> Result<(String, i64), VaultSyn
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_millis() as i64);
     Ok((sha256_hex(bytes), mtime_ms))
+}
+
+/// [`write_file_atomic`] with the bytes taken from the file at `src`,
+/// copied by the filesystem rather than through a buffer the size of
+/// the file. Same shape as a write: a fresh file (new inode, new mtime)
+/// renamed into place. Returns the SHA-256 and length of what landed at
+/// `dst` (hashed from `dst` itself, so the ack names the bytes written
+/// even if `src` changed under the copy) and its mtime.
+fn copy_file_atomic(src: &Path, dst: &Path) -> Result<(String, u64, i64), VaultSyncError> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err)?;
+    }
+    let tmp = dst.with_extension(format!(
+        "{}.tmp.{}",
+        dst.extension().and_then(|s| s.to_str()).unwrap_or(""),
+        std::process::id()
+    ));
+    std::fs::copy(src, &tmp).map_err(io_err)?;
+    std::fs::rename(&tmp, dst).map_err(io_err)?;
+    let (sha256, size) = sha256_file(dst).map_err(io_err)?;
+    let mtime_ms = std::fs::metadata(dst)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as i64);
+    Ok((sha256, size, mtime_ms))
 }
 
 /// The refusal of a write whose `If-Match` failed, carrying the file as
@@ -1982,6 +2004,120 @@ mod tests {
         .unwrap();
         assert_eq!(backend.manifest("b").unwrap().files.len(), 0);
         assert_eq!(backend.manifest("a").unwrap().files.len(), 1);
+    }
+
+    /// V14: a move streams its source. The ack and the event name the
+    /// bytes that landed, a refused move still ships the file as it is,
+    /// and a file bigger than the stream buffer arrives intact.
+    #[test]
+    fn a_streamed_move_lands_the_same_bytes_and_refuses_with_them() {
+        let (_tmp, b) = make_backend();
+        let bytes: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+        let put = b
+            .put_file("v1", "a/big.bin", bytes.clone(), IfMatch::CreateOnly)
+            .unwrap();
+        b.put_file("v1", "taken.bin", b"other".to_vec(), IfMatch::CreateOnly)
+            .unwrap();
+
+        match b.move_file("v1", "a/big.bin", "b/big.bin", IfMatch::Sha("stale".into())) {
+            Err(VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            }) => {
+                assert_eq!(server_sha, put.sha256);
+                assert_eq!(server_bytes, bytes);
+            }
+            other => panic!("stale If-Match: {other:?}"),
+        }
+        match b.move_file("v1", "a/big.bin", "taken.bin", IfMatch::Force) {
+            Err(VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            }) => {
+                assert_eq!(server_bytes, b"other");
+                assert_eq!(server_sha, sha256_hex(b"other"));
+            }
+            other => panic!("occupied destination: {other:?}"),
+        }
+
+        let mut events = b.channel_blocking("v1").subscribe();
+        let moved = b
+            .move_file(
+                "v1",
+                "a/big.bin",
+                "b/big.bin",
+                IfMatch::Sha(put.sha256.clone()),
+            )
+            .unwrap();
+        assert_eq!(moved.sha256, put.sha256);
+        assert_eq!(b.get_file("v1", "b/big.bin").unwrap().0, bytes);
+        assert!(matches!(
+            b.get_file("v1", "a/big.bin"),
+            Err(VaultSyncError::NotFound)
+        ));
+        let mut put_event = None;
+        while let Ok(ev) = events.try_recv() {
+            if let VaultEvent::Put {
+                path, sha256, size, ..
+            } = ev
+            {
+                put_event = Some((path, sha256, size));
+            }
+        }
+        assert_eq!(
+            put_event,
+            Some(("b/big.bin".to_string(), put.sha256, bytes.len() as u64))
+        );
+    }
+
+    /// B1: the frontmatter map handed to the Bases executor is the map
+    /// the JSON string it replaced parsed back to — same keys, same
+    /// values, same key order — over the shapes a page's frontmatter
+    /// takes, including none, broken YAML and a non-map block.
+    #[test]
+    fn frontmatter_map_matches_the_json_round_trip() {
+        // The reading this replaced, verbatim.
+        fn old_json(raw: &str) -> String {
+            let Some(rest) = raw.strip_prefix("---") else {
+                return "{}".into();
+            };
+            let Some(rest) = rest
+                .strip_prefix('\n')
+                .or_else(|| rest.strip_prefix("\r\n"))
+            else {
+                return "{}".into();
+            };
+            let Some(end) = rest.find("\n---") else {
+                return "{}".into();
+            };
+            match serde_yaml::from_str::<serde_json::Value>(&rest[..end]) {
+                Ok(v @ serde_json::Value::Object(_)) => v.to_string(),
+                _ => "{}".into(),
+            }
+        }
+        let pages = [
+            "no frontmatter",
+            "---\n---\nempty block",
+            "---\nzeta: 1\nalpha: two\nmid: [a, b]\n---\nbody",
+            "---\r\ntitle: Win\r\ntags: [x]\r\n---\r\nbody",
+            "---\nn: 1.5\nbig: 18446744073709551615\nneg: -3\nf: 1e20\nb: true\nz: ~\n---\n",
+            "---\nnested:\n  k: v\n  list:\n    - 1\n    - two\n---\n",
+            "---\nsong: \"[[Songs/Song A]]\"\nkey: C\n---\n",
+            "---\n- just\n- a list\n---\n",
+            "---\nplain scalar\n---\n",
+            "---\nkey: [unclosed\n---\n",
+            "---\nno: closing fence\n",
+        ];
+        for raw in pages {
+            let via_json: indexmap::IndexMap<String, serde_json::Value> =
+                serde_json::from_str(&old_json(raw)).unwrap_or_default();
+            let direct = frontmatter_map(raw);
+            assert_eq!(
+                direct.iter().collect::<Vec<_>>(),
+                via_json.iter().collect::<Vec<_>>(),
+                "{raw:?}"
+            );
+        }
     }
 
     #[test]
