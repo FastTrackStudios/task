@@ -1,0 +1,14 @@
+[package]
+name = "music-key"
+description = "Musical key names as plain data: parse `D`, `f#m`, `Bb minor`, transpose by semitones or replace with an absolute key, and keep the input's own spelling. Pure, no dependencies — the `.base` formula `transpose_key(...)` and any key-bearing note use it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

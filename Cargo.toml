@@ -21,6 +21,7 @@ members = [
     "apps/server",
     "apps/web",
     # ── crates/ — small shared crates ─────────────────────────────────
+    "crates/music-key",
     "crates/node-host",
     "crates/note-tabs",
     "crates/player-ui",
@@ -410,6 +411,9 @@ task-client = { path = "crates/task-client", default-features = false }
 # The dial itself, wasm and native — what a browser app depends on when
 # it wants typed clients and none of `task-client`'s native machinery.
 task-dial = { path = "crates/task-dial" }
+# Key names as data: parse, transpose, keep the spelling. Pure; the
+# `.base` formula `transpose_key` and any key-bearing note use it.
+music-key = { path = "crates/music-key" }
 task-server = { path = "apps/server" }
 threads = { path = "features/threads/threads" }
 threads-db = { path = "features/threads/threads-db" }
