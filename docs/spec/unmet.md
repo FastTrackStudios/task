@@ -776,6 +776,52 @@ reopened), and a node that never held a document of a file does not learn
 of that file's deletion from a peer's list — only from a pull of a peer
 that still has the file.
 
+## Sharing ([`sharing.md`](sharing.md))
+
+The thirteen v1 rules land with the owner's half only: the grant store,
+the owner-only `sharing` service and the `sharing/**` gate entry. The
+guest's lane, which most rules are about, comes in later cards.
+
+### `sharing.grant.owner-only` — met
+
+`SharingServiceImpl::admin` reads the gate's caller and the home
+membership row, and it refuses a bot account whatever its role. Verified
+over the org lane by `sharing_grants_e2e`. The test has an owner, a
+member, a person with no row, the grantee itself, a bot made admin by
+hand, and an anonymous caller.
+
+### `sharing.grant.preview` — met
+
+`sharing::subtree::digest` is the only digest function. `create_grant`
+recomputes it and refuses a mismatch with the current digest. Verified
+by `sharing_grants_e2e`, which uses a wrong digest and then a digest the
+subtree moved past. The visible set still comes from
+`ProjectTreeStub` (the root plus its sub-projects). The full subtree
+replaces it behind the `Subtree` trait.
+
+### `sharing.grant.audit` — met in part
+
+`grant.created`, `grant.revoked` and `grant.expired` are recorded once
+each in `sharing_grant_events`, with the subject, root, capabilities,
+digest and actor, and they're emitted on the wide event plus one log
+line. Refusals of the owner service count in the gate's deny ledger.
+Left: every guest call and refusal on the grant lane, which doesn't exist
+yet.
+
+### `sharing.grant.absent` — met for the owner service only
+
+Every non-owner call to the `sharing` service gets `NotFound`, the same
+answer as an unknown grant id. The grant lane's own absent rule is still
+to come.
+
+### Declared, not built
+
+`sharing.grant.subtree`, `.membership-free`, `.default-deny`,
+`.exclusions`, `.attribution`, `.comment`, `.revoke` (the stream cut;
+the store's revoke and `is_live` are built), `.online-only` and
+`.shared-in`. Each one needs the grant lane
+(`apps/server/src/sharing/lane.rs`) or the subtree it mounts.
+
 ## Bugs found on the way
 
 **Fixed — `FilesBackend::sync_ingest_path` stalled on repeated calls.**

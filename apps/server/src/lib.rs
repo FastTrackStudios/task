@@ -72,6 +72,7 @@ pub mod presence;
 pub mod server_mgmt;
 pub mod share;
 pub mod share_guest;
+pub mod sharing;
 #[cfg(feature = "plugin-wiki")]
 pub mod shelves;
 pub mod snapshot;
@@ -184,6 +185,10 @@ pub struct OrgAppState {
     /// Share links (`<org>/shares.json`) — link CRUD on the org lane +
     /// the token-checked `/org/{slug}/share/{token}` landing route.
     pub shares: Arc<share::ShareStore>,
+    /// Cross-org Sharing Grants this org has made (`<org>/sharing.sqlite`)
+    /// — the owner-only `sharing` service, and what the grant lane
+    /// admits a guest by (`docs/spec/sharing.md`).
+    pub sharing: sharing::Sharing,
     pub attachments: Arc<attachments::AttachmentServiceImpl>,
     /// File-replication backend rooted at this org's
     /// `vault/` dir.
@@ -2148,6 +2153,14 @@ pub(crate) async fn build_org_state(
         // gap used to be silent — that is how it sat at 2/71.
         permits::log_coverage(org_root.slug(), &permissions, enforce_permissions());
         let shares = Arc::new(share::ShareStore::open(org_root.path()));
+        let sharing = sharing::Sharing {
+            store: Arc::new(
+                sharing::GrantStore::open(&org_root.sharing_db(), org_root.slug()).await?,
+            ),
+            home: home_identity.cloned(),
+            subtree: Arc::new(sharing::ProjectTreeStub::new(projects.clone())),
+        };
+        sqlite_conns.push(sharing.store.conn().clone());
         #[cfg(feature = "plugin-fasttrackstudio")]
         let live = live::LiveHost::new(
             org_root.slug().to_owned(),
@@ -2166,6 +2179,7 @@ pub(crate) async fn build_org_state(
             auth,
             permissions,
             shares,
+            sharing,
             attachments: attachment_service,
             vault_sync: vault_sync_state,
             vault_collab,
@@ -3864,6 +3878,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 org.slug.clone(),
                 share_public_base(),
                 Some(org.files.clone()),
+            )),
+        )
+        // Sharing Grants — the owner's preview / create / list / revoke.
+        // Owner- and admin-only inside the impl (`crate::sharing`).
+        .with(
+            share_proto::sharing_service_service_descriptor(),
+            share_proto::SharingServiceDispatcher::new(sharing::SharingServiceImpl::new(
+                org.sharing.clone(),
             )),
         );
 

@@ -90,6 +90,7 @@ mod scripture_install_e2e;
 mod sermon_resources_e2e;
 mod share_files_e2e;
 mod share_wiki_note_e2e;
+mod sharing_grants_e2e;
 mod signup_gate;
 mod snapshot_async;
 mod snapshot_e2e;
