@@ -38,6 +38,14 @@ PRODUCT_NAME="${PRODUCT_NAME:-Task}"
 DX_TAILWIND="${DX_TAILWIND-../tailwind.css}"
 ICON_1024="${ICON_1024:-$ROOT/apps/mobile/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png}"
 OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
+# OUT_DIR is ours, not cargo's, and it must not reach the build. Cargo
+# sets OUT_DIR only for crates that have a build script. Every other crate
+# inherits whatever is in the environment, and dioxus' asset!() macro
+# canonicalizes it. Our dmg directory doesn't exist yet at build time, so
+# every crate using asset!() without a build script panicked with
+# "No such file or directory" (editor, ui). That's why the desktop-release
+# job never built. Keep the value in this shell, but don't export it.
+export -n OUT_DIR
 MARKETING_VER="${MARKETING_VER:-0.0.3}"
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
 
@@ -93,6 +101,15 @@ fi
 # shellcheck disable=SC2086
 APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
 [ -n "$APP" ] && [ -d "$APP" ] || { echo "ERROR: build produced no app"; tail -30 /tmp/task-macos-dmg-build.log; exit 1; }
+# dx exits non-zero even on success, so its status is ignored above. But a
+# failed build still leaves the bundle skeleton behind with an empty
+# Contents/MacOS. So the real check is the main executable.
+EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[ -n "$EXE" ] && [ -x "$APP/Contents/MacOS/$EXE" ] || {
+    echo "ERROR: dx build failed: $APP has no executable" >&2
+    grep -E '(^|INFO  )error' -A8 /tmp/task-macos-dmg-build.log | head -60 >&2 || tail -40 /tmp/task-macos-dmg-build.log >&2
+    exit 1
+}
 PLIST="$APP/Contents/Info.plist"
 echo "=== app bundle: $APP ==="
 
