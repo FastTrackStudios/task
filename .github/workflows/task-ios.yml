@@ -24,7 +24,7 @@ name: task-ios
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
   workflow_dispatch:
     inputs:
       marketing_version:
@@ -86,11 +86,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           clean: false
+          fetch-depth: 0
+
+      # A pushed tag must be a release commit on main (tag == v<Cargo
+      # version>, CHANGELOG section present). Without this a stray v* tag
+      # on a branch would build TestFlight. A manual dispatch is exempt.
+      - name: Tag guard
+        if: ${{ github.event_name == 'push' }}
+        run: bash scripts/release.sh tag-guard
 
       # One version for every shipped thing: the release's, from
-      # [workspace.package] in Cargo.toml (scripts/release.sh). Main only
-      # moves by releases, so a push here is a release and TestFlight
-      # shows the same number as the GitHub Release and the server.
+      # [workspace.package] in Cargo.toml (scripts/release.sh). The build is
+      # triggered by the release tag, so TestFlight shows the same number as
+      # the GitHub Release and the server.
       - name: Version
         env:
           INPUT_VERSION: ${{ inputs.marketing_version }}
