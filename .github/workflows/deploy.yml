@@ -15,9 +15,7 @@
 # "Verify live" passes — so "Active" in GitHub means the cluster is
 # actually SERVING this sha, not merely that images were pushed.
 #
-# Change-gating is the push `paths-ignore` above: docs, skills and the
-# checks workflow are the only things on main that are not part of an
-# image; everything else deploys.
+# There is no change-gating: a release tag always deploys what it names.
 #
 # RELEASES. Under the release model (skills/release-workflow.md) a push to
 # main deploys NOTHING: main holds finished features (promoted from dev,
@@ -35,14 +33,17 @@ name: deploy
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
   # Re-run a release, or roll back: run this workflow with an existing v*
-  # tag selected as the ref. A branch ref is refused by the tag guard.
+  # tag selected as the ref. A branch ref skips every job (the `if` below).
   workflow_dispatch:
 
 # Never cancel a deploy mid-push; queue instead.
+# ONE group for production, not one per tag: two releases (or a rollback
+# dispatched beside a release) must not run side by side, or whichever
+# finishes last wins `:latest`.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-production
   cancel-in-progress: false
 
 env:

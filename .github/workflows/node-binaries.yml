@@ -86,9 +86,25 @@ jobs:
             v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
             [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
           else
-            tag="v$(bash scripts/release.sh version)"
+            # No tag input: the run must itself be on a release tag (the
+            # deploy's workflow_call, or a dispatch with the tag as its
+            # ref). A branch dispatch would read its own Cargo.toml and
+            # could swap a published release's binaries for branch-built
+            # ones.
+            case "${GITHUB_REF}" in
+              refs/tags/v*) ;;
+              *) echo "::error::run this on a v* tag (ref is ${GITHUB_REF}), or pass the tag input"; exit 1 ;;
+            esac
+            tag="${GITHUB_REF#refs/tags/}"
             ref="${GITHUB_SHA}"
+            v="$(bash scripts/release.sh version)"
+            [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
           fi
+          # Either way the tag is a commit of main: binaries attach to
+          # releases, not to branch builds.
+          git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$(git rev-parse "refs/tags/$tag^{commit}")" origin/main \
+            || { echo "::error::$tag is not in main's history"; exit 1; }
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::no GitHub Release $tag — the binaries attach to a published release (release.yml publishes it)"
             exit 1

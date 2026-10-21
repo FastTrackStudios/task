@@ -9,7 +9,7 @@ mirror of the iOS flow (`.github/workflows/task-ios.yml` →
 
 | piece | where |
 | --- | --- |
-| CI workflow (merge to main → TestFlight) | `.github/workflows/task-macos.yml` |
+| CI workflow (release tag `vX.Y.Z` → TestFlight) | `.github/workflows/task-macos.yml` |
 | build+sign+pkg+upload script | `apps/task/desktop/macos/deploy-testflight-macos.sh` |
 | one-time machine setup (signing identities) | `apps/task/desktop/macos/setup-macos.sh` |
 | App Sandbox entitlements (base) | `apps/task/desktop/macos/Task.entitlements` |
@@ -144,7 +144,7 @@ Validated on airlock, end-to-end except the two deliberately-skipped steps:
    FastTrackStudio team (or redeem the invite link once).
 3. Task appears under the app's macOS builds → **Install**. TestFlight
    for Mac keeps it updated: with "Automatic Updates" on (default), every
-   merge to main that ships a build lands on the laptop within
+   release (a `v*` tag) lands on the laptop within
    TestFlight's polling window (typically same-day, no user action);
    builds expire after 90 days like iOS.
 

@@ -444,18 +444,24 @@ cmd_tag() {
     if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
         die "tag v$v already exists ($(git rev-parse --short "v$v^{commit}")). Never move a tag; a bad release is superseded by the next."
     fi
+    local found_edge=0
     for c in $(git rev-list --first-parent -n 300 "origin/$PRODUCTION_BRANCH"); do
-        if [ "$(version_at "$c")" = "$v" ]; then target="$c"; else break; fi
+        if [ "$(version_at "$c")" = "$v" ]; then target="$c"; else found_edge=1; break; fi
     done
+    [ "$found_edge" = 1 ] || [ -z "$target" ] || die "all of main's last 300 first-parent commits carry version $v: cannot find the release commit"
     [ -n "$target" ] || die "no commit on origin/$PRODUCTION_BRANCH carries version $v: has the release PR merged?"
-    git show "$target:CHANGELOG.md" | grep -q "^## \[$v\]" \
+    changelog_has "$target" "$v" \
         || die "CHANGELOG.md at $(git rev-parse --short "$target") has no [$v] section: not a release commit"
     prev="$(last_tag "$target^")"
     if [ -n "$prev" ]; then
         gt "$v" "${prev#v}" || die "v$v is not greater than the previous release $prev"
     fi
     note "tagging v$v at $(git rev-parse --short "$target") on $PRODUCTION_BRANCH (previous: ${prev:-none}). This deploys."
-    git tag -a "v$v" "$target" -m "Task $v"
+    # An annotated tag needs a committer identity; a bot checkout may have none.
+    local ident=()
+    git config user.email >/dev/null 2>&1 || [ -n "${GIT_COMMITTER_EMAIL:-}" ] \
+        || ident=(-c "user.name=fts-forge[bot]" -c "user.email=fts-forge[bot]@users.noreply.github.com")
+    git ${ident[@]+"${ident[@]}"} tag -a "v$v" "$target" -m "Task $v"
     git push --quiet origin "refs/tags/v$v"
     note "pushed v$v: deploy, task-ios, task-macos start from the tag"
     cmd_backmerge
@@ -475,7 +481,9 @@ cmd_backmerge() {
     fi
     sha="$(git rev-parse "origin/$PRODUCTION_BRANCH")"
     v="$(version_at "origin/$PRODUCTION_BRANCH")"
-    branch="backmerge/v$v"
+    # One branch per main tip: a hotfix back-merge at the same version must
+    # not push a different sha onto an old backmerge/vX branch (non-ff).
+    branch="backmerge/v$v-$(git rev-parse --short "$sha")"
     existing="$(gh pr list --repo "$REPO" --head "$branch" --base "$INTEGRATION_BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
     if [ -z "$existing" ]; then
         # A branch, not main itself, as the PR head: a conflict (a card that
@@ -500,15 +508,33 @@ cmd_backmerge() {
 # line, the workspace members' version lines in Cargo.lock, CHANGELOG.md?
 # (a version bump cannot change what the checks tested)
 release_diff_only() { # <base> <head>
-    local base="$1" head="$2" f
+    # No `... | grep -q` pipelines: under pipefail, grep -q exits at the first
+    # match and the writer dies of SIGPIPE, which reads as "no match" on a
+    # big diff. Capture into a variable, then test it.
+    local base="$1" head="$2" f out vb vh
     while read -r f; do
         case "$f" in Cargo.toml|Cargo.lock|CHANGELOG.md) ;; *) return 1 ;; esac
     done < <(git diff --name-only "$base" "$head")
-    if git diff -U0 "$base" "$head" -- Cargo.toml | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
-        | grep -vE '^[+-]version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' | grep -q .; then return 1; fi
-    if git diff -U0 "$base" "$head" -- Cargo.lock | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
-        | grep -vE '^[+-]version = "[^"]*"$' | grep -q .; then return 1; fi
+    # Cargo.toml: exactly the one [workspace.package] version line changes.
+    vb="$(version_at "$base")"; vh="$(version_at "$head")"
+    [ "$vb" != "$vh" ] || [ -z "$(git diff "$base" "$head" -- Cargo.toml)" ] || return 1
+    out="$(git diff -U0 "$base" "$head" -- Cargo.toml | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' || true)"
+    if [ -n "$out" ]; then
+        [ "$(printf '%s\n' "$out" | wc -l)" -eq 2 ] || return 1
+        [ "$(printf '%s\n' "$out" | grep -cE '^-version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' || true)" -eq 1 ] || return 1
+        [ "$(printf '%s\n' "$out" | grep -cE '^\+version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' || true)" -eq 1 ] || return 1
+    fi
+    # Cargo.lock: only version lines.
+    out="$(git diff -U0 "$base" "$head" -- Cargo.lock | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-]version = "[^"]*"$' || true)"
+    [ -z "$out" ] || return 1
     return 0
+}
+
+# true when <rev>:CHANGELOG.md has a `## [<version>]` section. (A variable,
+# not `git show | grep -q`: see release_diff_only.)
+changelog_has() { # <rev> <version>
+    local c; c="$(git show "$1:CHANGELOG.md" 2>/dev/null)" || return 1
+    grep -q "^## \[$2\]" <<<"$c"
 }
 
 # CI (checks.yml plan): exit 0 when this PR is only a release commit on
@@ -558,7 +584,7 @@ cmd_guard() {
             [ "$ref" = "release/v$v" ] || fail "branch '$ref' carries version '$v'; a release branch is named release/v<its version> (just release-prepare)"
             gt "$v" "$vb" || fail "version $v is not greater than main's $vb — cut the release with just release-prepare"
             git rev-parse -q --verify "refs/tags/v$v" >/dev/null && fail "tag v$v already exists"
-            git show "$head:CHANGELOG.md" | grep -q "^## \[$v\]" || fail "CHANGELOG.md at the head has no [$v] section"
+            changelog_has "$head" "$v" || fail "CHANGELOG.md at the head has no [$v] section"
             subject="$(git log -1 --format=%s "$head")"
             [[ "$subject" =~ $(release_subject_re "$v") ]] \
                 || fail "the head commit must be the release commit 'chore(release): v$v' (it is '$subject')"

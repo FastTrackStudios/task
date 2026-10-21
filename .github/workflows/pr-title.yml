@@ -19,7 +19,7 @@ name: pr-title
 
 on:
   pull_request:
-    branches: [dev, "release/**"]
+    branches: [dev]
     types: [opened, edited, reopened, synchronize]
 
 permissions:

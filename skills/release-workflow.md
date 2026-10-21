@@ -49,7 +49,7 @@ card PR --squash--> dev --PROMOTION PR (merge commit)--> main        --release P
    just ci 2>&1 | tee "$SCRATCH/just-ci.log"     # fmt, manifests, nextest, clippy, wasm
    ```
 
-3. Record the evidence **on the card** (`kanban_comment`), all four lines:
+3. Record the evidence **on the card's Paperclip issue** (and in the PR body), all four lines:
    - `head:` the full sha you tested (`git rev-parse HEAD`)
    - `base:` the `origin/dev` sha you rebased onto
    - `just ci:` pass, with the nextest summary line (`N tests run: N passed`)
