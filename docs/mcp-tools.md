@@ -88,6 +88,7 @@ deletion anywhere).
 |---|---|---|
 | `search_vault` | path search over the manifest | read `vault/**` (`vault-sync/manifest`) |
 | `read_note` | one note's markdown | read `vault/{path}` |
+| `query_base` | run a `.base` (by path, or inline YAML): rows per view with column + formula values; filters/formulas get `file.links`, `file.hasLink()`, `.exists()` and link-follow (`note.song.key`); bounded (≤5,000 notes / 64 MiB read, ≤64 KiB inline YAML, `limit` rows per view) and reports `notes.read` / `unreadable` / `capped` | read `vault/**` (manifest + each note) |
 | `append_note` | append-only add to an existing note | write `vault/{path}` |
 | `write_note` | create **or replace** a note (flagged destructive in its description) | write `vault/{path}` |
 

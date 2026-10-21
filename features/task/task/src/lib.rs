@@ -31,10 +31,9 @@
 //!   `"Buy milk tomorrow #errands @shopping"` into a
 //!   `TaskInfo`. Date keywords: today / tomorrow / `next-<day>`.
 //!
-//! Higher-level views (kanban, calendar) ride on `vault-live`'s
-//! `.base` query DSL via formulas + filters; they live in
-//! `task-ui` (future) and don't need anything from this crate
-//! beyond `TaskInfo`.
+//! Higher-level views (kanban, calendar) are `.base` files over the
+//! task notes, run by `vault-live`'s bases evaluator (filters +
+//! formulas); they need nothing from this crate beyond `TaskInfo`.
 //!
 //! ## Wasm
 //!

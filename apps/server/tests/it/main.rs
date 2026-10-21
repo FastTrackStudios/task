@@ -73,6 +73,7 @@ mod mcp_account_e2e;
 mod mcp_calendar_e2e;
 mod mcp_chart_e2e;
 mod mcp_e2e;
+mod mcp_query_base_e2e;
 mod mcp_refusals_e2e;
 mod mcp_telemetry_e2e;
 mod mcp_wiki_e2e;

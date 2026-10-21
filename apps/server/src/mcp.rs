@@ -64,6 +64,13 @@ const LATEST_PROTOCOL: &str = "2025-06-18";
 /// scarce resource — a 400-task vault must not land in one message.
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
+/// `query_base` reads at most this many notes per call (the row set
+/// and the link universe); past it the result says `capped`.
+const QUERY_BASE_MAX_NOTES: usize = 5_000;
+/// …and at most this many bytes of them, by manifest size.
+const QUERY_BASE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// The longest inline base `query_base` accepts.
+const QUERY_BASE_MAX_YAML: usize = 64 * 1024;
 
 /// Per-task body cap in `list_untriaged_tasks`. The body is where a
 /// bare title's missing context usually hides, so it's worth sending
@@ -505,6 +512,26 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 obj(
                     json!({ "path": s_("Vault-relative path, e.g. 'Records/notes/standup.md'.") }),
                     &["path"],
+                )
+            },
+        },
+        ToolDef {
+            name: "query_base",
+            plugin: "core",
+            description: "Run an Obsidian Bases query over the vault: a `.base` file by path, or an \
+                          inline base YAML. Returns each view's rows (filtered, sorted, grouped) \
+                          with their column values and every formula's value. Filters and \
+                          formulas may use file.hasLink(), .exists(), file.links and link-follow \
+                          (`note.song.key` reads the linked note's `key`).",
+            schema: || {
+                obj(
+                    json!({
+                        "path": s_("Vault-relative path of a .base file, e.g. 'Gigs/Gigs.base'. Give this or `yaml`."),
+                        "yaml": s_("An inline base (the YAML a .base file holds). Give this or `path`."),
+                        "view": s_("Run only this view (case-insensitive name). Omit to run every view."),
+                        "limit": i_("Max rows per view (default 50, max 200)."),
+                    }),
+                    &[],
                 )
             },
         },
@@ -3520,6 +3547,120 @@ fn call_tool(
                 .map_err(|e| backend_err("note", &path, &e))?;
             let text = String::from_utf8_lossy(&bytes.0).to_string();
             Ok(json!({ "path": path, "content": text }))
+        }
+
+        // t[impl vault.bases.query]
+        "query_base" => {
+            let (source, text) = match (arg_str(args, "path"), arg_str(args, "yaml")) {
+                (Some(path), None) => {
+                    let bytes = org
+                        .vault_sync
+                        .get_file(VAULT_ID, &path)
+                        .map_err(|e| backend_err("base", &path, &e))?;
+                    (path, String::from_utf8_lossy(&bytes.0).into_owned())
+                }
+                (None, Some(yaml)) if yaml.len() > QUERY_BASE_MAX_YAML => {
+                    return Err(ToolFailure::Message(format!(
+                        "an inline base may be at most {QUERY_BASE_MAX_YAML} bytes; this one is {}",
+                        yaml.len()
+                    )));
+                }
+                (None, Some(yaml)) => ("(inline)".to_owned(), yaml),
+                _ => {
+                    return Err(ToolFailure::Message(
+                        "pass exactly one of `path` (a .base file in the vault) or `yaml` (an inline base)"
+                            .into(),
+                    ));
+                }
+            };
+            let base = vault::bases::parse(&text)
+                .map_err(|e| ToolFailure::Message(format!("`{source}` is not a valid base: {e}")))?;
+            // Every note in THIS org's vault is the row set (and the
+            // link-resolution universe) — read through the same
+            // VaultSync backend read_note uses, so nothing outside the
+            // org the caller was admitted to is ever visible.
+            let manifest = org
+                .vault_sync
+                .manifest(VAULT_ID)
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
+            // Bounded: at most QUERY_BASE_MAX_NOTES notes and
+            // QUERY_BASE_MAX_BYTES bytes, in path order so a capped
+            // result is the same on every call. Notes that fail to
+            // read are logged and reported, not silently dropped.
+            let mut md: Vec<_> = manifest
+                .files
+                .iter()
+                .filter(|f| f.path.ends_with(".md"))
+                .collect();
+            md.sort_by(|a, b| a.path.cmp(&b.path));
+            let md_total = md.len();
+            let mut notes: Vec<(String, String)> = Vec::new();
+            let mut unreadable: Vec<String> = Vec::new();
+            let mut bytes_read: u64 = 0;
+            let mut capped = false;
+            for f in md {
+                if notes.len() >= QUERY_BASE_MAX_NOTES
+                    || bytes_read.saturating_add(f.size) > QUERY_BASE_MAX_BYTES
+                {
+                    capped = true;
+                    break;
+                }
+                match org.vault_sync.get_file(VAULT_ID, &f.path) {
+                    Ok(bytes) => {
+                        bytes_read = bytes_read.saturating_add(bytes.0.len() as u64);
+                        notes.push((f.path.clone(), String::from_utf8_lossy(&bytes.0).into_owned()));
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = %f.path, error = ?e, "query_base: note unreadable, skipped");
+                        unreadable.push(f.path.clone());
+                    }
+                }
+            }
+            let rows = vault::obsidian::rows_from_markdown(
+                notes.iter().map(|(p, s)| (p.as_str(), s.as_str())),
+            );
+            let view = arg_str(args, "view");
+            let tables =
+                vault::obsidian::run_base(&base, &rows, view.as_deref()).map_err(|e| {
+                    let names: Vec<String> =
+                        base.views.iter().map(|v| format!("`{}`", v.name)).collect();
+                    ToolFailure::Message(format!("{e}; the base's views are: {}", names.join(", ")))
+                })?;
+            let limit = arg_limit(args);
+            let views: Vec<Value> = tables
+                .into_iter()
+                .map(|mut t| {
+                    let total: usize = t.groups.iter().map(|g| g.rows.len()).sum();
+                    // Spend one row budget across the groups in order:
+                    // truncate first, then subtract what was kept, so
+                    // `budget` never underflows and later groups get
+                    // what is left (possibly nothing).
+                    let mut budget = limit;
+                    for g in &mut t.groups {
+                        g.rows.truncate(budget);
+                        budget -= g.rows.len();
+                    }
+                    t.groups.retain(|g| !g.rows.is_empty() || total == 0);
+                    json!({
+                        "name": t.name,
+                        "type": t.kind,
+                        "columns": t.columns,
+                        "total": total,
+                        "truncated": total > limit,
+                        "groups": t.groups,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "base": source,
+                "views": views,
+                "notes": {
+                    "total": md_total,
+                    "read": notes.len(),
+                    "unreadable": unreadable,
+                    "capped": capped,
+                },
+            }))
         }
 
         "append_note" => {

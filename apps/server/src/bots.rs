@@ -85,7 +85,10 @@ impl Tools {
             Self::All => true,
             Self::Library => {
                 const ORIENTATION: &[&str] = &["task_context", "api_reference", "list_orgs"];
+                // Reads of the notes that don't say `note` / `vault`.
+                const NOTES: &[&str] = &["query_base"];
                 ORIENTATION.contains(&tool)
+                    || NOTES.contains(&tool)
                     || tool.contains("wiki")
                     || tool.contains("note")
                     || tool.contains("vault")
@@ -514,6 +517,7 @@ mod tests {
     fn a_library_bot_sees_notes_and_wikis_only() {
         assert!(Tools::Library.allows("read_wiki_page"));
         assert!(Tools::Library.allows("task_context"));
+        assert!(Tools::Library.allows("query_base"));
         assert!(!Tools::Library.allows("create_task"));
         assert!(!Tools::Library.allows("send_email"));
         assert!(Tools::All.allows("create_task"));
