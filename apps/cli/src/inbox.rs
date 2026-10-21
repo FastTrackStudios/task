@@ -37,7 +37,7 @@ pub(crate) enum InboxCmd {
     Suggest {
         /// The summary text. Quote multi-word input.
         text: Vec<String>,
-        /// Capture source label, e.g. `email`. Defaults to `agent`.
+        /// Capture source label, e.g. `email`. Defaults to `cli`.
         #[arg(long)]
         source: Option<String>,
         /// Optional link back to the original (appended to the body).
@@ -186,7 +186,7 @@ pub(crate) async fn run_inbox(cmd: InboxCmd) -> eyre::Result<()> {
             let mut item = inbox_proto::InboxItem::capture(
                 id.clone(),
                 body,
-                source.unwrap_or_else(|| "agent".into()),
+                source.unwrap_or_else(|| "cli".into()),
                 created,
             );
             item.status = inbox_proto::InboxItem::STATUS_SUGGESTED.to_string();

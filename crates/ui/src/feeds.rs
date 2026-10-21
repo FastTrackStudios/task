@@ -330,6 +330,8 @@ pub async fn create_task(
         dispatched_agent_tasks: task_proto::model::StringList::default(),
         date_created: None,
         date_modified: None,
+        created_by: None,
+        created_by_name: None,
         details: details.to_owned(),
         workflow: None,
     };

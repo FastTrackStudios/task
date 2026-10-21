@@ -224,6 +224,11 @@ impl TaskService for TaskBackend {
         let mut next = task;
         next.path = existing.path;
         next.date_created = existing.date_created.or(next.date_created);
+        // t[impl attribution.immutable]
+        // Who created a task is write-once: an update keeps the creator
+        // on disk, whatever the incoming task says (or leaves out).
+        next.created_by = existing.created_by;
+        next.created_by_name = existing.created_by_name;
         next.date_modified = Some(Utc::now());
         // Automatic time tracking on status transitions (authoritative
         // here so CLI / cascade / any client gets it): entering
@@ -355,6 +360,11 @@ impl TaskService for TaskBackend {
                 // the UI, so `--relevant` means one thing everywhere.
                 filter.relevance.as_ref().is_none_or(|ctx| {
                     task_proto::is_filed(t) && crate::relevance::is_relevant(t, ctx)
+                })
+            })
+            .filter(|t| {
+                filter.created_by.as_deref().is_none_or(|who| {
+                    workflows_proto::creator::creator_matches(t.created_by.as_deref(), who)
                 })
             })
             .collect();
@@ -754,5 +764,46 @@ mod tests {
         // Parity with the single-id verb.
         let single = be.reverse_relations(victim.id).expect("single");
         assert_eq!(single, got[0].relations);
+    }
+
+    // t[verify attribution.immutable]
+    // t[verify attribution.filter]
+    #[test]
+    fn created_by_is_write_once_and_filters() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let be = TaskBackend::new(tmp.path());
+        let mut t = crate::capture("Restring the Telecaster");
+        t.created_by = Some("bot:atlas".into());
+        t.created_by_name = Some("Atlas".into());
+        let made = be.create(t).expect("create");
+        be.create(crate::capture("Unattributed")).expect("create");
+
+        // An update naming someone else — or no one — keeps the creator,
+        // and the file says so on the next read.
+        let mut edit = made.clone();
+        edit.title = "Restring the Strat".into();
+        edit.created_by = Some("user:mallory".into());
+        edit.created_by_name = None;
+        let after = be.update(edit).expect("update");
+        assert_eq!(after.created_by.as_deref(), Some("bot:atlas"));
+        let read = be.get(made.id).expect("get");
+        assert_eq!(read.title, "Restring the Strat");
+        assert_eq!(read.created_by.as_deref(), Some("bot:atlas"));
+        assert_eq!(read.created_by_name.as_deref(), Some("Atlas"));
+
+        let by = |who: &str| {
+            be.query(TaskListFilter {
+                created_by: Some(who.into()),
+                ..Default::default()
+            })
+            .expect("query")
+            .into_iter()
+            .map(|t| t.title)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(by("bot:atlas"), vec!["Restring the Strat".to_owned()]);
+        assert_eq!(by("atlas"), vec!["Restring the Strat".to_owned()]);
+        assert_eq!(by("none"), vec!["Unattributed".to_owned()]);
+        assert!(by("user:mallory").is_empty());
     }
 }

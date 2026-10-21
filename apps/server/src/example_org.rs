@@ -1016,6 +1016,123 @@ pub fn plant_inbox(vault: &Path, slug: &str, planted: &mut Planted) -> std::io::
     Ok(())
 }
 
+/// A bot in the example: an assistant with an account of its own
+/// (`crate::bots`), so what it captured or made reads "from Atlas".
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredBot {
+    pub org: &'static str,
+    pub name: &'static str,
+    /// Under [`crate::bots::BOT_DOMAIN`] — which is what makes the
+    /// account a bot to attribution (`crate::attribution::Creator`).
+    pub email: &'static str,
+}
+
+/// The example's bots: Atlas, Alice's assistant, who files suggestions
+/// from mail and makes tasks when asked.
+pub const BOTS: &[DeclaredBot] = &[DeclaredBot {
+    org: "acme-audio",
+    name: "Atlas",
+    email: "atlas@bots.task.invalid",
+}];
+
+/// The declared bots of one org.
+pub fn bots_of(slug: &str) -> impl Iterator<Item = &'static DeclaredBot> + '_ {
+    BOTS.iter().filter(move |b| b.org == slug)
+}
+
+// t[impl attribution.seed]
+/// Who captured each declared capture, as `(capture id, account email)`
+/// — a cast member or a [`BOTS`] entry. Mixed on purpose: Alice's own
+/// thoughts read "from you", Atlas's suggestions "from Atlas", Sam's
+/// "from Sam", and the captures left out stand for the ones made before
+/// attribution existed, which say nothing.
+pub const CAPTURE_CREATORS: &[(&str, &str)] = &[
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a01", "alice@acme.test"),
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a02", "alice@acme.test"),
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a03", "alice@acme.test"),
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a04", "sam@acme.test"),
+    (
+        "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a05",
+        "atlas@bots.task.invalid",
+    ),
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a07", "alice@acme.test"),
+    (
+        "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a08",
+        "atlas@bots.task.invalid",
+    ),
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a09", "alice@acme.test"),
+    ("6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a10", "alice@acme.test"),
+];
+
+/// Who made each seeded task, as `(task title, account email)`, the
+/// same mix as [`CAPTURE_CREATORS`]. Tasks not listed have no creator.
+pub const TASK_CREATORS: &[(&str, &str)] = &[
+    ("Comp lead vocals — Track One", "alice@acme.test"),
+    ("Mix revisions — Track Two", "alice@acme.test"),
+    ("Master review with the label", "atlas@bots.task.invalid"),
+    ("Collect streaming metadata", "atlas@bots.task.invalid"),
+    ("Cut the visualiser to the album mix", "sam@acme.test"),
+    ("Restring the studio guitars", "alice@acme.test"),
+    ("Pick up the test pressings", "atlas@bots.task.invalid"),
+];
+
+/// Who made the seeded task titled `title`, if the seed says.
+#[must_use]
+pub fn task_creator(title: &str) -> Option<&'static str> {
+    TASK_CREATORS
+        .iter()
+        .find(|(t, _)| *t == title)
+        .map(|(_, email)| *email)
+}
+
+/// Stamp `slug`'s declared captures with who captured them
+/// ([`CAPTURE_CREATORS`]), once the accounts exist. Run after the cast
+/// and the bots are made: the planted files are written before there is
+/// anyone to attribute them to.
+///
+/// Write-once like every creator (`attribution.immutable`): a capture
+/// that already names a creator is left alone, and one whose account is
+/// missing stays unattributed. Returns how many were stamped.
+///
+/// # Errors
+///
+/// Reading or writing a capture file.
+pub async fn stamp_capture_creators(
+    vault: &Path,
+    slug: &str,
+    auth: &crate::AuthState,
+) -> eyre::Result<usize> {
+    use inbox::Inbox as _;
+    let backend = inbox::VaultInbox::new(vault).map_err(|e| eyre::eyre!("open inbox: {e}"))?;
+    let mut stamped = 0;
+    for c in inbox_of(slug) {
+        let Some((_, email)) = CAPTURE_CREATORS.iter().find(|(id, _)| *id == c.id) else {
+            continue;
+        };
+        let Ok(mut item) = backend.get_inbox_item(c.id) else {
+            continue;
+        };
+        if item.created_by.is_some() {
+            continue;
+        }
+        let Ok(Some(user)) = auth.auth.find_user_by_email(email).await else {
+            continue;
+        };
+        let creator = crate::attribution::Creator::of_account(&user);
+        crate::attribution::attribute_inbox(&mut item, Some(&creator));
+        // Straight to the file, as the planting itself was: the backend
+        // keeps an item's first creator, and this one had none.
+        let page = inbox::serialize_inbox_item(&item).map_err(|e| eyre::eyre!("{e}"))?;
+        let dest = vault
+            .join("Records")
+            .join("inbox")
+            .join(format!("{}.md", c.id));
+        std::fs::write(&dest, page).map_err(|e| eyre::eyre!("write {}: {e}", dest.display()))?;
+        stamped += 1;
+    }
+    Ok(stamped)
+}
+
 /// A meal on the plan, dated against the plant.
 #[derive(Debug, Clone, Copy)]
 pub struct DeclaredMeal {
@@ -3057,6 +3174,63 @@ mod declared_tests {
                 "`{title}`: a description is body only, never frontmatter"
             );
         }
+    }
+
+    /// The seed shows every kind of creator (`attribution.seed`): a
+    /// person, a bot and none at all, on captures and on tasks — and
+    /// each one names a declared record and an account of that
+    /// record's own org, so the planted world can say "from Atlas".
+    // t[verify attribution.seed]
+    #[test]
+    fn the_seed_has_mixed_creators_from_its_own_org() {
+        let in_org = |org: &str, email: &str| {
+            cast_of(org).iter().any(|m| m.email == email) || bots_of(org).any(|b| b.email == email)
+        };
+        for b in BOTS {
+            assert!(
+                b.email.ends_with(&format!("@{}", crate::bots::BOT_DOMAIN)),
+                "{} is not a bot address",
+                b.email
+            );
+        }
+        for (id, email) in CAPTURE_CREATORS {
+            let c = INBOX
+                .iter()
+                .find(|c| c.id == *id)
+                .unwrap_or_else(|| panic!("`{id}` is not a declared capture"));
+            assert!(in_org(c.org, email), "`{email}` is not in {}", c.org);
+        }
+        for (title, email) in TASK_CREATORS {
+            let project = DECLARED
+                .iter()
+                .find(|p| p.tasks.iter().any(|(t, _, _)| t == title))
+                .unwrap_or_else(|| panic!("`{title}` is not a declared task"));
+            assert!(
+                in_org(project.org, email),
+                "`{email}` made `{title}` but is not in {}",
+                project.org
+            );
+        }
+        let is_bot = |e: &str| BOTS.iter().any(|b| b.email == e);
+        for (what, emails) in [
+            (
+                "captures",
+                CAPTURE_CREATORS.iter().map(|(_, e)| *e).collect::<Vec<_>>(),
+            ),
+            ("tasks", TASK_CREATORS.iter().map(|(_, e)| *e).collect()),
+        ] {
+            assert!(emails.iter().any(|e| is_bot(e)), "no bot made any {what}");
+            assert!(
+                emails.iter().any(|e| !is_bot(e)),
+                "no person made any {what}"
+            );
+        }
+        assert!(
+            INBOX
+                .iter()
+                .any(|c| !CAPTURE_CREATORS.iter().any(|(id, _)| *id == c.id)),
+            "one capture stays unattributed, like those made before attribution"
+        );
     }
 
     /// Every owned task is a declared task, owned by a cast member of

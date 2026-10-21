@@ -79,6 +79,14 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
         .read()
         .as_ref()
         .map(|a| (a.user_id.to_string(), a.name.clone()));
+    // t[impl attribution.shown]
+    // Who made it — "from you", "from Atlas" — from the server-stamped
+    // creator; a task from before attribution says nothing.
+    let from = inbox_proto::creator::creator_label(
+        task.created_by.as_deref(),
+        task.created_by_name.as_deref(),
+        me.as_ref().map(|(id, _)| id.as_str()),
+    );
     let mut people: Vec<(String, String)> = member_names
         .read()
         .iter()
@@ -166,6 +174,16 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
     let created = task
         .date_created
         .map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string());
+    // "Created · Oct 20 · from Atlas" — either half alone when that is
+    // all there is.
+    let created_line = Some(
+        [created.map(|d| format!("Created · {d}")), from]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · "),
+    )
+    .filter(|l| !l.is_empty());
     let short = task_ui::views::short_id(&id);
 
     rsx! {
@@ -220,8 +238,11 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
                 subtasks,
                 body,
                 activity: rsx! {
-                    if let Some(d) = created {
-                        p { class: "pb-1 text-[13px] text-muted-foreground/70", "Created · {d}" }
+                    if let Some(line) = created_line {
+                        p { class: "pb-1 text-[13px] text-muted-foreground/70",
+                            "data-testid": "task-created",
+                            "{line}"
+                        }
                     }
                     // The task's history and comment thread (`crate::activity`).
                     crate::activity::EntityActivity { slug: slug.clone(), entity_type: "task", entity_id: id }

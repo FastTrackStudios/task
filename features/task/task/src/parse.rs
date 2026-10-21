@@ -182,6 +182,8 @@ fn parse_page_impl(page: &ParsePageRef<'_>) -> Result<TaskInfo, ParseError> {
         )),
         date_created,
         date_modified,
+        created_by: take_str(&map, "createdBy"),
+        created_by_name: take_str(&map, "createdByName"),
         // The writer sets the body off with one blank line; take exactly
         // that one back (see `write::serialize_task`), so details round-trip.
         details: body.strip_prefix('\n').unwrap_or(body).to_string(),

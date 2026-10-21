@@ -48,6 +48,27 @@ pub struct InboxItem {
     /// need a proto change.
     #[architect(filterable)]
     pub source: String,
+    // t[impl attribution.created-by]
+    /// Who captured it: the authenticated principal behind the write,
+    /// as a ref — `"user:<uuid>"` for a person, `"bot:<uuid>"` for a
+    /// bot account (Atlas, Commander, …). `source` names the *surface*
+    /// (cli / ui / mcp / watch); this names the *author*.
+    ///
+    /// Stamped by the server from the caller's credentials, never from
+    /// the item a client sends, and write-once: the backend keeps the
+    /// value already on disk on every later upsert, so an edit (or a
+    /// stale copy) can't rewrite it. `None` on items captured before
+    /// attribution existed, and on writes no principal stands behind
+    /// (the server itself, a file edited in place).
+    #[serde(default)]
+    #[architect(filterable)]
+    pub created_by: Option<String>,
+    /// The creator's display name when the item was captured ("Atlas",
+    /// "Cody") — what a surface shows without a directory lookup, the
+    /// same snapshot `AgentRef::Human::display_name` keeps. Stamped and
+    /// kept with [`Self::created_by`].
+    #[serde(default)]
+    pub created_by_name: Option<String>,
     /// RFC-3339 capture timestamp. Sortable so the daily review can
     /// surface the oldest unprocessed items first.
     #[architect(filterable, sortable)]
@@ -118,6 +139,8 @@ impl InboxItem {
             kind: Self::KIND_FLEETING.to_string(),
             status: Self::STATUS_OPEN.to_string(),
             source: source.into(),
+            created_by: None,
+            created_by_name: None,
             created: created.into(),
             resurface_on: None,
             processed_into: None,
@@ -125,6 +148,15 @@ impl InboxItem {
             interval: 0,
             reviews: 0,
         }
+    }
+
+    /// Whether this item was created by `who`: a full ref
+    /// (`"bot:<uuid>"`), a bare account uuid, or `"none"` for items
+    /// with no recorded creator. See
+    /// [`workflows_proto::creator::creator_matches`].
+    #[must_use]
+    pub fn created_by_matches(&self, who: &str) -> bool {
+        workflows_proto::creator::creator_matches(self.created_by.as_deref(), who)
     }
 
     /// True if the item is still awaiting processing.
@@ -177,6 +209,22 @@ mod tests {
         i.status = status.into();
         i.resurface_on = resurface.map(str::to_owned);
         i
+    }
+
+    #[test]
+    fn creator_filter_rule() {
+        let mut i = item("open", None);
+        assert!(i.created_by_matches("none"));
+        assert!(!i.created_by_matches("bot:b1"));
+        i.created_by = Some("bot:b1".into());
+        assert!(i.created_by_matches("bot:b1"));
+        assert!(i.created_by_matches("b1"), "a bare uuid matches its ref");
+        assert!(
+            !i.created_by_matches("user:b1"),
+            "the kind is part of a full ref"
+        );
+        assert!(!i.created_by_matches("none"));
+        assert!(i.created_by_matches(""), "no filter keeps everything");
     }
 
     #[test]

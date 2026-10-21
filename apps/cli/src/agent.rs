@@ -1559,6 +1559,8 @@ async fn create_subtask(
         dispatched_agent_tasks: task::model::StringList::default(),
         date_created: None,
         date_modified: None,
+        created_by: None,
+        created_by_name: None,
         details: String::new(),
         workflow: Some(task::model::WorkflowAttrs {
             parent: Some(parent.id),

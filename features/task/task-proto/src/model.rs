@@ -274,6 +274,30 @@ pub struct TaskInfo {
     )]
     pub date_modified: Option<DateTime<Utc>>,
 
+    // t[impl attribution.created-by]
+    /// Who created the task: the authenticated principal behind the
+    /// create, as a ref — `"user:<uuid>"` for a person, `"bot:<uuid>"`
+    /// for a bot account (see `workflows_proto::creator`).
+    ///
+    /// Stamped by the server from the caller's credentials, never from
+    /// the task a client sends, and write-once: `update` keeps the
+    /// value already on disk. `None` on tasks made before attribution,
+    /// and on writes no principal stands behind (the server itself, a
+    /// note edited in place).
+    #[serde(skip_serializing_if = "Option::is_none", default, rename = "createdBy")]
+    #[architect(filterable)]
+    pub created_by: Option<String>,
+
+    /// The creator's display name at creation ("Atlas", "Cody") — what
+    /// a surface shows without a directory lookup. Kept with
+    /// [`Self::created_by`].
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        rename = "createdByName"
+    )]
+    pub created_by_name: Option<String>,
+
     /// Body text (the markdown after the frontmatter close
     /// fence). Populated by `parse_page`; written verbatim by
     /// `serialize_task`.
@@ -327,6 +351,8 @@ impl TaskInfo {
             dispatched_agent_tasks: StringList::default(),
             date_created: Some(now),
             date_modified: Some(now),
+            created_by: None,
+            created_by_name: None,
             details: String::new(),
             workflow: None,
         }

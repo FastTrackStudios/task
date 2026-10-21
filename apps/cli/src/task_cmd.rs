@@ -695,6 +695,8 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
                 dispatched_agent_tasks: task::model::StringList::default(),
                 date_created: None,
                 date_modified: None,
+                created_by: None,
+                created_by_name: None,
                 details,
                 workflow: None,
             };

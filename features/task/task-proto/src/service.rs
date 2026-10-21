@@ -79,6 +79,11 @@ pub struct TaskListFilter {
     /// "Active + Relevant" view.
     #[serde(default)]
     pub relevance: Option<crate::relevance::RelevanceContext>,
+    /// Keep tasks whose creator matches — a ref (`"bot:<uuid>"`), a
+    /// bare account uuid, or `"none"` for tasks with no recorded
+    /// creator (`workflows_proto::creator::creator_matches`).
+    #[serde(default)]
+    pub created_by: Option<String>,
     /// Page size. `None` = no cap.
     pub limit: Option<u32>,
     /// Rows to skip (after filtering). `None` = 0.
