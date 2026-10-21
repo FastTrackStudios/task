@@ -154,26 +154,32 @@ release-desktop VERSION:
 
 # ── Releases ─────────────────────────────────────────────────────────────
 #
-# main = production, dev = integration (skills/release-workflow.md). Card
-# PRs squash into dev; a release is a `release/vX.Y.Z` branch cut from dev
-# (dev never freezes) and its PR into main, merged with a merge commit,
-# which deploys and then tags `v<version>`; then main is back-merged into
-# dev. One version for everything, `[workspace.package] version` in
-# Cargo.toml; the changelog is generated from commit subjects by git-cliff
-# (cliff.toml), one section per release, over the commits since the last tag.
+# Two separate stages (skills/release-workflow.md). dev collects verified
+# work; `just release-promote` opens dev -> main ("finished features": full
+# checks + Reviewer, merge commit, NOTHING deploys). A release is a TAG on
+# main: `release-prepare` cuts release/vX.Y.Z (version + changelog commit),
+# its PR merges into main, and `release-tag` pushes `vX.Y.Z`, which deploys
+# the server + web, uploads TestFlight builds, attaches the node binaries
+# and publishes the GitHub Release. Production = the latest `v*` tag.
+# One version for everything, `[workspace.package] version` in Cargo.toml;
+# the changelog is generated from commit subjects by git-cliff (cliff.toml).
 
 # The product version (server, web, iOS, macOS, desktop-v*).
 version:
     @bash scripts/release.sh version
 
-# What the next release would be: suggested version, unreleased
-# changelog, and the database migrations it carries.
+# What is live (latest v* tag), what main holds since, what waits on dev,
+# the unreleased changelog and the migrations the next release carries.
 release-plan:
     bash scripts/release.sh plan
 
-# Cut `release/v<next>` from origin/dev: bump the version, write the
-# changelog section, commit `chore(release): v<next>`. Refuses until the
-# last release is back-merged into dev.
+# Stage 1: open the promotion PR dev -> main (finished features). Merge it
+# with a merge commit once `checks`, the release guard and the Reviewer pass.
+release-promote:
+    bash scripts/release.sh promote
+
+# Stage 2: cut `release/v<next>` from origin/main: bump the version, write
+# the changelog section, commit `chore(release): v<next>`.
 # BUMP: patch (the default, whatever the commits say), minor or major (only
 # when the Captain or Commander calls one), auto (git-cliff decides from the
 # commits), or an exact X.Y.Z.
@@ -185,28 +191,29 @@ release-prepare BUMP="patch":
 release-pr:
     bash scripts/release.sh pr
 
-# On the release/v* branch, after a fix PR landed on it: regenerate the
-# changelog section and end the branch with the release commit again.
-release-refresh:
-    bash scripts/release.sh refresh
+# After the release PR merged: tag v<version> on main. THE TAG DEPLOYS
+# (server + web, TestFlight, node binaries, GitHub Release). Then it opens
+# the main -> dev back-merge. Pushes as whoever you are: use the fts-forge
+# bot or a person, not a workflow token (that starts no workflow).
+release-tag *VERSION:
+    bash scripts/release.sh tag {{VERSION}}
 
-# After a release or hotfix reached main: PR `backmerge/v<ver>` -> dev,
-# merge commit, auto-merge. A no-op when main is already in dev.
+# main -> dev (merge commit, auto-merge). A no-op when dev already has all
+# of main's content. `release-tag` runs it; run it alone after a hotfix.
 release-backmerge:
     bash scripts/release.sh backmerge
 
-# On a hotfix/* branch cut from origin/main (fix already committed), when
-# no release branch is open: the patch bump + changelog + release commit
-# the release guard requires.
-release-hotfix:
-    bash scripts/release.sh hotfix
+# hotfix/<name> from the latest tag (what production runs). Fix, then
+# `just release-pr`; then cut the patch release as usual.
+release-hotfix NAME:
+    bash scripts/release.sh hotfix {{NAME}}
 
 # One version's section of CHANGELOG.md (default: the current version).
 release-notes *VERSION:
     @bash scripts/release.sh notes {{VERSION}}
 
-# The release PR's gate, locally: everything `just ci` runs plus docs
-# (rustdoc -D warnings), which only the release gate runs.
+# The promotion PR's gate, locally: everything `just ci` runs plus docs
+# (rustdoc -D warnings), which only the gate on PRs into main runs.
 ci-release: ci ci-docs
 
 # The typing test: every markdown construct typed into the app's note

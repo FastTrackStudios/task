@@ -114,7 +114,7 @@ enough for git). Add new songs there, never by hand.
 
 ## The PR gate
 
-**`main` is production, `dev` is integration** — the whole procedure,
+**`main` is finished features, `dev` is integration, a `v*` tag is a release** — the whole procedure,
 with what the reviewer checks, is `skills/release-workflow.md`. In short:
 card PRs go **into `dev`**, and CI does **not** build them. The gate for a
 card is `just ci`, run by you on the final tree in the host's canonical
@@ -129,9 +129,9 @@ The check set lives in the `Justfile`, one recipe per check, and the
 `checks` workflow invokes those same recipes — so a pass here is the
 gate's answer for the price of a local build. `checks` itself runs on
 THEBATTLESHIP (self-hosted, the `task`-labelled runners, which share the
-machine and its dev drive with a dozen other repos) only for release PRs
-`release/vX.Y.Z -> main` (cut from dev, which never freezes), nightly on
-dev, and by hand
+machine and its dev drive with a dozen other repos) only for PRs into
+`main` (the `dev -> main` promotion and hotfixes; a version-only release
+commit skips the heavy job), nightly on dev, and by hand
 (`gh workflow run checks.yml --ref <branch> -f base=dev`).
 
 Open the PR into dev with a conventional-commit title (it becomes the
@@ -142,7 +142,9 @@ gh pr create --base dev --title "fix(files): …" --body "Card <id>: just ci pas
 ```
 
 The reviewer squash-merges it once the card's evidence matches the PR head.
-There is no skip token: release PRs always run the full set.
+There is no skip token: promotion PRs always run the full set. A push to
+`main` deploys nothing; production changes only when a `v*` tag is pushed
+(`just release-tag`).
 
 Never use GitHub's own skip tokens here — the bracketed `skip ci`,
 `ci skip`, `no ci`, `skip actions` and `actions skip` forms. They are
