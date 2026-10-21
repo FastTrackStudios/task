@@ -44,7 +44,8 @@ pub fn WorkSidebar(current: Route) -> Element {
     let task_store = stores::use_task_store();
     let project_store = stores::use_project_store();
     let session_store = stores::use_session_store();
-    let recent = crate::recent_projects::use_sidebar_projects(crate::recent_projects::SIDEBAR_LIMIT);
+    let recent =
+        crate::recent_projects::use_sidebar_projects(crate::recent_projects::SIDEBAR_LIMIT);
     let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
     // The same hour as the Tasks page, so its counts and these agree.
     let focus = crate::now_block::use_focus();

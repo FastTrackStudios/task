@@ -140,7 +140,10 @@ pub fn task_signals(
         }
         let assigned = task_proto::is_assigned_to(t, me);
         if assigned && let Some(day) = t.completed_date {
-            bump(day.and_hms_opt(0, 0, 0).map_or(0, |d| d.and_utc().timestamp_millis()));
+            bump(
+                day.and_hms_opt(0, 0, 0)
+                    .map_or(0, |d| d.and_utc().timestamp_millis()),
+            );
         }
         if assigned && task_proto::status_is_open(&t.status) {
             *open.entry(pid).or_default() += 1;
@@ -218,7 +221,10 @@ fn record(opens: &mut Opens, person: &str, project: &str, ms: i64) {
     let mine = opens.entry(person.to_owned()).or_default();
     mine.insert(project.to_owned(), ms);
     while mine.len() > KEEP {
-        let oldest = mine.iter().min_by_key(|(_, at)| **at).map(|(k, _)| k.clone());
+        let oldest = mine
+            .iter()
+            .min_by_key(|(_, at)| **at)
+            .map(|(k, _)| k.clone());
         match oldest {
             Some(k) => mine.remove(&k),
             None => break,
@@ -278,20 +284,18 @@ pub fn use_sidebar_projects(limit: usize) -> Memo<SidebarProjects> {
         let me = account.read().as_ref().map(|a| a.user_id.to_string());
         let rows = project_store.list();
         let projects: Vec<&ProjectInfo> = rows.iter().map(|r| &r.project).collect();
-        let index = crate::task_board::ProjectIndex::new(
-            projects.iter().map(|p| (p.id, p.title.clone())),
-        );
+        let index =
+            crate::task_board::ProjectIndex::new(projects.iter().map(|p| (p.id, p.title.clone())));
         let entries = task_store.entries();
         let tasks: Vec<&TaskInfo> = crate::stores::unique_tasks(&entries)
             .into_iter()
             .map(|r| &r.task)
             .collect();
-        let (mut touched, open_mine) = task_signals(&tasks, me.as_deref(), |t| {
-            match index.anchor(t) {
+        let (mut touched, open_mine) =
+            task_signals(&tasks, me.as_deref(), |t| match index.anchor(t) {
                 Some(task_proto::Anchor::Project(p)) => Some(p),
                 _ => None,
-            }
-        });
+            });
         if let Some(mine) = opens.read().get(me.as_deref().unwrap_or_default()) {
             for (pid, &ms) in mine {
                 if let Ok(pid) = pid.parse::<Uuid>() {
@@ -396,10 +400,20 @@ mod tests {
         signals.open_mine.insert(s.songs[3], 1);
         let rows = rank(&all, &signals, SIDEBAR_LIMIT);
         let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
-        assert_eq!(ids, vec![s.crescendum, s.older], "the album, then the older one");
+        assert_eq!(
+            ids,
+            vec![s.crescendum, s.older],
+            "the album, then the older one"
+        );
         assert_eq!(rows[0].last, Some(5_000));
-        assert_eq!(rows[0].open_mine, 3, "the songs' open tasks are the album's");
-        assert!(ids.iter().all(|id| !s.songs.contains(id)), "no song gets a row");
+        assert_eq!(
+            rows[0].open_mine, 3,
+            "the songs' open tasks are the album's"
+        );
+        assert!(
+            ids.iter().all(|id| !s.songs.contains(id)),
+            "no song gets a row"
+        );
         assert!(!ids.contains(&s.cancelled));
         assert_eq!(
             rows.iter().filter(|r| r.title == "Crescendum").count(),
@@ -446,7 +460,9 @@ mod tests {
 
     #[test]
     fn the_list_is_short() {
-        let all: Vec<ProjectInfo> = (0..20).map(|n| project(&format!("P{n:02}"), None)).collect();
+        let all: Vec<ProjectInfo> = (0..20)
+            .map(|n| project(&format!("P{n:02}"), None))
+            .collect();
         let rows = rank(&refs(&all), &Signals::default(), SIDEBAR_LIMIT);
         assert_eq!(rows.len(), SIDEBAR_LIMIT);
         assert_eq!(rows[0].title, "P00", "no signal at all: by title");
@@ -513,8 +529,16 @@ mod tests {
             .unwrap()
             .and_utc()
             .timestamp_millis();
-        assert_eq!(touched.get(&song), Some(&finished_ms), "the later of the two");
-        assert_eq!(touched.get(&other), None, "someone else's create isn't mine");
+        assert_eq!(
+            touched.get(&song),
+            Some(&finished_ms),
+            "the later of the two"
+        );
+        assert_eq!(
+            touched.get(&other),
+            None,
+            "someone else's create isn't mine"
+        );
         assert_eq!(opens.get(&other), Some(&1));
         assert_eq!(opens.get(&song), None, "finished work isn't open");
         let (t, o) = task_signals(&tasks, None, |t| t.project_id);

@@ -21,9 +21,8 @@ pub fn ProjectSidebar(id: String) -> Element {
     let project_res = stores::use_project(id.clone());
     // Load the list if no page has yet: the neighbours come from it.
     let _projects = stores::use_project_list();
-    let recent = crate::recent_projects::use_sidebar_projects(
-        crate::recent_projects::SIDEBAR_LIMIT + 1,
-    );
+    let recent =
+        crate::recent_projects::use_sidebar_projects(crate::recent_projects::SIDEBAR_LIMIT + 1);
 
     // The neighbours: the same recent top-level projects the work
     // sidebar lists (`recent_projects`), less this one, for one-click
