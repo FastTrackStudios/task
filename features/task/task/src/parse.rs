@@ -51,18 +51,9 @@ pub fn looks_like_task_raw(raw: &str) -> bool {
 /// reads the source task back from disk after the agent
 /// completes.
 pub fn parse_str(rel_path: &str, basename: &str, raw: &str) -> Result<TaskInfo, ParseError> {
-    let page = VaultPageShim {
-        rel_path: rel_path.to_string(),
-        basename: basename.to_string(),
-        raw: raw.to_string(),
-    };
-    parse_page_inner(&page.rel_path, &page.basename, &page.raw)
-}
-
-struct VaultPageShim {
-    rel_path: String,
-    basename: String,
-    raw: String,
+    // Parsed from the borrowed text: this used to copy all three
+    // strings into a shim first, the page's whole text included.
+    parse_page_inner(rel_path, basename, raw)
 }
 
 /// Parse a `VaultPage` into a `TaskInfo`. The page must have

@@ -60,17 +60,17 @@ pub fn walk_vault(root: &Path, cfg: &ObsidianConfig) -> Vec<VaultEntry> {
         if entry.file_type().is_dir() {
             continue;
         }
-        let abs = entry.path().to_path_buf();
-        let rel = match abs.strip_prefix(root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+        let rel = match entry.path().strip_prefix(root) {
+            Ok(r) => vault_live::walker::rel_string(r),
             Err(_) => continue,
         };
         if ignore.matches(&rel) {
             continue;
         }
-        let kind = classify(&abs);
+        let kind = classify(entry.path());
         out.push(VaultEntry {
-            abs_path: abs,
+            // Moved out of the walkdir entry, not copied from it.
+            abs_path: entry.into_path(),
             rel_path: rel,
             kind,
         });
@@ -79,16 +79,18 @@ pub fn walk_vault(root: &Path, cfg: &ObsidianConfig) -> Vec<VaultEntry> {
 }
 
 fn classify(p: &Path) -> VaultEntryKind {
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    match ext.as_str() {
-        "md" | "markdown" => VaultEntryKind::Markdown,
-        "base" => VaultEntryKind::Base,
-        "canvas" => VaultEntryKind::Canvas,
-        _ => VaultEntryKind::Attachment,
+    // Compared case-insensitively in place, not by lowering a copy of
+    // the extension of every file in the vault.
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or_default();
+    let is = |want: &str| ext.eq_ignore_ascii_case(want);
+    if is("md") || is("markdown") {
+        VaultEntryKind::Markdown
+    } else if is("base") {
+        VaultEntryKind::Base
+    } else if is("canvas") {
+        VaultEntryKind::Canvas
+    } else {
+        VaultEntryKind::Attachment
     }
 }
 
@@ -102,11 +104,12 @@ fn is_hard_skip(path: &Path, root: &Path) -> bool {
     let Ok(rel) = path.strip_prefix(root) else {
         return false;
     };
-    let components: Vec<_> = rel.components().collect();
-    if components.is_empty() {
+    // Only the first component is ever read: take it, rather than
+    // collecting every component of every entry's path into a `Vec`.
+    let Some(first) = rel.components().next() else {
         return false;
-    }
-    let first = components[0].as_os_str().to_string_lossy();
+    };
+    let first = first.as_os_str().to_string_lossy();
     matches!(first.as_ref(), ".obsidian" | ".trash" | ".git") || first.starts_with(".DS_Store")
 }
 
