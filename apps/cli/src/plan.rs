@@ -2870,6 +2870,8 @@ mod tests {
                 date_modified: None,
                 created_by: None,
                 created_by_name: None,
+                on_behalf_of: None,
+                on_behalf_of_name: None,
                 details: String::new(),
                 workflow: None,
             };

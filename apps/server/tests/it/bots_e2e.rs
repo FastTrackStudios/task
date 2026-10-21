@@ -16,7 +16,7 @@
 use architect_auth::SignInEmailPassword;
 use architect_auth::proto::AuthServiceClient;
 use serde_json::{Value, json};
-use task_server::bots::{self, OrgChoice, Tools};
+use task_server::bots::{self, Kind, OrgChoice, Tools};
 use task_server::local_node::{LocalNode, NodeOptions, PERSONAL_SLUG};
 use vox_core::FromVoxLane;
 
@@ -116,6 +116,7 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "Atlas",
         &personal,
         Tools::All,
+        Kind::Team,
     )
     .await
     .expect("Atlas is made");
@@ -126,6 +127,7 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "Librarian",
         &personal,
         Tools::Library,
+        Kind::Team,
     )
     .await
     .expect("the Librarian is made");
@@ -195,6 +197,7 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "Snoop",
         &OrgChoice::Some(vec!["someone-elses".to_owned()]),
         Tools::All,
+        Kind::Team,
     )
     .await;
     assert!(refused.is_err(), "no bot gets an org its person is not in");
@@ -259,6 +262,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
             orgs: vec![PERSONAL_SLUG.to_owned()],
             no_orgs: false,
             tools: BotTools::All,
+            personal: false,
         })
         .await
         .expect("the person makes Atlas from the app");
@@ -274,6 +278,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
             orgs: vec!["someone-elses".into()],
             no_orgs: false,
             tools: BotTools::Library,
+            personal: false,
         })
         .await
         .is_err(),
@@ -288,6 +293,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
             orgs: Vec::new(),
             no_orgs: true,
             tools: BotTools::All,
+            personal: false,
         })
         .await
         .expect("a bot with no orgs, on purpose");
@@ -300,6 +306,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
                 orgs,
                 no_orgs,
                 tools: BotTools::All,
+                personal: false,
             })
             .await
             .is_err(),

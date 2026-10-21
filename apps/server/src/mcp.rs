@@ -239,7 +239,9 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "due_on_or_before": s_("ISO date (YYYY-MM-DD). Keeps tasks due or scheduled on/before it."),
                         "project": s_("Project UUID (from list_projects) — keeps tasks belonging to that project."),
                         "query": s_("Case-insensitive substring match on the title."),
-                        "created_by": s_("Keep tasks made by this account — a created_by ref from a listed task ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, or 'none' for tasks with no recorded creator."),
+                        "created_by": s_("Keep tasks made by this account — a created_by ref from a listed task ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, 'me', or 'none' for tasks with no recorded creator."),
+                        "on_behalf_of": s_("Keep tasks a personal assistant bot made on behalf of this person — 'me', a 'user:<uuid>' ref, a bare uuid, or 'none'."),
+                        "assignee": s_("Keep tasks assigned to this principal — 'me', 'user:<uuid>' (a person or a bot account), 'agent:NAME', or 'none' for unassigned tasks."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -461,7 +463,8 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 obj(
                     json!({
                         "status": s_("Show every item with this status instead of today's review queue, e.g. 'suggested', 'open'."),
-                        "created_by": s_("Keep items captured by this account — a created_by ref from a listed item ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, or 'none'. Searches every item, not only today's queue, unless status narrows it."),
+                        "created_by": s_("Keep items captured by this account — a created_by ref from a listed item ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, 'me', or 'none'. Searches every item, not only today's queue, unless status narrows it."),
+                        "on_behalf_of": s_("Keep items a personal assistant bot captured on behalf of this person — 'me', a 'user:<uuid>' ref, a bare uuid, or 'none'. Searches every item, like created_by."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -3180,6 +3183,19 @@ fn call_tool(
     let ToolCaller {
         principal, creator, ..
     } = caller;
+    // Who the activity feed names for this call's task writes
+    // (`activity.actor`) — an assignment above all: the router lane
+    // notes its gate caller, and this is the same note for MCP.
+    note_task_writer(org, principal, name, args);
+    // A filter's `me`: the caller's own ref.
+    let who = |key: &str| -> Option<String> {
+        let raw = arg_str(args, key)?;
+        if raw.trim().eq_ignore_ascii_case("me") {
+            Some(creator.map_or_else(|| "none".to_owned(), |c| c.r#ref.clone()))
+        } else {
+            Some(raw)
+        }
+    };
     // Only the wiki lane is caller-sensitive today; a build without it
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
@@ -3252,7 +3268,13 @@ fn call_tool(
                 "inbox_awaiting_review": inbox_open,
                 // The caller's own creator ref — what `created_by`
                 // filters take to mean "what I made".
-                "you": creator.map(|c| json!({ "created_by": c.r#ref, "name": c.name })),
+                "you": creator.map(|c| json!({
+                    "created_by": c.r#ref,
+                    "name": c.name,
+                    // A personal assistant's person: what it makes is
+                    // stamped on behalf of them.
+                    "acting_for": c.on_behalf_of.as_ref().map(|p| json!({ "ref": p.r#ref, "name": p.name })),
+                })),
             }))
         }
 
@@ -3269,7 +3291,9 @@ fn call_tool(
                 status,
                 project,
                 due_on_or_before: arg_str(args, "due_on_or_before"),
-                created_by: arg_str(args, "created_by"),
+                created_by: who("created_by"),
+                on_behalf_of: who("on_behalf_of"),
+                assignee: who("assignee"),
                 ..Default::default()
             };
             let query = arg_str(args, "query").map(|q| q.to_lowercase());
@@ -3700,8 +3724,10 @@ fn call_tool(
             // design excludes suggestions — so an agent couldn't see
             // its own captures. `status` opens the full list, and so
             // does `created_by` (whose captures, whatever their state).
-            let created_by = arg_str(args, "created_by");
-            let rows: Vec<inbox_proto::InboxItem> = match (arg_str(args, "status"), &created_by) {
+            let created_by = who("created_by");
+            let on_behalf_of = who("on_behalf_of");
+            let narrowed = created_by.is_some() || on_behalf_of.is_some();
+            let rows: Vec<inbox_proto::InboxItem> = match (arg_str(args, "status"), narrowed) {
                 (Some(status), _) => {
                     let all = org
                         .inbox
@@ -3711,11 +3737,11 @@ fn call_tool(
                         .filter(|i| i.status.eq_ignore_ascii_case(&status))
                         .collect()
                 }
-                (None, Some(_)) => org
+                (None, true) => org
                     .inbox
                     .list_inbox()
                     .map_err(|e| ToolFailure::Message(format!("{e:?}")))?,
-                (None, None) => {
+                (None, false) => {
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                     org.inbox
                         .review_queue(today)
@@ -3728,6 +3754,9 @@ fn call_tool(
                     created_by
                         .as_deref()
                         .is_none_or(|who| i.created_by_matches(who))
+                        && on_behalf_of
+                            .as_deref()
+                            .is_none_or(|who| i.on_behalf_of_matches(who))
                 })
                 .take(arg_limit(args))
                 .map(|i| {
@@ -3740,6 +3769,8 @@ fn call_tool(
                         "source": i.source,
                         "created_by": i.created_by,
                         "created_by_name": i.created_by_name,
+                        "on_behalf_of": i.on_behalf_of,
+                        "on_behalf_of_name": i.on_behalf_of_name,
                     })
                 })
                 .collect();
@@ -6163,7 +6194,28 @@ fn task_json(t: &task::TaskInfo) -> Value {
         // Who made it (`user:<uuid>` / `bot:<uuid>`), and their name.
         "created_by": t.created_by,
         "created_by_name": t.created_by_name,
+        // Whom a personal assistant made it for (`user:<uuid>`), if one did.
+        "on_behalf_of": t.on_behalf_of,
+        "on_behalf_of_name": t.on_behalf_of_name,
     })
+}
+
+/// Note the caller of a task-writing tool in the org's actor ledger,
+/// the way [`crate::activity::AttributedTasks`] does on the router: the
+/// feed's entry for the write — "Cody assigned Priya" — names who made
+/// it rather than guessing from the task's assignee.
+// t[impl attribution.assignee.logged]
+fn note_task_writer(org: &crate::OrgAppState, principal: Option<&str>, tool: &str, args: &Value) {
+    let Some(user) = principal else { return };
+    let key = match tool {
+        "update_task" | "file_task" | "claim_task" => match arg_str(args, "id") {
+            Some(id) => format!("task:{}", id.trim()),
+            None => return,
+        },
+        "create_task" | "email_to_task" | "process_inbox_item" => "task:new".to_owned(),
+        _ => return,
+    };
+    org.actors.note(key, Some(user.to_owned()));
 }
 
 #[cfg(feature = "plugin-scheduling")]

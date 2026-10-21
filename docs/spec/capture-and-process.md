@@ -450,13 +450,100 @@ An inbox row and a task's page say "from you" for the signed-in
 account's own records, and "from <name>" for anyone else's
 (`creator_label`). A record with no creator says nothing.
 
+### A personal bot says whom it acted for
+
+t[attribution.on-behalf-of]
+When a bot works for one person ("Atlas for Cody"), what it creates
+also carries `on_behalf_of`: that person's ref, `user:<account uuid>`,
+plus `on_behalf_of_name`, their display name at that moment. A
+person's own records, and a team bot's, carry none. Like the creator,
+it is written once: an update, a stale copy, an upsert that leaves it
+out and a replica merge (`vault_doc::WRITE_ONCE_PROPS`) all keep the
+first value.
+
+### On behalf of comes from the key, never the caller
+
+t[attribution.on-behalf-of.server-stamped]
+`on_behalf_of` is set by the server from the authenticated bot's key:
+the **owner** in the key's metadata (`{bot: true, owner, personal}`),
+when the key marks the bot personal (`bots::acts_for`). It is never
+taken from tool or RPC arguments; whatever a payload says is dropped
+with the creator it claims (`attribution::attribute_*`). A bot account
+holds exactly one key, issued with the account, so the account's key is
+the key that authenticated.
+
+### Personal or team is a mark on the bot
+
+t[attribution.bot-kind]
+Every bot has an owner, the person who made it and alone can see or
+revoke it. Whether it *acts for* that owner is a separate, explicit
+mark, `personal`, kept beside the owner on the key's metadata:
+`admin bot create --personal`, the app's "My assistant — acts for me"
+switch (`CreateBotRequest::personal`), and `admin bot personal|team
+--bot <uuid>` to change it later. A team bot (Commander, a studio
+helper) is the default, and so is every key made before the mark, so
+nothing is claimed for anyone until the owner says so. A change
+applies to records made after it; earlier ones keep what they say.
+
+### Surfaces say whom it was for
+
+t[attribution.on-behalf-of.shown]
+An inbox row and a task's page say "from Atlas (for Cody)", or
+"from Atlas (for you)" to the person it was for
+(`creator::attribution_label`). A team bot's record says only
+"from <name>". The assignee is shown on its own, in the task's
+assignee row, never folded into this line.
+
+### Lists filter on behalf of me
+
+t[attribution.on-behalf-of.filter]
+`TaskListFilter::on_behalf_of` and the `on_behalf_of` argument of the
+MCP `list_tasks` / `list_inbox` tools keep the records made for one
+person, by the same rule as `created_by` (a ref, a bare uuid or
+`none`). Every MCP person filter also takes `me`, the caller's own ref.
+The Tasks and Project work boards' Filter sheet offers **Assignee**,
+**Created by** and **On behalf of** sections, the signed-in person
+listed first as "Me", so "on behalf of me" is one pick.
+
+### Assignment is not creation
+
+t[attribution.assignee.separate]
+Who does a task is its assignee (`workflow.assignees`), never its
+creator: Atlas may make a task that Cody hands to an employee. The
+assignee is a principal ref, a person or a bot account by account id
+(`AgentRef::Human`), or a named agent; it changes over time, and
+nothing about it touches `created_by` or `on_behalf_of`.
+
+### Assigning is logged with who did it
+
+t[attribution.assignee.logged]
+Each assignment change is an activity entry (`Assigned` /
+`Unassigned`, from → to) that names the actor who made it, with the
+time. On the RPC lanes that is the gate's caller; over MCP the tools
+that write tasks (`update_task`, `file_task`, `claim_task`,
+`create_task`, `email_to_task`) note the bearer's principal the same
+way, so the feed never has to guess the actor from the assignee.
+
+### Lists filter by assignee
+
+t[attribution.assignee.filter]
+`TaskListFilter::assignee` and the `assignee` argument of the MCP
+`list_tasks` tool keep one assignee's tasks: `user:<uuid>` or a bare
+uuid for a person or bot account, `agent:<name>` for a named agent,
+`none` for unassigned, and `me` over MCP
+(`creator::assignee_matches`). An employee asking for `me` sees
+exactly the work assigned to them.
+
 ### The seed shows every kind of creator
 
 t[attribution.seed]
-The planted world has a bot, Atlas (in acme-audio), and its captures
-and tasks mix three kinds of creator: Alice, Sam and Atlas each made
-some, and a few have none, standing for records from before
-attribution.
+The planted world has two bots in acme-audio: Atlas, Alice's personal
+assistant, and the Studio Desk, a team bot. Its captures and tasks mix
+the kinds of creator: Alice, Sam and Atlas each made some, the Studio
+Desk made a chore for nobody in particular, and a few have none,
+standing for records from before attribution. What Atlas made says
+"for Alice". Priya, a second employee, has the work Atlas made for
+Alice and Alice handed on.
 
 ---
 
@@ -475,7 +562,12 @@ attribution.
 | `attribution.created-by`, `.server-stamped`, `.filter` | `apps/server/tests/it/attribution_e2e.rs`: a bot key and a person's session, each over MCP and the person also over the RPC lane, every call claiming someone else in its arguments; each record names its real creator, and the four filters each keep one creator's records. Also `attribution::tests`, and the filter rule in `workflows-proto::creator` |
 | `attribution.immutable` | `vault_inbox::tests::created_by_is_write_once`, `task::backend::tests::created_by_is_write_once_and_filters`, `vault_doc::doc::tests::a_creator_survives_every_later_text` (replica merges); `attribution_e2e.rs` edits over the wire |
 | `attribution.shown` | `workflows-proto::creator::tests::the_label_says_you_or_the_name` (the label both the inbox row and the task page render) |
-| `attribution.seed` | `example_org::declared_tests::the_seed_has_mixed_creators_from_its_own_org`; `demo_plant.rs::demo_plants_an_inbox_to_process_and_a_maintenance_hour` (a planted capture from Atlas, one from Alice, one unattributed, tasks from both, all surviving a replant) |
+| `attribution.on-behalf-of`, `.on-behalf-of.server-stamped` | `attribution_e2e.rs::records_say_who_made_them_and_nobody_can_claim_otherwise` (Atlas's key records Atlas for Cody whatever the arguments claim; a payload's `on_behalf_of` over the RPC lane is dropped); `attribution::tests::whom_a_bot_acted_for_comes_from_the_creator_alone`; write-once in `vault_inbox::tests::created_by_is_write_once`, `task::backend::tests::on_behalf_of_is_write_once_and_both_filters_work`, `vault_doc::doc::tests::a_creator_survives_every_later_text` |
+| `attribution.bot-kind` | `bots::tests::a_key_from_before_the_marker_is_a_team_bot`; the team bot in `attribution_e2e.rs` records no `on_behalf_of` whatever it claims; `org-proto/tests/bots_wire_compat.rs` (apps that never send `personal` still make bots) |
+| `attribution.on-behalf-of.shown` | `workflows-proto::creator::tests::a_personal_bot_says_whom_it_acted_for` |
+| `attribution.on-behalf-of.filter` | `attribution_e2e.rs` (`on_behalf_of: me` over MCP `list_tasks` / `list_inbox`, and `TaskListFilter::on_behalf_of` over RPC); `ui::pages::tasks::tests::the_filter_sheet_offers_assignee_creator_and_on_behalf_of_me` |
+| `attribution.assignee.separate`, `.logged`, `.filter` | `attribution_e2e.rs::an_employee_gets_the_work_an_assistant_made_and_the_handoff_is_logged` (Atlas makes it, Cody assigns it to Priya over MCP, the creator stays Atlas, the feed's `Assigned` entry names Cody, Priya's `assignee: me` and RPC `assignee` filter find it); `workflows-proto::creator::tests::the_assignee_rule`; `task::backend::tests::on_behalf_of_is_write_once_and_both_filters_work` |
+| `attribution.seed` | `example_org::declared_tests::the_seed_has_mixed_creators_from_its_own_org` (a personal and a team bot, a second employee holding assistant-made work); `demo_plant.rs::demo_plants_an_inbox_to_process_and_a_maintenance_hour` (a planted capture from Atlas for Alice, one from Alice, one unattributed, tasks from both, Atlas's task for Alice assigned to Priya, the Studio Desk's for nobody) |
 
 The seeded world shows the whole loop to Alice: twelve captures in
 acme-audio's inbox (one suggested from mail, one snoozed two weeks out,

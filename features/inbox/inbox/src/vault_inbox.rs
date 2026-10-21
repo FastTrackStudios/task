@@ -172,6 +172,8 @@ impl Inbox for VaultInbox {
         if let Ok(existing) = self.get_inbox_item(&item.id) {
             item.created_by = existing.created_by;
             item.created_by_name = existing.created_by_name;
+            item.on_behalf_of = existing.on_behalf_of;
+            item.on_behalf_of_name = existing.on_behalf_of_name;
         }
         let item = &item;
         let body = serialize_inbox_item(item).map_err(|e| InboxError::Backend {
@@ -284,6 +286,8 @@ mod tests {
         let mut item = InboxItem::capture("w", "first", "mcp", "2026-05-31T09:00:00Z");
         item.created_by = Some("bot:atlas".into());
         item.created_by_name = Some("Atlas".into());
+        item.on_behalf_of = Some("user:cody".into());
+        item.on_behalf_of_name = Some("Cody".into());
         inbox.upsert_inbox_item(&item).unwrap();
 
         // A later write naming someone else — or no one — keeps it.
@@ -291,16 +295,22 @@ mod tests {
         edit.body = "edited".into();
         edit.created_by = Some("user:mallory".into());
         edit.created_by_name = Some("Mallory".into());
+        edit.on_behalf_of = Some("user:mallory".into());
         inbox.upsert_inbox_item(&edit).unwrap();
         let mut cleared = edit.clone();
         cleared.created_by = None;
         cleared.created_by_name = None;
+        cleared.on_behalf_of = None;
+        cleared.on_behalf_of_name = None;
         inbox.upsert_inbox_item(&cleared).unwrap();
 
         let got = inbox.get_inbox_item("w").unwrap();
         assert_eq!(got.body, "edited");
         assert_eq!(got.created_by.as_deref(), Some("bot:atlas"));
         assert_eq!(got.created_by_name.as_deref(), Some("Atlas"));
+        // t[verify attribution.on-behalf-of]
+        assert_eq!(got.on_behalf_of.as_deref(), Some("user:cody"));
+        assert_eq!(got.on_behalf_of_name.as_deref(), Some("Cody"));
         assert_eq!(inbox.list_inbox_by("bot:atlas".into()).unwrap().len(), 1);
         assert!(
             inbox

@@ -66,6 +66,7 @@ fn a_pre_0_2_create_bot_request_decodes_with_no_orgs_false() {
             orgs: vec!["acme".into()],
             no_orgs: false,
             tools: BotTools::Library,
+            personal: false,
         }
     );
 }

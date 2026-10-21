@@ -48,6 +48,12 @@ pub struct CreateBotRequest {
     #[facet(default)]
     pub no_orgs: bool,
     pub tools: BotTools,
+    /// Make it its maker's **personal** assistant: what it creates is
+    /// stamped "on behalf of" them (`attribution.on-behalf-of`). `false`
+    /// — a team bot, acting for nobody in particular — is the default,
+    /// which is also what apps that never send it get.
+    #[facet(default)]
+    pub personal: bool,
 }
 
 /// A bot just made, with the only time its key is ever shown.

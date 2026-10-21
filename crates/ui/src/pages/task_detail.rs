@@ -80,11 +80,16 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
         .as_ref()
         .map(|a| (a.user_id.to_string(), a.name.clone()));
     // t[impl attribution.shown]
-    // Who made it — "from you", "from Atlas" — from the server-stamped
-    // creator; a task from before attribution says nothing.
-    let from = inbox_proto::creator::creator_label(
+    // Who made it — "from you", "from Atlas", "from Atlas (for Cody)" —
+    // from the server-stamped creator and whom a personal bot acted
+    // for; a task from before attribution says nothing. Who it is
+    // *assigned* to is its own row (the assignee picker), never this.
+    // t[impl attribution.on-behalf-of.shown]
+    let from = inbox_proto::creator::attribution_label(
         task.created_by.as_deref(),
         task.created_by_name.as_deref(),
+        task.on_behalf_of.as_deref(),
+        task.on_behalf_of_name.as_deref(),
         me.as_ref().map(|(id, _)| id.as_str()),
     );
     let mut people: Vec<(String, String)> = member_names

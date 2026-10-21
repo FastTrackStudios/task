@@ -112,6 +112,53 @@ struct KeyPermissions {
 struct KeyMetadata {
     bot: bool,
     owner: Uuid,
+    /// Whether the bot is its owner's **personal** assistant, acting
+    /// for them (`attribution.on-behalf-of`): what it writes is
+    /// stamped "on behalf of" the owner. Absent on keys from before
+    /// the marker, which read as team bots — nothing is claimed for
+    /// anyone until the owner says so (`admin bot personal`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    personal: bool,
+}
+
+// t[impl attribution.bot-kind]
+/// Whether a bot acts for one person or for the team.
+///
+/// Every bot has an **owner** — the person who made it, the only one
+/// who sees and revokes it. That is a management fact, not an
+/// attribution one: a team bot (a triage bot, Commander) is made by
+/// someone but works for nobody in particular. A **personal** bot
+/// (Atlas, "my assistant") works for its owner, and everything it
+/// creates says so: `on_behalf_of` = the owner, server-stamped from
+/// the key. The marker lives on the bot's key metadata, beside the
+/// owner, and defaults to [`Self::Team`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// Works for the team; writes carry no `on_behalf_of`.
+    #[default]
+    Team,
+    /// Its owner's assistant; writes carry `on_behalf_of` = the owner.
+    Personal,
+}
+
+impl Kind {
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "team" | "shared" => Some(Self::Team),
+            "personal" | "assistant" => Some(Self::Personal),
+            _ => None,
+        }
+    }
+
+    fn of(meta: &KeyMetadata) -> Self {
+        if meta.personal {
+            Self::Personal
+        } else {
+            Self::Team
+        }
+    }
 }
 
 /// A bot as listed: who, given what, by whom.
@@ -122,6 +169,8 @@ pub struct Bot {
     pub email: String,
     pub owner: Uuid,
     pub tools: Tools,
+    /// Personal (acts for [`Self::owner`]) or team.
+    pub kind: Kind,
     pub orgs: Vec<String>,
 }
 
@@ -192,7 +241,8 @@ fn random_secret() -> String {
 }
 
 /// Make a bot for `owner`, a member of `orgs` (or of none, when that
-/// was chosen), offered `tools`.
+/// was chosen), offered `tools` — a personal assistant of the owner's
+/// or a team bot, per `kind`.
 ///
 /// # Errors
 ///
@@ -205,6 +255,7 @@ pub async fn create(
     name: &str,
     orgs: &OrgChoice,
     tools: Tools,
+    kind: Kind,
 ) -> eyre::Result<NewBot> {
     if matches!(orgs, OrgChoice::Some(list) if list.is_empty()) {
         eyre::bail!("a bot needs at least one org");
@@ -255,7 +306,11 @@ pub async fn create(
             permissions_json: Some(serde_json::to_string(&KeyPermissions { tools })?),
             rate_limit_time_window: None,
             rate_limit_max: None,
-            metadata_json: Some(serde_json::to_string(&KeyMetadata { bot: true, owner })?),
+            metadata_json: Some(serde_json::to_string(&KeyMetadata {
+                bot: true,
+                owner,
+                personal: kind == Kind::Personal,
+            })?),
         })
         .await
         .map_err(|e| eyre::eyre!("issue the bot's key: {e:?}"))?;
@@ -277,6 +332,7 @@ pub async fn create(
             email,
             owner,
             tools,
+            kind,
             orgs: orgs.to_vec(),
         },
         key: key.key,
@@ -385,6 +441,7 @@ pub async fn list(
             email,
             owner: meta.owner,
             tools,
+            kind: Kind::of(&meta),
             orgs,
         });
     }
@@ -414,6 +471,79 @@ pub async fn revoke(
         .delete_user_local_trusted(found.id)
         .await
         .map_err(|e| eyre::eyre!("delete the bot's account: {e:?}"))?;
+    Ok(())
+}
+
+/// The person a bot account acts for: its key's owner, when the key
+/// marks it [`Kind::Personal`]. `None` for a team bot, for an account
+/// that is not a bot, and for a key with no readable metadata.
+///
+/// This is the whole of `on_behalf_of`'s source
+/// (`crate::attribution`): the key the server issued and holds, never
+/// anything a caller sends. A bot account holds exactly one key — the
+/// one [`create`] issued with the account.
+// t[impl attribution.on-behalf-of.server-stamped]
+pub async fn acts_for(home: &AuthState, bot: Uuid) -> Option<Uuid> {
+    use architect_auth::AuthStorage as _;
+    let keys = home.auth.storage.list_api_keys_by_user_id(bot).await.ok()?;
+    keys.into_iter().find_map(|k| {
+        let meta = serde_json::from_str::<KeyMetadata>(k.metadata_json.as_deref()?).ok()?;
+        (meta.bot && meta.personal).then_some(meta.owner)
+    })
+}
+
+/// Mark a bot `owner` made as personal or team, from now on. Records
+/// it already made keep what they say (`attribution.immutable`).
+///
+/// # Errors
+///
+/// No such bot of `owner`'s; the auth store refusing the update.
+pub async fn set_kind(
+    home: &AuthState,
+    memberships: &Memberships,
+    owner: Uuid,
+    bot: Uuid,
+    kind: Kind,
+) -> eyre::Result<()> {
+    use architect_auth::AuthStorage as _;
+    if !list(home, memberships, owner)
+        .await?
+        .iter()
+        .any(|b| b.id == bot)
+    {
+        eyre::bail!("no bot {bot} of yours here");
+    }
+    let keys = home
+        .auth
+        .storage
+        .list_api_keys_by_user_id(bot)
+        .await
+        .map_err(|e| eyre::eyre!("list the bot's keys: {e:?}"))?;
+    for k in keys {
+        let Some(mut meta) = k
+            .metadata_json
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<KeyMetadata>(m).ok())
+            .filter(|m| m.bot && m.owner == owner)
+        else {
+            continue;
+        };
+        meta.personal = kind == Kind::Personal;
+        home.auth
+            .storage
+            .update_api_key(
+                k.id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(serde_json::to_string(&meta)?),
+            )
+            .await
+            .map_err(|e| eyre::eyre!("update the bot's key: {e:?}"))?;
+    }
     Ok(())
 }
 
@@ -491,6 +621,11 @@ impl org_proto::BotService for BotServiceImpl {
                     &req.name,
                     &orgs,
                     tools,
+                    if req.personal {
+                        Kind::Personal
+                    } else {
+                        Kind::Team
+                    },
                 )
                 .await
             })
@@ -539,6 +674,38 @@ mod tests {
         assert_eq!(slugify("  The Librarian! "), "the-librarian");
         assert_eq!(slugify("???"), "bot");
         assert_eq!(Tools::parse("wiki"), Some(Tools::Library));
+        assert_eq!(Kind::parse("Personal"), Some(Kind::Personal));
+        assert_eq!(Kind::parse("team"), Some(Kind::Team));
+        assert_eq!(Kind::parse("bogus"), None);
+    }
+
+    // t[verify attribution.bot-kind]
+    #[test]
+    fn a_key_from_before_the_marker_is_a_team_bot() {
+        let old: KeyMetadata =
+            serde_json::from_str(r#"{"bot":true,"owner":"00000000-0000-0000-0000-000000000001"}"#)
+                .unwrap();
+        assert_eq!(Kind::of(&old), Kind::Team);
+        let team = serde_json::to_string(&KeyMetadata {
+            bot: true,
+            owner: Uuid::nil(),
+            personal: false,
+        })
+        .unwrap();
+        assert!(
+            !team.contains("personal"),
+            "a team key reads as it always did"
+        );
+        let mine: KeyMetadata = serde_json::from_str(
+            &serde_json::to_string(&KeyMetadata {
+                bot: true,
+                owner: Uuid::nil(),
+                personal: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(Kind::of(&mine), Kind::Personal);
     }
 
     #[test]
