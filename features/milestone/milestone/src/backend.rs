@@ -67,14 +67,14 @@ impl MilestoneBackend {
             MilestoneError::Io(format!("open vault {}: {e}", self.vault_root.display()))
         })?;
         let mut out = Vec::new();
-        for page in &vault.pages {
-            let proto = page.to_proto();
+        for page in vault.pages {
+            let proto = page.into_proto();
             if !looks_like_milestone(&proto) {
                 continue;
             }
             match parse_page(&proto) {
                 Ok(m) => out.push(m),
-                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "milestone parse failed"),
+                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "milestone parse failed"),
             }
         }
         Ok(out)

@@ -3348,14 +3348,16 @@ fn call_tool(
 
         "search_vault" => {
             let query = required_str(args, "query")?.to_lowercase();
-            let manifest = org
+            // Names only: `paths` walks the vault without reading a
+            // file, where the manifest would hash every one of them to
+            // match on a path.
+            let paths = org
                 .vault_sync
-                .manifest(VAULT_ID)
+                .paths(VAULT_ID)
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            let mut hits: Vec<&str> = manifest
-                .files
+            let mut hits: Vec<&str> = paths
                 .iter()
-                .map(|f| f.path.as_str())
+                .map(String::as_str)
                 .filter(|p| p.to_lowercase().contains(&query))
                 .collect();
             hits.sort_unstable();

@@ -19,6 +19,8 @@
 
 use task_server::AppState;
 
+pub mod alloc;
+
 /// The org these tests boot — the example studio's audio company.
 pub const ORG: &str = "acme-audio";
 
@@ -182,6 +184,18 @@ async fn boot_over(
     prepare: impl FnOnce(&org_proto::OrgRoot),
 ) -> eyre::Result<AppState> {
     boot_over_env(root, prepare, &[]).await
+}
+
+/// [`boot_app_state_env`] with a chance to write onto the data root
+/// before `AppState::new` reads it (see [`boot_ws_with`]) — for a test
+/// that seeds more than the example org and also needs server env set.
+pub async fn boot_app_state_with_env(
+    prepare: impl FnOnce(&org_proto::OrgRoot),
+    env: &[(&str, &str)],
+) -> eyre::Result<(AppState, tempfile::TempDir)> {
+    let tmp = tempfile::tempdir()?;
+    let state = boot_over_env(tmp.path(), prepare, env).await?;
+    Ok((state, tmp))
 }
 
 async fn boot_over_env(

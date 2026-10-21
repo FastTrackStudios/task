@@ -274,7 +274,10 @@ async fn sweep_peer(
     hosting: Hosting,
     org_root: &Path,
 ) -> Result<(), files_sync::SyncError> {
-    let peer = files_sync::dial_peer(endpoint, &host.0).await?;
+    // `_once`: the connection closes when `peer` drops at the end of
+    // this pass. A plain `dial_peer` client kept it, and the laptop's
+    // side of it, open for good: a leak of one connection per sweep.
+    let peer = files_sync::dial_peer_once(endpoint, &host.0).await?;
     let offered = peer
         .roots()
         .await

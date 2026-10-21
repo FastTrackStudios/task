@@ -30,25 +30,17 @@ pub enum ParseError {
 /// `type: task` field, OR `task` present in the `tags` array.
 #[must_use]
 pub fn looks_like_task(page: &VaultPage) -> bool {
-    let Some((fm, _body)) = split_frontmatter(&page.raw) else {
-        return false;
-    };
-    let Ok(map) = serde_yaml::from_str::<serde_yaml::Mapping>(fm) else {
-        return false;
-    };
-    if let Some(t) = map.get("type") {
-        if t.as_str() == Some("task") {
-            return true;
-        }
-    }
-    if let Some(tags) = map.get("tags") {
-        if let Some(seq) = tags.as_sequence() {
-            if seq.iter().any(|v| v.as_str() == Some("task")) {
-                return true;
-            }
-        }
-    }
-    false
+    looks_like_task_raw(&page.raw)
+}
+
+/// [`looks_like_task`] over a page's raw text — so a caller holding a
+/// live `vault::VaultPage` can test it **before** paying for
+/// `to_proto`, which clones the whole page. One discriminator for both
+/// shapes: `task_proto::doc::looks_like_task`, which reads only the two
+/// keys it decides on.
+#[must_use]
+pub fn looks_like_task_raw(raw: &str) -> bool {
+    task_proto::doc::looks_like_task(raw)
 }
 
 /// Parse the raw bytes of a task note (frontmatter + body) into
