@@ -104,3 +104,4 @@ mod watch_bridge_auth;
 mod watch_suggested_e2e;
 mod webdav_auth;
 mod wiki_editor_e2e;
+mod wiki_org_admin_e2e;

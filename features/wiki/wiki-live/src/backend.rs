@@ -68,6 +68,11 @@ pub trait Caller: Send + Sync + 'static {
     fn principal(&self) -> Option<String>;
     /// Whether the caller holds the org's admin role. Admins may grant
     /// Editor and change what the set holds (`wiki.edit.editor`).
+    ///
+    /// The lanes' own callers (`GateCaller`, the server's MCP caller)
+    /// leave this `false` and say only who is calling; the org's roles,
+    /// injected with [`WikiBackend::with_org_roles`], answer for that
+    /// principal. Override it only to pin an admin in a test.
     fn is_org_admin(&self) -> bool {
         false
     }
@@ -79,6 +84,20 @@ pub trait Caller: Send + Sync + 'static {
     fn is_org_member(&self) -> bool {
         true
     }
+}
+
+/// The owning org's roles, as the wiki lane needs them: is this account
+/// an owner or admin of the org (`wiki.edit.editor`)?
+///
+/// The org's membership rows live with the server, not with the wiki,
+/// so the server injects this with [`WikiBackend::with_org_roles`]. It
+/// is asked about the principal whichever [`Caller`] supplied — the
+/// gate's on the vox lane, the MCP key's on the tool lane — so every
+/// lane reads the same rows. Implementations fail closed: a lookup that
+/// cannot be made is `false`, never a default role.
+pub trait OrgRoles: Send + Sync + 'static {
+    /// Whether `principal` holds the org's `owner` or `admin` role.
+    fn is_admin(&self, principal: &str) -> bool;
 }
 
 /// Run work that may take a while — a graph build, a search, a git
@@ -124,6 +143,10 @@ impl Caller for GateCaller {
 pub struct WikiBackend {
     layout: Layout,
     caller: Arc<dyn Caller>,
+    /// Who holds the owning org's admin role, when the server said
+    /// (see [`OrgRoles`]). `None` answers nobody: only a [`Caller`] that
+    /// says so itself is an admin.
+    org_roles: Option<Arc<dyn OrgRoles>>,
     /// Watcher state per wiki — `true` = watcher running.
     /// Implementation is stub-level (just records the
     /// toggle); spawning the actual watcher thread happens
@@ -200,6 +223,16 @@ impl WikiBackend {
         self
     }
 
+    /// Read the owning org's roles from `roles`, so an owner or admin
+    /// may grant and revoke Editor (`wiki.edit.editor`) on every lane.
+    /// Survives [`Self::with_caller`]: the caller says who is calling,
+    /// this says what that account is in the org.
+    #[must_use]
+    pub fn with_org_roles(mut self, roles: Arc<dyn OrgRoles>) -> Self {
+        self.org_roles = Some(roles);
+        self
+    }
+
     /// Run `hook` after every successful `create_wiki`, with the new
     /// wiki's slug and root. The server uses it to register the
     /// directory as a vault-sync root (`wiki:<slug>`) so the editor
@@ -222,6 +255,7 @@ impl WikiBackend {
         Self {
             layout,
             caller: Arc::new(GateCaller),
+            org_roles: None,
             watch_flags: Arc::new(std::sync::Mutex::new(HashMap::new())),
             changes: architect::PubSub::sliding(256),
             on_created: None,
@@ -257,10 +291,18 @@ impl WikiBackend {
         self.caller.principal()
     }
 
-    /// Whether the caller holds the org's admin role.
+    /// Whether the caller holds the org's admin role: the caller says
+    /// so itself, or the org's roles say so of the caller's principal.
+    /// An in-process call (no principal) is no admin by the roles.
     #[must_use]
     pub fn caller_is_org_admin(&self) -> bool {
-        self.caller.is_org_admin()
+        if self.caller.is_org_admin() {
+            return true;
+        }
+        match (&self.org_roles, self.caller.principal()) {
+            (Some(roles), Some(principal)) => roles.is_admin(&principal),
+            _ => false,
+        }
     }
 
     /// Whether the caller is a member of the owning org.
