@@ -1,7 +1,7 @@
 # Task iOS TestFlight — build the Task iPhone app + its embedded watchOS
 # companion and upload to TestFlight when a release tag `vX.Y.Z` is pushed.
-# A push to main builds nothing: main holds finished features, a release is
-# a tag (skills/release-workflow.md).
+# A push to main builds nothing: a release is a tag (fleet
+# `release-workflow` skill; skills/release-workflow.md).
 #
 # Runs on the SAME self-hosted airlock Mac as the audio app's `ios.yml`, and
 # shares its `ios-testflight` concurrency group so the single Mac never runs
@@ -88,8 +88,8 @@ jobs:
           clean: false
           fetch-depth: 0
 
-      # A pushed tag must be a release commit on main (tag == v<Cargo
-      # version>, CHANGELOG section present). Without this a stray v* tag
+      # A pushed tag must be a release commit on main or a release/v*
+      # hotfix branch (tag == v<Cargo version>, CHANGELOG section present). Without this a stray v* tag
       # on a branch would build TestFlight. A manual dispatch is exempt.
       - name: Tag guard
         if: ${{ github.event_name == 'push' }}

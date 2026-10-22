@@ -17,17 +17,18 @@
 #
 # There is no change-gating: a release tag always deploys what it names.
 #
-# RELEASES. Under the release model (skills/release-workflow.md) a push to
-# main deploys NOTHING: main holds finished features (promoted from dev,
-# checked and reviewed), and production is the latest `v*` TAG. This runs
-# when a release tag `vX.Y.Z` is pushed (`just release-tag`, on main after the
-# release PR merged) or is dispatched with that tag as its ref (a re-run, or
-# a rollback by deploying an older tag). The images built below carry the
-# version tag `v<Cargo.toml version>` beside `sha-<short>`; once "Verify
-# live" passes the `release` job publishes the GitHub Release (release.yml)
-# and node-binaries.yml attaches the headless node binaries. The first step
-# checks the tag is a release commit on main (scripts/release.sh tag-guard),
-# so a stray tag cannot reach production.
+# RELEASES (fleet flow v4, the `release-workflow` skill). A push to main
+# deploys NOTHING: production is the latest `v*` TAG (CalVer vYY.M.MICRO).
+# This runs when a release tag is pushed (`just release-tag`, on the release
+# PR's squash commit on main, or on a release/v* hotfix branch, once that
+# commit's full suite is green) or is dispatched with that tag as its ref (a
+# re-run, or a rollback by deploying an older tag; a branch ref skips every
+# job). The images built below carry the version tag `v<Cargo.toml version>`
+# beside `sha-<short>`; once "Verify live" passes the `release` job publishes
+# the GitHub Release (release.yml) and node-binaries.yml attaches the
+# headless node binaries. The first step checks the tag is a release commit
+# on main or a release/v* branch (scripts/release.sh tag-guard), so a stray
+# tag cannot reach production.
 #
 # THE `production` BRANCH. starcommand's Argo CD `task` Application follows
 # the `production` branch of this repo (deploy/chart/task), not `main`, so
@@ -101,11 +102,12 @@ jobs:
       # than the mirror-lag handling the old version needed.
       - uses: actions/checkout@v4
         with:
-          # The tag guard walks main's history.
+          # The tag guard walks main's and release/v*'s history.
           fetch-depth: 0
 
-      # The tag must be `v<Cargo.toml version>` on a commit of main that
-      # carries that version's CHANGELOG section: a release commit.
+      # The tag must be `v<Cargo.toml version>` on a commit of main (or of a
+      # release/v* hotfix branch) that carries that version's CHANGELOG
+      # section: a release commit.
       - name: Tag guard
         run: bash scripts/release.sh tag-guard
 

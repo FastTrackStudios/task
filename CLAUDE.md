@@ -112,39 +112,30 @@ Committed audio is generated reproducibly by
 `python3 examples/studio/tools/gen_audio.py` (12 kHz mono WAVs, small
 enough for git). Add new songs there, never by hand.
 
-## The PR gate
+## Branches, PRs and releases
 
-**`main` is finished features, `dev` is integration, a `v*` tag is a release** — the whole procedure,
-with what the reviewer checks, is `skills/release-workflow.md`. In short:
-card PRs go **into `dev`**, and CI does **not** build them. The gate for a
-card is `just ci`, run by you on the final tree in the host's canonical
-warm checkout, under the build lease, and recorded on the card:
+Fleet flow v4: the **`release-workflow` fleet skill** is the source of
+truth (branch names, PR titles, change files, CalVer, hotfixes, rollback);
+Task's specifics are in `skills/release-workflow.md`. In short:
 
-```bash
-git fetch origin && git rebase origin/dev
-just ci        # ci-fmt, ci-manifests, ci-tests, ci-clippy, ci-wasm
-```
+- `main` is the only long-lived branch. Branch from `origin/main`
+  (`<type>/<sta-123|no-issue>-<slug>`), open a draft PR **into `main`** with
+  a conventional-commit title and the template filled in, and add a change
+  file for every crate you touched:
 
-The check set lives in the `Justfile`, one recipe per check, and the
-`checks` workflow invokes those same recipes — so a pass here is the
-gate's answer for the price of a local build. `checks` itself runs on
-THEBATTLESHIP (self-hosted, the `task`-labelled runners, which share the
-machine and its dev drive with a dozen other repos) only for PRs into
-`main` (the `dev -> main` promotion and hotfixes; a version-only release
-commit skips the heavy job), nightly on dev, and by hand
-(`gh workflow run checks.yml --ref <branch> -f base=dev`).
+  ```bash
+  git fetch origin && git switch -c fix/sta-123-slug origin/main
+  cargo rail change add <crates> --bump <none|patch|minor|major> -m "Fixed …"
+  gh pr create --draft --base main --title "fix(files): …"
+  ```
 
-Open the PR into dev with a conventional-commit title (it becomes the
-squash commit and the changelog line; `pr-title` checks it):
-
-```bash
-gh pr create --base dev --title "fix(files): …" --body "Card <id>: just ci passed on <sha>"
-```
-
-The reviewer squash-merges it once the card's evidence matches the PR head.
-There is no skip token: promotion PRs always run the full set. A push to
-`main` deploys nothing; production changes only when a `v*` tag is pushed
-(`just release-tag`).
+- CI (`checks`, on THEBATTLESHIP's warm runners) is the gate: fmt,
+  `cargo rail change check`, the affected tests (`cargo rail plan`),
+  clippy, wasm, docs. A local `just ci` under the build lease is optional.
+  PRs squash-merge; the full suite runs after every merge to `main`.
+- A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
+  `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
+  a push to `main` deploys nothing.
 
 Never use GitHub's own skip tokens here — the bracketed `skip ci`,
 `ci skip`, `no ci`, `skip actions` and `actions skip` forms. They are

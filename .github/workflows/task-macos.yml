@@ -93,8 +93,8 @@ jobs:
           clean: false
           fetch-depth: 0
 
-      # A pushed tag must be a release commit on main (tag == v<Cargo
-      # version>, CHANGELOG section present). Without this a stray v* tag
+      # A pushed tag must be a release commit on main or a release/v*
+      # hotfix branch (tag == v<Cargo version>, CHANGELOG section present). Without this a stray v* tag
       # on a branch would build TestFlight. A manual dispatch is exempt.
       - name: Tag guard
         if: ${{ github.event_name == 'push' }}
@@ -199,8 +199,8 @@ jobs:
           clean: false
           fetch-depth: 0
 
-      # A pushed tag must be a release commit on main (tag == v<Cargo
-      # version>, CHANGELOG section present). Without this a stray v* tag
+      # A pushed tag must be a release commit on main or a release/v*
+      # hotfix branch (tag == v<Cargo version>, CHANGELOG section present). Without this a stray v* tag
       # on a branch would build TestFlight. A manual dispatch is exempt.
       - name: Tag guard
         if: ${{ github.event_name == 'push' }}

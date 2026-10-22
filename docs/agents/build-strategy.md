@@ -18,7 +18,7 @@ drive on btrfs `compress=zstd:1`), Rust 1.98.1, Task @ 145c8c9, October
   no one else's branch switching invalidates your tree.
 - **Never point two checkouts at one target dir** (`CARGO_TARGET_DIR`).
 - **The canonical tree is the seed.** Keep `/run/media/Development/task`
-  at `origin/dev`, warm (check + test build). Worktrees from branches on
+  at `origin/main`, warm (check + test build). Worktrees from branches on
   the same release version reuse every dependency and every crate their
   diff doesn't reach.
 - Third-party dependencies build **without debuginfo**
@@ -44,7 +44,7 @@ rebuild:
 2. **The workspace version.** A release bump (0.2.0 → 0.2.2) changes every
    workspace unit's hash, so a branch on another release rebuilds all 188
    crates whatever its mtimes. That's why the canonical tree should sit at
-   `origin/dev`: card branches start from there.
+   `origin/main`: branches start from there.
 3. **Absolute paths in dep-info** for files outside a package
    (`include_dir!("../../examples/studio")`): a target built from another
    checkout points at that checkout's files, and once it's gone those
@@ -136,7 +136,7 @@ build slows down by the same factor.
 ## Agent workflow (once slots = 2)
 
 ```bash
-wt-new t_1234abcd origin/dev -b fix/thing    # worktree + warm target, ~10 s
+wt-new t_1234abcd origin/main -b fix/sta-123-thing    # worktree + warm target, ~10 s
 cd /run/media/Development/wt/t_1234abcd
 build-lease acquire t_1234abcd               # a slot, not the whole host
 nix develop --command just ci
@@ -146,7 +146,7 @@ wt-rm t_1234abcd                              # frees what this card wrote
 ```
 
 The canonical tree is never a card's working copy. A refresh job
-(after each merge to dev, under the lease) checks it out at `origin/dev`
+(after each merge to main, under the lease) checks it out at `origin/main`
 and runs check + the test build, so the next `wt-new` starts warm.
 
 ## Bounding target dirs (`scripts/target-sweep.py`)

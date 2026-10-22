@@ -1,8 +1,9 @@
 # cargo-rail policy (0.32). Sparse: only what differs from rail's defaults.
 # Docs: https://github.com/loadingalias/cargo-rail/blob/v0.32.0/docs/config.md
 #
-# Task uses rail for ONE thing: CI change selection (`cargo rail plan`,
-# see the `plan` job in .github/workflows/checks.yml). Commands stay in the
+# Task uses rail for CI change selection (`cargo rail plan`, see the `plan`
+# job in .github/workflows/checks.yml) and for change files (`cargo rail
+# change add` / `change check`, .changes/README). Commands stay in the
 # Justfile; this file only declares inputs.
 
 # The browser build is a first-class target (task-app-web, task-dial,
@@ -10,13 +11,16 @@
 # for it too.
 targets = ["wasm32-unknown-unknown"]
 
-# Releases go through scripts/release.sh (release-workflow). rail 0.32's
-# default would publish to crates.io and create GitHub releases; make
-# `cargo rail release` inert here.
+# App releases go through scripts/release.sh (fleet `release-workflow`
+# skill): rail 0.32 cannot bump an inherited `version.workspace = true`.
+# release.sh reads rail's change files (`source = "changes"`) for the
+# CHANGELOG. rail's default would publish to crates.io and create GitHub
+# releases; make `cargo rail release` inert here.
 [release]
 publish = "none"
 github_release = false
 checks = "none"
+source = "changes"
 
 # Inputs outside the Cargo graph that change what CI itself does. Any of
 # these changing makes the plan job run the FULL set (workflows, the

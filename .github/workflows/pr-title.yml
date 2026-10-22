@@ -1,12 +1,10 @@
-# PR title — card PRs into `dev` (and fix PRs into an open `release/v*`
-# branch) are squash-merged, so the PR TITLE becomes the one commit
-# subject, and git-cliff turns that subject into the release's changelog
-# line (cliff.toml). This checks the title is a conventional commit
-# before the squash bakes it in.
+# PR title — every PR is squash-merged ("PR title and description"), so
+# the PR TITLE becomes the one commit subject on main (or on a release/v*
+# hotfix branch). This checks it is a conventional commit before the
+# squash bakes it in. Release notes come from the PR's `.changes/*.md`
+# change file, not from the title (fleet `release-workflow` skill).
 #
-# It is the only thing that runs on a card PR, and it compiles nothing: a
-# hosted runner, a regex, seconds. The build gate for a card is the
-# worker's `just ci` evidence on the card (skills/release-workflow.md).
+# A hosted runner, a regex, seconds.
 #
 #   feat(files): a device that syncs the audio and leaves the footage
 #   fix: the share list keys by commit
@@ -19,7 +17,7 @@ name: pr-title
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [main, "release/**"]
     types: [opened, edited, reopened, synchronize]
 
 permissions:
