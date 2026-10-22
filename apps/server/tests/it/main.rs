@@ -110,6 +110,7 @@ mod presence_relay;
 mod ranged_routes_e2e;
 mod rename_org;
 mod rendition_route;
+mod safe_saves_e2e;
 mod scheduling_durability;
 mod schema_stamps_e2e;
 #[cfg(feature = "plugin-scripture")]

@@ -1295,6 +1295,10 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
                                        its other arrangements. Omitting it means no opinion: a \
                                        chart that is already the default stays it, and a \
                                        song's first chart becomes it regardless."),
+                        "revision": s_("The `revision` read_chart returned. Pass it when \
+                                        editing: if anyone saved the chart since, the write \
+                                        is refused as stale instead of overwriting their \
+                                        work. Omit only when creating a chart."),
                     }),
                     &["title", "source"],
                 )
@@ -5228,6 +5232,11 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
         resources_proto::ResourcesError::NotFound(s) => ToolFailure::Message(format!(
             "no chart matching `{s}`. Call list_charts and use a slug from its result."
         )),
+        resources_proto::ResourcesError::Stale(now) => ToolFailure::Message(format!(
+            "couldn't {what} `{subject}`: somebody saved it since you read it (it is now at \
+             revision `{now}`). Nothing was written. Call read_chart again, merge your \
+             change into the current source, and write with the new `revision`."
+        )),
         other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
     };
 
@@ -5283,6 +5292,7 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "arrangement": doc.arrangement,
                 "is_default": doc.is_default,
                 "updated_at": doc.updated_at,
+                "revision": doc.revision,
             }))
         }
 
@@ -5294,6 +5304,7 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 .ok_or_else(|| ToolFailure::Message("`source` is required".into()))?
                 .to_string();
             let doc = ChartDoc {
+                revision: arg_str(args, "revision").unwrap_or_default(),
                 slug: arg_str(args, "slug").unwrap_or_default(),
                 title,
                 source,
@@ -5327,6 +5338,7 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "song": song,
                 "is_default": is_default,
                 "node": format!("chart:{}", out.slug),
+                "revision": out.revision,
             }))
         }
 

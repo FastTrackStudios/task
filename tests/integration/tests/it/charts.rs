@@ -45,6 +45,7 @@ const BE_THOU: &str = "[Verse]\n| Eb | Bb | Cm | Ab |\n";
 /// declared rather than parsed (the server reads nobody's source).
 fn chart(title: &str, source: &str, sections: &[&str]) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         source: source.into(),
@@ -63,6 +64,7 @@ fn chart(title: &str, source: &str, sections: &[&str]) -> ChartDoc {
 /// be that song's main one.
 fn arrangement(title: &str, song: &str, label: &str, is_default: bool) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         song: song.into(),
         arrangement: label.into(),
         is_default,
@@ -362,6 +364,7 @@ async fn a_song_carries_arrangements_and_exactly_one_of_them_is_the_default() {
         .resources()
         .await
         .upsert_chart(ChartDoc {
+            revision: String::new(),
             slug: live.slug.clone(),
             ..arrangement("Doxology", "song:doxology", "condensed live", true)
         })
@@ -544,6 +547,7 @@ async fn a_song_and_its_arrangements_join_by_reference_and_nothing_lists_twice()
         .resources()
         .await
         .upsert_song(resources_proto::SongDoc {
+            revision: String::new(),
             slug: String::new(),
             title: "Opening Night".into(),
             writers: vec!["A. Wright".into()],

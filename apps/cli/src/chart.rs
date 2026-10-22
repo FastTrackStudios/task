@@ -150,6 +150,7 @@ pub async fn run_chart(cmd: ChartCmd, global_org: Option<&str>) -> eyre::Result<
             let client = client(org_of(org), server).await?;
             let out = client
                 .upsert_chart(ChartDoc {
+                    revision: String::new(),
                     slug,
                     title,
                     source,

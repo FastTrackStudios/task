@@ -28,5 +28,10 @@ default = ["vox"]
 vox = ["dep:vox", "dep:vox-types", "architect/vox"]
 full = ["vox"]
 
+[dev-dependencies]
+# Wire-compat tests: decode the shapes apps shipped before revisions
+# through the writer→reader compat program vox uses.
+vox-phon = "0.10.0-rc.7"
+
 [lints]
 workspace = true

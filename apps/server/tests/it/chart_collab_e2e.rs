@@ -61,6 +61,7 @@ const SOURCE: &str = "[Verse]\n| G | C | D | G |\n";
 
 fn chart(title: &str) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         source: SOURCE.into(),

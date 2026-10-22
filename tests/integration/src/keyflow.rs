@@ -66,6 +66,7 @@ impl Keyflow<'_> {
             .resources()
             .await
             .upsert_song(SongDoc {
+                revision: String::new(),
                 slug: String::new(),
                 title: title.trim().to_owned(),
                 writers: Vec::new(),
@@ -84,6 +85,7 @@ impl Keyflow<'_> {
             .resources()
             .await
             .upsert_chart(ChartDoc {
+                revision: String::new(),
                 slug: chart.slug.to_owned(),
                 title: chart.title.to_owned(),
                 source: chart.source.to_owned(),

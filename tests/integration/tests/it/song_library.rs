@@ -70,6 +70,7 @@ const LIVE_TRACKS: &str = "live-tracks";
 
 fn song(title: &str, key: &str) -> resources_proto::SongDoc {
     resources_proto::SongDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         writers: vec!["Alice".into()],
