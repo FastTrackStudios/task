@@ -1,0 +1,229 @@
+# Images: build task-server + task-web and push them to GHCR, BEFORE the
+# release tag exists.
+#
+#   ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
+#   ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
+#
+# starcommand's Argo CD `task` Application follows the newest `v*` tag of
+# this repo (deploy/chart/task) with `image.registry:
+# ghcr.io/fasttrackstudios` and no tag override, so the chart at tag vX.Y.Z
+# pulls `:<its appVersion>` = `:X.Y.Z` (scripts/ghcr-images.sh). Argo sees a
+# new tag within minutes, so the images must already be there. Hence:
+#
+#   release PR squash-merges -> push of `chore(release): vX.Y.Z` to main
+#     (or to release/v* for a hotfix release)
+#     -> this workflow builds and pushes `:X.Y.Z` (+ `sha-<short>`, `latest`)
+#   just release-tag  -> refuses until both images `:X.Y.Z` are on GHCR,
+#                        public, and labelled with the release commit
+#     -> pushes vX.Y.Z (fts-forge) -> Argo deploys it; deploy.yml verifies
+#        live and publishes the GitHub Release, binaries, desktop cache
+#
+# A push that does not change the version builds nothing. Versions are
+# CalVer (26.10.0): the image tag is the bare version, no `v`.
+#
+# workflow_dispatch with `tag`: build and push the images for an EXISTING
+# release tag from that tag's source, tagged with what the chart at that
+# tag renders. Creates no git tag. For seeding GHCR (the cutover from the
+# LAN registry: v0.2.4's chart says appVersion 0.1.0, so its images are
+# `:0.1.0`) or re-publishing a lost image.
+#
+#   gh workflow run images.yml -R FastTrackStudios/task --ref main -f tag=v0.2.4
+#
+# Packages pushed with GITHUB_TOKEN are created PRIVATE; the org must make
+# task-server and task-web public once, or the cluster cannot pull them
+# (and `ghcr-images.sh check`, which is anonymous, fails).
+
+name: images
+
+on:
+  push:
+    # main: a release PR's squash commit. release/v*: a hotfix release
+    # (fleet flow v4), tagged on that branch.
+    branches: [main, "release/v*"]
+    # A release commit always changes Cargo.toml's version.
+    paths: [Cargo.toml]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)publish images for, e.g. v0.2.4"
+        required: true
+        type: string
+
+# One build at a time: the runner's release target dir is shared.
+concurrency:
+  group: images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: What to publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      sha: ${{ steps.plan.outputs.sha }}
+      tags: ${{ steps.plan.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --tags origin
+          if [ "$EVENT" = workflow_dispatch ]; then
+            [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$INPUT_TAG' is not vX.Y.Z"; exit 1; }
+            sha="$(git rev-parse --verify --quiet "refs/tags/$INPUT_TAG^{commit}")" \
+              || { echo "::error::no tag $INPUT_TAG"; exit 1; }
+            v="$(bash scripts/release.sh version "$sha")"
+            [ "v$v" = "$INPUT_TAG" ] || { echo "::error::$INPUT_TAG names a commit with version $v"; exit 1; }
+            extra=""
+          else
+            sha="$GITHUB_SHA"
+            v="$(bash scripts/release.sh version "$sha")"
+            vp="$(bash scripts/release.sh version "$sha^1")"
+            if [ "$v" = "$vp" ]; then
+              echo "version unchanged ($v): not a release commit, nothing to publish"
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git show "$sha:CHANGELOG.md" | grep -q "^## \[$v\]" \
+              || { echo "::error::version $vp -> $v but CHANGELOG.md has no [$v] section: not a release commit"; exit 1; }
+            ! git rev-parse -q --verify "refs/tags/v$v" >/dev/null \
+              || { echo "::error::tag v$v already exists; a released version's images are never replaced"; exit 1; }
+            extra="latest"
+          fi
+          # The tag the chart at this commit renders, and must find.
+          itag="$(bash scripts/ghcr-images.sh tag "$sha")"
+          if [ "$EVENT" != workflow_dispatch ] && [ "$itag" != "$v" ]; then
+            echo "::error::Chart.yaml appVersion is $itag but the release is $v: the chart would pull the wrong images"
+            exit 1
+          fi
+          tags="$itag"
+          [ "$v" = "$itag" ] || tags="$tags $v"
+          tags="$(xargs <<<"$tags sha-$(git rev-parse --short "$sha") $extra")"
+          echo "publishing $sha as: $tags"
+          {
+            echo "build=true"
+            echo "sha=$sha"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+          echo "### Images for v$v: \`$tags\` from \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Build + push to GHCR
+    needs: plan
+    if: ${{ needs.plan.outputs.build == 'true' }}
+    # Task's deploy runner (the Mac Pro VM): its warm release target dir
+    # under $CI_CACHE_DIR makes a release rebuild only what changed. It
+    # needs internet, nothing on the LAN.
+    runs-on: [self-hosted, task-deploy]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Newer skopeo rejects some hosts' v1 registries.conf; we name the
+      # registry explicitly everywhere, so use an empty (valid) config.
+      CONTAINERS_REGISTRIES_CONF: /dev/null
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+
+      # The release binary and the web bundle are built HERE, in the dev
+      # shell, against a target dir that persists on the runner's disk, so
+      # a release recompiles what changed since the last one. Nix only
+      # assembles the images from these outputs
+      # (nix/modules/packages/prebuilt-images.nix). The pure
+      # `.#task-*-image` attributes remain for a cold machine.
+      - name: Build release artifacts
+        id: build
+        run: |
+          set -euo pipefail
+          dir="${CI_CACHE_DIR:-$HOME/cargo-target}/release"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          export CARGO_TARGET_DIR="$dir"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+          # Each build runs as a build kind (scripts/target-sweep.py): it
+          # records the units it used, and "Bound the target dir" keeps
+          # exactly the latest server + web builds.
+          nix develop --accept-flake-config .#ci -c \
+            python3 scripts/target-sweep.py run deploy-server -- \
+            cargo build --release -p task-server
+          # tailwind first: dx reads assets/ before cargo runs. (Older tags,
+          # e.g. v0.2.4, predate architect-ui-link.sh.)
+          nix develop --accept-flake-config .#default -c \
+            python3 scripts/target-sweep.py run deploy-web -- bash -c '
+            set -e
+            if [ -f scripts/architect-ui-link.sh ]; then bash scripts/architect-ui-link.sh; fi
+            (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
+            cd apps/web
+            dx build --release --platform web --debug-symbols false \
+              --wasm-split --features wasm-split'
+          # dx writes under the cargo target dir: <target>/dx/<app>/release/web/public.
+          web="$dir/dx/task-app-web/release/web/public"
+          test -f "$web/index.html" || { echo "::error::dx wrote no web bundle at $web"; exit 1; }
+          echo "server=$dir/release/task-server" >> "$GITHUB_OUTPUT"
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          ls -la "$dir/release/task-server"; du -sh "$web"
+          # The image's payload reports the release's version, and
+          # answering `--version` must not boot it.
+          bash scripts/check-versions.sh --bin "$dir/release/task-server"
+
+      - name: Push images
+        env:
+          TASK_PREBUILT_SERVER_BIN: ${{ steps.build.outputs.server }}
+          TASK_PREBUILT_WEB_ROOT: ${{ steps.build.outputs.web }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export REGISTRY_AUTH_FILE="$RUNNER_TEMP/ghcr-auth.json"
+          skopeo() { nix run nixpkgs#skopeo -- "$@"; }
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io -u "$GHCR_USER" --password-stdin
+          read -r -a tags <<<"$TAGS"
+          for img in task-server task-web; do
+            echo "── $img ──"
+            dest="docker://ghcr.io/fasttrackstudios/$img"
+            streamer="$(nix build --impure ".#${img}-image-prebuilt" --no-link --print-out-paths)"
+            "$streamer" | skopeo --insecure-policy copy docker-archive:/dev/stdin "$dest:${tags[0]}"
+            for tag in "${tags[@]:1}"; do
+              skopeo --insecure-policy copy "$dest:${tags[0]}" "$dest:$tag"
+            done
+          done
+          rm -f "$REGISTRY_AUTH_FILE"
+
+      # A persistent release target dir grows without bound otherwise. Keep
+      # the latest build of each kind (deploy-server, deploy-web).
+      - name: Bound the target dir
+        if: ${{ always() }}
+        run: |
+          rm -rf "${CARGO_TARGET_DIR}/release/incremental"
+          nix develop --accept-flake-config .#ci -c python3 scripts/target-sweep.py sweep --protect-hours 0 || true
+          du -sh "${CARGO_TARGET_DIR}" || true
+
+      # What `just release-tag` will check: anonymous pull + revision.
+      # Fails (with the reason) while the packages are still private.
+      - name: Pullable without credentials?
+        env:
+          TAGS: ${{ needs.plan.outputs.tags }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          first="${TAGS%% *}"
+          if [ -f scripts/ghcr-images.sh ]; then
+            bash scripts/ghcr-images.sh check "$first" "$SHA" \
+              || { echo "::warning::not anonymously pullable yet: make ghcr.io/fasttrackstudios/task-server and task-web PUBLIC (org package settings)"; exit 1; }
+          else
+            echo "this tag predates scripts/ghcr-images.sh; skipped"
+          fi

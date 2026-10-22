@@ -187,8 +187,9 @@ release-prepare *ARGS:
 release-pr:
     bash scripts/release.sh pr
 
-# After the release PR merged and its full suite is green: tag
-# v<version> on the merge commit. THE TAG DEPLOYS. Pushes as whoever you
+# After the release PR merged, its full suite is green and images.yml
+# pushed its images to GHCR (it refuses otherwise): tag v<version> on the
+# merge commit. THE TAG DEPLOYS. Pushes as whoever you
 # are: use the fts-forge bot or a person, never a workflow token (that
 # starts no workflow). A hotfix tag also opens the forward-port PR.
 release-tag *VERSION:

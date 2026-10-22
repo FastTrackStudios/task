@@ -24,9 +24,9 @@ hotfix while main can't ship: release/v<latest tag> <-- cherry-pick -x from main
 | PR into `main` | `pr-title`; `checks`: plan (`cargo rail plan` against the base), fmt, `cargo rail change check`, affected tests, clippy, wasm, docs; aggregator **`Checks (fmt + tests + clippy + wasm + docs)`** (required); `release` guard (passes at once unless the head is `release/pending`) |
 | PR `release/pending` → `main` (one commit) | release guard (from the BASE commit's `scripts/release.sh`); `checks` skips the heavy jobs (version + changelog only) |
 | PR into `release/v*` (hotfix) | `pr-title`, the FULL `checks`, release guard |
-| push to `main` or `release/v*` | FULL `checks` + rail evidence for the commit; `release-tag` needs its aggregator green |
+| push to `main` or `release/v*` | FULL `checks` + rail evidence for the commit; `release-tag` needs its aggregator green. If the push is a release commit (the version changed): `images` builds and pushes `ghcr.io/fasttrackstudios/task-{server,web}:<version>`; `release-tag` needs those too |
 | nightly 10:17 UTC | FULL `checks` on `main` |
-| tag `vYY.M.MICRO` | `deploy` (tag guard → build → images → Verify live → GitHub Release → node binaries, desktop cache), `task-ios`, `task-macos` (TestFlight, `desktop-v*`) |
+| tag `vYY.M.MICRO` | starcommand's Argo `task` app deploys the chart at the newest tag (images `:<appVersion>` = `:<version>`); `deploy` (tag guard → images on GHCR? → Verify live → GitHub Release → node binaries, desktop cache), `task-ios`, `task-macos` (TestFlight, `desktop-v*`) |
 
 Nothing deploys on a merge. Production is the latest `v*` tag.
 
@@ -103,13 +103,14 @@ deletes the consumed change files there. `release/*` is never merged back.
 
 ## Rollback
 
-Get the Captain's yes/no first (target version, what restarts). Then
-`gh workflow run deploy.yml --ref v<previous>`: it rebuilds that tag and
-moves the `production` branch (which starcommand's Argo `task` app follows)
-back. A release that carried migrations needs the pre-release data backup
-restored, or a forward fix as a hotfix. Never move or delete a tag; fix
-forward and release a new version. The `production` branch is moved only
-by `deploy.yml`.
+Get the Captain's yes/no first (target version, what restarts).
+starcommand's Argo `task` app follows the NEWEST `v*` tag, so production
+moves back by releasing a revert (or, in an emergency, by pinning that
+app's `targetRevision` to `v<previous>` in starcommand; its images
+`ghcr.io/fasttrackstudios/task-*:<previous>` stay on GHCR). A release that
+carried migrations needs the pre-release data backup restored, or a forward
+fix as a hotfix. Never move or delete a tag; fix forward and release a new
+version.
 
 ## Don'ts
 

@@ -1,105 +1,63 @@
-# Deploy — pure-Nix OCI images pushed to the in-cluster registry, rolled
-# out by ArgoCD + argocd-image-updater (digest strategy on the channel tag).
+# Deploy: a release tag goes live. Production is the latest `v*` tag.
 #
-#   task-server  -> registry.starcommand.live:30050/task-server
-#   task-web     -> registry.starcommand.live:30050/task-web
+# starcommand's Argo CD `task` Application follows the newest `v*` tag of
+# this repo (deploy/chart/task, `targetRevision: "*"`) and renders the
+# chart with `image.registry: ghcr.io/fasttrackstudios` and no tag
+# override, so the tag itself is the deploy: Argo pulls
 #
-# The in-cluster registry is NOT reachable from GitHub-hosted runners, so
-# this runs on Task's own SELF-HOSTED runners (label `task`) on
-# THEBATTLESHIP — declared in the fleet's github-runner module, one pool
-# per project so a deploy here never queues another project's checks.
+#   ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
+#   ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
 #
-# GitHub Deployments: the `environment:` block registers a real Deployment,
-# so runs appear under the repo's Deployments panel and Environments tab
-# with a link to the live app. The deployment only goes green after
-# "Verify live" passes — so "Active" in GitHub means the cluster is
-# actually SERVING this sha, not merely that images were pushed.
+# (the chart's appVersion, which the release commit sets). Those images
+# are built and pushed by images.yml when the release commit lands on
+# main, BEFORE the tag exists: `just release-tag` refuses to tag until
+# both are on GHCR, public, and built from the commit it tags. Nothing
+# here needs the LAN, so every job runs on a hosted runner.
 #
-# There is no change-gating: a release tag always deploys what it names.
+# Releases follow fleet flow v4 (the `release-workflow` skill): CalVer tags
+# vYY.M.MICRO on the release PR's squash commit on main, or on a release/v*
+# hotfix branch. This workflow, on the tag (`just release-tag` pushes it as
+# fts-forge once the commit's full suite is green; a tag pushed with
+# GITHUB_TOKEN would start nothing):
+#   1. checks the tag is a release commit (on main or a release/v* branch)
+#      and its images exist,
+#   2. waits for task.starcommand.live to serve the tagged commit (the
+#      GitHub Deployment goes Active only then),
+#   3. publishes the GitHub Release (release.yml), then the headless node
+#      binaries and the Linux desktop cache.
 #
-# RELEASES (fleet flow v4, the `release-workflow` skill). A push to main
-# deploys NOTHING: production is the latest `v*` TAG (CalVer vYY.M.MICRO).
-# This runs when a release tag is pushed (`just release-tag`, on the release
-# PR's squash commit on main, or on a release/v* hotfix branch, once that
-# commit's full suite is green) or is dispatched with that tag as its ref (a
-# re-run, or a rollback by deploying an older tag; a branch ref skips every
-# job). The images built below carry the version tag `v<Cargo.toml version>`
-# beside `sha-<short>`; once "Verify live" passes the `release` job publishes
-# the GitHub Release (release.yml) and node-binaries.yml attaches the
-# headless node binaries. The first step checks the tag is a release commit
-# on main or a release/v* branch (scripts/release.sh tag-guard), so a stray
-# tag cannot reach production.
-#
-# THE `production` BRANCH. starcommand's Argo CD `task` Application follows
-# the `production` branch of this repo (deploy/chart/task), not `main`, so
-# a chart change reaches the cluster at release time only. This workflow
-# is what moves that branch: after the images are pushed it points
-# `production` at the tagged commit (fast-forward for a release; a
-# `workflow_dispatch` of an older tag, i.e. a rollback, may move it back).
-# The branch is a pointer, never pushed to by hand and never a PR base.
+# Rollback: Argo deploys the NEWEST tag, so redeploying an old one is not
+# possible from here. Revert on main and cut a new release (or, in an
+# emergency, pin `targetRevision` in starcommand). A workflow_dispatch on
+# a tag re-runs the checks, the verification and the publishing.
 
 name: deploy
 
 on:
   push:
     tags: ["v[0-9]*.[0-9]*.[0-9]*"]
-  # Re-run a release, or roll back: run this workflow with an existing v*
-  # tag selected as the ref. A branch ref skips every job (the `if` below).
+  # Re-verify / re-publish a release: run this workflow with the v* tag
+  # selected as the ref. A branch ref skips every job (the `if` below).
   workflow_dispatch:
 
-# Never cancel a deploy mid-push; queue instead.
-# ONE group for production, not one per tag: two releases (or a rollback
-# dispatched beside a release) must not run side by side, or whichever
-# finishes last wins `:latest`.
+# Queue, never cancel: two releases must not verify side by side.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
 
-env:
-  # starcommand's NodePort registry, by address rather than by name.
-  #
-  # `registry.starcommand.live` resolves on the runner through a
-  # `networking.hosts` pin in THEBATTLESHIP's config, and that pin points
-  # at 10.10.10.1 — the direct 10G link between the two machines. Since
-  # starcommand rebooted on 2026-09-16 nothing crosses that link: both
-  # ends report the interface up with carrier, ICMP is 100% lost in both
-  # directions, and an ARP entry never gets past PROBE, so the fault is
-  # the switch or the cabling rather than either host.
-  #
-  # Every deploy since then died in "Push images" with
-  # `dial tcp 10.10.10.1:30050: connect: no route to host` — four of the
-  # last seven runs. The message names blob reuse and a container
-  # registry, so it reads like a registry fault; it is a dead cable.
-  #
-  # 192.168.1.112 is the same machine over the 1G LAN. Restore the
-  # hostname once the 10G path is back: pushing a few hundred megabytes
-  # of image is exactly what that link was for.
-  REGISTRY: 192.168.1.112:30050
-  # Newer skopeo rejects the host's v1 registries.conf; we name the
-  # registry explicitly everywhere, so use an empty (valid) config.
-  CONTAINERS_REGISTRIES_CONF: /dev/null
-
 jobs:
-  # Build + push on Task's runner, then let go of it: the wait for the
-  # cluster to roll happens on a hosted runner (below), so a slot here is
-  # held for the minutes the build takes, not the minutes Argo takes.
+  # The tag is a release commit, and the images the chart at it
+  # renders are on GHCR, pullable anonymously, built from this commit.
+  # (`just release-tag` checked the same before tagging; this catches a
+  # tag pushed some other way.)
   deploy:
-    # Only a release tag deploys (the guard step below checks it too).
+    name: Release tag + images
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    # Task's deploy runner, separate from its two checks runners: a
-    # deploy queued behind two PRs' checks sat 45 minutes on 2026-09-04
-    # while both slots compiled tests. Its release target dir is its
-    # own, which is also what keeps it warm between deploys.
-    runs-on: [self-hosted, task-deploy]
-    # contents: write only to move the `production` branch (last step
-    # before the target-dir sweep); the default token is read-only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
     steps:
-      # A plain checkout, unlike the monorepo's local-first clone. That
-      # existed because the monorepo is ~200 MB and the runner held a
-      # mirror of it; this repo is small enough that cloning is cheaper
-      # than the mirror-lag handling the old version needed.
       - uses: actions/checkout@v4
         with:
           # The tag guard walks main's and release/v*'s history.
@@ -111,121 +69,11 @@ jobs:
       - name: Tag guard
         run: bash scripts/release.sh tag-guard
 
-      - name: Compute tags
-        id: tags
-        run: |
-          echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          # The product version (one source: [workspace.package] in
-          # Cargo.toml) as an extra image tag, so rollback and audit can
-          # name "v0.2.0" instead of a short sha. The tag guard has proved
-          # it equals the git tag that started this run.
-          v="v$(bash scripts/release.sh version)"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      # The release binary and the web bundle are built HERE, in the dev
-      # shell, against a target dir that persists on the runner's disk —
-      # so a deploy recompiles what changed since the last one, not the
-      # workspace. The pure `.#task-server-image` rebuilt everything inside
-      # the Nix sandbox on every commit (crane's deps split is off for this
-      # workspace), which is where the 20–30 minutes went however warm the
-      # runner was. Nix now only assembles the images from these outputs
-      # (packages/prebuilt-images.nix); the pure attributes remain for a
-      # cold machine.
-      - name: Build release artifacts
-        id: build
+      - name: Images on GHCR
         run: |
           set -euo pipefail
-          dir="${CI_CACHE_DIR:-$HOME/cargo-target}/release"
-          mkdir -p "$dir"
-          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
-          export CARGO_TARGET_DIR="$dir"
-          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
-          # Each build runs as a build kind (scripts/target-sweep.py): it
-          # records the units it used, and "Bound the target dir" keeps
-          # exactly the latest server + web builds.
-          nix develop --accept-flake-config .#ci -c \
-            python3 scripts/target-sweep.py run deploy-server -- \
-            cargo build --release -p task-server
-          # tailwind first: dx reads assets/ before cargo runs.
-          nix develop --accept-flake-config .#default -c \
-            python3 scripts/target-sweep.py run deploy-web -- bash -c '
-            set -e
-            bash scripts/architect-ui-link.sh
-            (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
-            cd apps/web
-            dx build --release --platform web --debug-symbols false \
-              --wasm-split --features wasm-split'
-          # dx writes under the cargo target dir: <target>/dx/<app>/release/web/public.
-          web="$dir/dx/task-app-web/release/web/public"
-          test -f "$web/index.html" || { echo "::error::dx wrote no web bundle at $web"; exit 1; }
-          echo "server=$dir/release/task-server" >> "$GITHUB_OUTPUT"
-          echo "web=$web" >> "$GITHUB_OUTPUT"
-          ls -la "$dir/release/task-server"; du -sh "$web"
-          # The image's payload reports the version its `v<version>` tag
-          # names — and answering `--version` must not boot it.
-          bash scripts/check-versions.sh --bin "$dir/release/task-server"
-
-      - name: Push images
-        env:
-          TASK_PREBUILT_SERVER_BIN: ${{ steps.build.outputs.server }}
-          TASK_PREBUILT_WEB_ROOT: ${{ steps.build.outputs.web }}
-        run: |
-          set -euo pipefail
-          for img in task-server task-web; do
-            echo "── $img ──"
-            streamer="$(nix build --impure .#${img}-image-prebuilt --no-link --print-out-paths)"
-            "$streamer" | nix run nixpkgs#skopeo -- --insecure-policy copy \
-              --dest-tls-verify=false --dest-no-creds docker-archive:/dev/stdin \
-              "docker://${REGISTRY}/${img}:latest"
-            for tag in dev "${{ steps.tags.outputs.sha }}" ${{ steps.tags.outputs.version }}; do
-              nix run nixpkgs#skopeo -- --insecure-policy copy \
-                --src-tls-verify=false --src-no-creds \
-                --dest-tls-verify=false --dest-no-creds \
-                "docker://${REGISTRY}/${img}:latest" \
-                "docker://${REGISTRY}/${img}:${tag}"
-            done
-          done
-
-      # Chart and images roll together: Argo follows `production`, so the
-      # chart revision it deploys changes only here, AFTER the images this
-      # tag names are in the registry (a failed build moves nothing).
-      # A release moves the branch forward (fast-forward only, so a tag
-      # that is not a descendant of the live release fails loudly). A
-      # dispatch of an older tag is a rollback and may move it back.
-      # Re-running the same tag is a no-op.
-      - name: Point production at this tag
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          git fetch --quiet origin "+refs/heads/production:refs/remotes/origin/production" 2>/dev/null || true
-          head="$(git rev-parse HEAD)"
-          if ! git rev-parse --verify --quiet origin/production >/dev/null; then
-            echo "creating production at $head"
-            git push origin "HEAD:refs/heads/production"
-          elif [ "$(git rev-parse origin/production)" = "$head" ]; then
-            echo "production already at $head"
-          elif git merge-base --is-ancestor origin/production HEAD; then
-            echo "fast-forward production -> $head"
-            git push origin "HEAD:refs/heads/production"
-          elif [ "$EVENT" = "workflow_dispatch" ]; then
-            echo "rollback: moving production back to $head (was $(git rev-parse origin/production))"
-            git push --force-with-lease="production:$(git rev-parse origin/production)" origin "HEAD:refs/heads/production"
-          else
-            echo "::error::production ($(git rev-parse origin/production)) is not an ancestor of $head; refusing a non-fast-forward on a tag push (dispatch this tag to roll back)"
-            exit 1
-          fi
-
-      # Same discipline as checks: a persistent release target dir grows
-      # without bound otherwise. Keep the latest build of each kind
-      # (deploy-server, deploy-web) and nothing else — not a size cap,
-      # which evicts the warm set once the working set outgrows it.
-      - name: Bound the target dir
-        if: ${{ always() }}
-        run: |
-          rm -rf "${CARGO_TARGET_DIR}/release/incremental"
-          nix develop --accept-flake-config .#ci -c python3 scripts/target-sweep.py sweep --protect-hours 0 || true
-          du -sh "${CARGO_TARGET_DIR}" || true
+          tag="$(bash scripts/ghcr-images.sh tag)"
+          bash scripts/ghcr-images.sh check "$tag" "$GITHUB_SHA"
 
   # The GitHub Deployment goes Active only when the cluster serves this
   # commit — both halves, web and server — so "Active" keeps meaning
@@ -251,8 +99,8 @@ jobs:
           # 100 polls at 15s is 25 minutes, inside the job's 30.
           #
           # It was 60 — fifteen minutes — and that is under what a roll
-          # actually takes: argocd-image-updater notices the new digest on
-          # its own poll interval, and the deployment's Recreate strategy
+          # actually takes: Argo notices the new tag on its own poll
+          # interval (~3 minutes), and the deployment's Recreate strategy
           # then stops the old pod before starting the new one, pulling a
           # few hundred megabytes in between. Two consecutive deploys in
           # this series rolled perfectly and were still reported failed
@@ -269,7 +117,7 @@ jobs:
             sleep 15
           done
           if [ "$web" != "$want" ] || [ "$srv" != "$want" ]; then
-            echo "TIMED OUT: $url never served $want — check argocd-image-updater / rollouts"
+            echo "TIMED OUT: $url never served $want — check starcommand's Argo \`task\` Application (did it pick up the tag? ImagePullBackOff?)"
             exit 1
           fi
 
@@ -293,11 +141,12 @@ jobs:
 
   # Production serves this commit: publish the GitHub Release for the tag
   # (CHANGELOG section, migrations list, moved git deps). A no-op when the
-  # release already exists (a re-run, a rollback to an older tag).
+  # release already exists (a re-run, a dispatch on an older tag).
   #
   # It sits HERE, after Verify live, so "a GitHub Release exists" means
   # "production runs it". The tag itself was pushed before (just
-  # release-tag): it is what started this run, and the Apple builds.
+  # release-tag, after images.yml pushed the images): it is what started
+  # this run, and the Apple builds.
   release:
     name: GitHub Release
     needs: verify

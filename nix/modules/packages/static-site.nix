@@ -50,6 +50,7 @@
           Cmd = [ "--config-file" "${swsConfig}" ];
           ExposedPorts = { "8080/tcp" = { }; };
           Env = [ "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+          Labels = config.fts.imageLabels;
         };
       };
   };

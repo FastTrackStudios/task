@@ -44,7 +44,8 @@ cannot be reached.
 The ref is a `vX.Y.Z` tag equal to `v<Cargo.toml version>`, on a commit in
 the history of `main` or a `release/v*` branch, whose CHANGELOG.md has that
 version's section. A branch ref is refused: production changes only by tag.
-To redeploy or roll back, run the workflow with the tag as its ref.
+To re-verify or re-publish, run the workflow with the tag as its ref (Argo
+deploys the newest tag; rolling back is a new release).
 
 ## Branch protection
 

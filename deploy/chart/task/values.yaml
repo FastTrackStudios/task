@@ -14,10 +14,10 @@
 # bundle is ever needed.
 
 image:
-  # Registry+namespace prefix for all three images. CI (deploy.yml, on a
-  # release tag) pushes via skopeo to the in-cluster LAN registry below.
-  # Override if you mirror them somewhere else.
-  registry: registry.starcommand.live:30050
+  # Registry+namespace prefix for the images. Releases publish them
+  # (public) to GHCR before the release tag exists (.github/workflows/
+  # images.yml). Override if you mirror them somewhere else.
+  registry: ghcr.io/fasttrackstudios
   pullPolicy: IfNotPresent
   # e.g. pullSecrets: [{ name: my-registry-cred }]
   pullSecrets: []
@@ -25,8 +25,8 @@ image:
 server:
   image:
     repository: task-server
-    # Empty = chart appVersion. CI publishes `dev` + `sha-<short>` from
-    # the dev branch and `latest` + `sha-<short>` from main.
+    # Empty = chart appVersion, which at release tag vX.Y.Z is X.Y.Z, the
+    # tag the release pushed. (`sha-<short>` and `latest` exist too.)
     tag: ""
   replicas: 1
 

@@ -9,8 +9,8 @@
 # bundle, so a tiny reverse proxy ("edge" below) fronts the pair the
 # same way the Helm chart's Ingress does in k8s.
 #
-# Images: pull from the in-cluster LAN registry (tags: latest / dev /
-# sha-<short>), or build them yourself with Nix — there are no
+# Images: pull from GHCR (tags: <version> / sha-<short> / latest, the
+# last release), or build them yourself with Nix — there are no
 # Dockerfiles. Each image is a `dockerTools.streamLayeredImage` in
 # flake.nix; to build + load one locally:
 #
@@ -21,7 +21,7 @@
 
 services:
   server:
-    image: registry.starcommand.live:30050/task-server:latest
+    image: ghcr.io/fasttrackstudios/task-server:latest
     restart: unless-stopped
     environment:
       # Everything lives under /data (the volume below) — back that
@@ -38,7 +38,7 @@ services:
       - task-data:/data
 
   web:
-    image: registry.starcommand.live:30050/task-web:latest
+    image: ghcr.io/fasttrackstudios/task-web:latest
     restart: unless-stopped
 
   # Same-origin edge: API prefixes -> server, everything else -> web.
