@@ -3155,15 +3155,6 @@ fn call_tool(
     // (`activity.actor`) — an assignment above all: the router lane
     // notes its gate caller, and this is the same note for MCP.
     note_task_writer(org, principal, name, args);
-    // A filter's `me`: the caller's own ref.
-    let who = |key: &str| -> Option<String> {
-        let raw = arg_str(args, key)?;
-        if raw.trim().eq_ignore_ascii_case("me") {
-            Some(creator.map_or_else(|| "none".to_owned(), |c| c.r#ref.clone()))
-        } else {
-            Some(raw)
-        }
-    };
     // Only the wiki lane is caller-sensitive today; a build without it
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
@@ -3171,7 +3162,6 @@ fn call_tool(
     use contacts_proto::Contacts as _;
     use email_proto::{EmailLinks as _, EmailSync as _};
     use goal::GoalService as _;
-    use inbox_proto::Inbox as _;
     use milestone::MilestoneService as _;
     use project::ProjectService as _;
     #[cfg(feature = "plugin-scheduling")]
