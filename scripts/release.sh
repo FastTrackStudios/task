@@ -524,8 +524,15 @@ release_diff_only() { # <base> <head>
         [ "$(printf '%s\n' "$out" | grep -cE '^-version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' || true)" -eq 1 ] || return 1
         [ "$(printf '%s\n' "$out" | grep -cE '^\+version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' || true)" -eq 1 ] || return 1
     fi
-    # Cargo.lock: only version lines.
-    out="$(git diff -U0 "$base" "$head" -- Cargo.lock | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-]version = "[^"]*"$' || true)"
+    # Cargo.lock: only the old workspace version -> the new one. Cargo
+    # rewrites two kinds of line: the workspace members' own `version = "X"`
+    # and, where a member shares its name with another crate in the graph
+    # (inventory, notify), the references to it, ` "inventory X",`.
+    # Anything else (another crate, another version) is not a release.
+    local ob nb
+    ob="${vb//./\\.}"; nb="${vh//./\\.}"
+    out="$(git diff -U0 "$base" "$head" -- Cargo.lock | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+        | grep -vE "^-version = \"$ob\"$|^\+version = \"$nb\"$|^- \"[A-Za-z0-9_.-]+ $ob\",?$|^\+ \"[A-Za-z0-9_.-]+ $nb\",?$" || true)"
     [ -z "$out" ] || return 1
     return 0
 }
