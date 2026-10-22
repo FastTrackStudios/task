@@ -14,8 +14,8 @@
 # bundle is ever needed.
 
 image:
-  # Registry+namespace prefix for all three images. CI (the pure-Nix
-  # images.yml) pushes via skopeo to the in-cluster LAN registry below.
+  # Registry+namespace prefix for all three images. CI (deploy.yml, on a
+  # release tag) pushes via skopeo to the in-cluster LAN registry below.
   # Override if you mirror them somewhere else.
   registry: registry.starcommand.live:30050
   pullPolicy: IfNotPresent
