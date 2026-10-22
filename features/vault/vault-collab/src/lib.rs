@@ -810,7 +810,7 @@ impl DocSync for VaultCollab {
         up: vox::Rx<Vec<u8>>,
         down: vox::Tx<SyncDown>,
     ) -> Result<(), SyncError> {
-        let who = architect::permissions_gate::caller();
+        let who = crdt::architect::permissions_gate::caller();
         if let Err(e) = may_attach(
             &self.shared.backend,
             vault_live::write_guard::account_of(who.as_ref()),
