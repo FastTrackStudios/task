@@ -238,6 +238,12 @@ jobs:
     needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The signing key is an environment secret, and the environment only
+    # admits runs on a `v*` tag (deployment policy). A branch run, or a
+    # workflow edited on a branch, cannot read it (Reviewer S11, STA-161).
+    # Keep TASK_RELEASE_MINISIGN_KEY out of the repository-level secrets:
+    # an environment job can read those too.
+    environment: release-signing
     permissions:
       contents: write
     steps:
