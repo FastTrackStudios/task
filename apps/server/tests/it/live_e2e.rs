@@ -178,7 +178,7 @@ async fn a_playgrounds_epoch_moves_on_and_every_peer_is_told() {
         .expect("rx error")
         .expect("rx open");
     let mut told = None;
-    let _ = msg.map(|e| told = Some(e.clone()));
+    let _ = msg.map(|e| told = Some(e));
     let told = told.expect("an epoch");
     assert_eq!((told.setlist.as_str(), told.epoch), (setlist.as_str(), 1));
     assert!(

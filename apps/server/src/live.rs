@@ -248,7 +248,7 @@ impl LiveHost {
         wide::set("live.epoch", i64::try_from(epoch).unwrap_or(i64::MAX));
         Ok(LiveSet {
             setlist: setlist.to_owned(),
-            title: collection.title.clone(),
+            title: collection.title,
             epoch,
             presence_id: doc_id(&self.inner.org, setlist, epoch, "presence").to_string(),
             songs,

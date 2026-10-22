@@ -46,14 +46,14 @@ const ORGS: [&str; 6] = [
 
 /// Peak live heap over boot + traffic + sweeps, seven small orgs.
 ///
-/// Measured at 58.6 MiB on THEBATTLESHIP after t_37712151's fixes, and
-/// at 49.3 MiB once the zero-copy port's first PRs had landed (PR 3,
-/// STA-305, measured on dev 319e410c and on its own tip). The budget is
-/// that plus about as much again for normal growth of the product
-/// (tightened from 128 MiB in PR 3), and still an order of magnitude
-/// under what prod was using. A change that has to raise it should say
-/// why on its PR.
-const HEAP_BUDGET: usize = 96 << 20;
+/// Measured at 58.6 MiB on THEBATTLESHIP after t_37712151's fixes,
+/// at 49.3 MiB once zero-copy PR 3 (STA-305) had landed, and at
+/// 50.5 MiB on dev before zero-copy PR 2 (STA-304). PR 3 tightened it
+/// from 128 MiB to 96 MiB and PR 2 to 80 MiB: the measurement plus
+/// about 30 MiB of headroom for normal growth of the product, still an
+/// order of magnitude under what prod was using. A change that has to
+/// raise it should say why on its PR.
+const HEAP_BUDGET: usize = 80 << 20;
 
 /// How much more heap may be live after the measured rounds than after
 /// the warm-up.
@@ -65,8 +65,9 @@ const HEAP_BUDGET: usize = 96 << 20;
 /// at 1.4 MiB after this card. Before it, every device sweep leaked its
 /// two connections (see `files_sync::Dialled`), about 0.7 MiB per sweep
 /// and 9.1 MiB over these rounds. A leak of that size per round fails
-/// here with room to spare.
-const GROWTH_BUDGET: usize = 4 << 20;
+/// here with room to spare. Measured at 0.6 MiB on dev before zero-copy
+/// PR 2, which tightened it from 4 MiB.
+const GROWTH_BUDGET: usize = 2 << 20;
 
 /// The card's budget for seven small orgs was 300 MiB. Measured at about
 /// 101 MiB on THEBATTLESHIP (32 threads, so as many glibc arenas as any

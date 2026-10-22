@@ -455,17 +455,16 @@ pub fn cap_rows(rows: Vec<Value>, cap: usize) -> (Vec<Value>, bool) {
 /// Wrap shaped rows in the envelope every tool returns.
 fn envelope(kind: &str, rows: Vec<Value>, extra: Value) -> Value {
     let (rows, truncated) = cap_rows(rows, OUTPUT_CAP_BYTES);
-    let mut out = json!({
-        "count": rows.len(),
-        "truncated": truncated,
-        kind: rows,
-    });
-    if let (Some(dst), Some(src)) = (out.as_object_mut(), extra.as_object()) {
-        for (k, v) in src {
-            dst.insert(k.clone(), v.clone());
-        }
+    // Built by moving: `json!` would serialize `rows` from a reference,
+    // a full copy of every row.
+    let mut out = serde_json::Map::new();
+    out.insert("count".to_owned(), Value::from(rows.len()));
+    out.insert("truncated".to_owned(), Value::from(truncated));
+    out.insert(kind.to_owned(), Value::Array(rows));
+    if let Value::Object(extra) = extra {
+        out.extend(extra);
     }
-    out
+    Value::Object(out)
 }
 
 // ── Client ────────────────────────────────────────────────────────

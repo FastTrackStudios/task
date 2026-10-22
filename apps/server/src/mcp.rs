@@ -111,16 +111,30 @@ mod code {
     pub const INTERNAL: i32 = -32603;
 }
 
+/// A JSON object from owned fields, moved in. `json!` serializes each
+/// interpolated value from a reference, so `json!({ "result": result })`
+/// deep-copies `result`; a tool's whole answer was copied once more per
+/// response that way.
+fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
+    Value::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
 fn rpc_result(id: Value, result: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+    object([("jsonrpc", json!("2.0")), ("id", id), ("result", result)])
 }
 
 fn rpc_error(id: Value, code: i32, message: impl Into<String>) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": code, "message": message.into() },
-    })
+    object([
+        ("jsonrpc", json!("2.0")),
+        ("id", id),
+        (
+            "error",
+            object([
+                ("code", json!(code)),
+                ("message", Value::String(message.into())),
+            ]),
+        ),
+    ])
 }
 
 /// A tool's answer. MCP models tool failure as a *successful*
@@ -165,12 +179,12 @@ pub struct ToolDef {
 
 /// Shorthand for a JSON Schema object.
 fn obj(props: Value, required: &[&str]) -> Value {
-    json!({
-        "type": "object",
-        "properties": props,
-        "required": required,
-        "additionalProperties": false,
-    })
+    object([
+        ("type", json!("object")),
+        ("properties", props),
+        ("required", json!(required)),
+        ("additionalProperties", json!(false)),
+    ])
 }
 
 fn s_(desc: &str) -> Value {
@@ -2754,7 +2768,7 @@ async fn linked_slugs(state: &AppState, token: &str) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let Some(store) = home.identity else {
+    let Some(store) = &home.identity else {
         return Vec::new();
     };
     store
@@ -2804,7 +2818,7 @@ async fn authenticate_for(
                 token: token.clone(),
             })
             .await
-        && let Some(store) = home.identity
+        && let Some(store) = &home.identity
         && let Ok(links) = store.list_links(bundle.user.id).await
         && let Some(link) = links.into_iter().find(|l| l.remote_slug == slug)
         && let Some(linked) = link.token
@@ -4596,7 +4610,7 @@ fn call_tool(
 
         // ── Email (read + draft; no send by design) ──────────────
         "list_email_accounts" => {
-            let accounts = org.email.accounts().map_err(email_err)?;
+            let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
             let out: Vec<Value> = accounts
                 .iter()
                 .map(|a| {
@@ -4637,7 +4651,7 @@ fn call_tool(
                     &folder,
                     email_proto::SeqRange::Recent(limit as u32),
                 )
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             // Newest first for the model, whatever the backend's order.
             rows.sort_by(|a, b| b.date_ms.cmp(&a.date_ms));
             let out: Vec<Value> = rows.iter().take(limit).map(envelope_json).collect();
@@ -4650,7 +4664,7 @@ fn call_tool(
             let msg = links
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let body = msg
                 .body_text
                 .clone()
@@ -4691,7 +4705,10 @@ fn call_tool(
                 references: Vec::new(),
                 attachments: Vec::new(),
             };
-            let id = org.email.append_draft(&account, draft).map_err(email_err)?;
+            let id = org
+                .email
+                .append_draft(&account, draft)
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "draft_id": id,
                 "note": "saved to Drafts — the user reviews and sends it from their mail client",
@@ -4704,7 +4721,7 @@ fn call_tool(
             let original = org
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let env = &original.envelope;
             let subject = if env.subject.to_lowercase().starts_with("re:") {
                 env.subject.clone()
@@ -4729,7 +4746,10 @@ fn call_tool(
                 references,
                 attachments: Vec::new(),
             };
-            let id = org.email.append_draft(&account, draft).map_err(email_err)?;
+            let id = org
+                .email
+                .append_draft(&account, draft)
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "draft_id": id,
                 "in_reply_to": message_id,
@@ -4744,7 +4764,7 @@ fn call_tool(
             let link = links
                 .email_links
                 .link(&message_id, target, principal.unwrap_or("agent"))
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(link_json(&link))
         }
 
@@ -4754,7 +4774,7 @@ fn call_tool(
             links
                 .email_links
                 .unlink(&message_id, target)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({ "unlinked": true, "message_id": message_id }))
         }
 
@@ -4763,7 +4783,7 @@ fn call_tool(
             let rows = links
                 .email_links
                 .links_for_message(&message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let out: Vec<Value> = rows.iter().map(link_json).collect();
             Ok(json!({ "message_id": message_id, "count": out.len(), "links": out }))
         }
@@ -4773,7 +4793,7 @@ fn call_tool(
             let rows = links
                 .email_links
                 .links_for_target(target)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             // Bare ids are useless to a reader; with an account we can
             // say what each message actually is. A missing message is
             // not an error — the link outlives the mailbox.
@@ -4813,7 +4833,7 @@ fn call_tool(
             let msg = links
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let title = arg_str(args, "title")
                 .unwrap_or_else(|| msg.envelope.subject.clone())
                 .trim()
@@ -4919,7 +4939,7 @@ fn call_tool(
             links
                 .email
                 .move_message(&account, &message_id, &folder)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({ "moved": true, "message_id": message_id, "folder": folder }))
         }
 
@@ -4944,7 +4964,7 @@ fn call_tool(
             links
                 .email
                 .set_flags(&account, &message_id, delta)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "message_id": message_id,
                 "added": added,
@@ -6134,7 +6154,7 @@ fn wiki_summary_json(w: &wiki_proto::WikiSummary) -> Value {
 /// The sender identity for a draft: the account's own address.
 fn account_addr(org: &crate::OrgAppState, account: &str) -> Result<email_proto::Addr, ToolFailure> {
     use email_proto::EmailSync as _;
-    let accounts = org.email.accounts().map_err(email_err)?;
+    let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
     let acct = accounts.iter().find(|a| a.id.0 == account).ok_or_else(|| {
         ToolFailure::Message(format!(
             "no mail account `{account}` — call list_email_accounts first"
@@ -6190,7 +6210,7 @@ fn link_json(l: &email_proto::MessageLink) -> Value {
 
 /// Email backend errors, with the one common capability gap named
 /// instead of debug-dumped.
-fn email_err(e: email_proto::EmailSyncError) -> ToolFailure {
+fn email_err(e: &email_proto::EmailSyncError) -> ToolFailure {
     let raw = format!("{e:?}");
     if raw.starts_with("Unsupported") {
         ToolFailure::Message(format!(
@@ -6451,115 +6471,116 @@ mod tests {
                 "`{}` needs a description the model can select on",
                 tool.name
             );
-    /// The request's parts as the old dispatch read them (`get` +
-    /// `cloned` on the parsed value) — the reading `parse_request`
-    /// replaced. Pinned against it so moving the parts out decides
-    /// exactly as copying them did.
-    fn copied_reading(body: &str) -> Result<RpcRequest, Value> {
-        let request: Value = serde_json::from_str(body)
-            .map_err(|e| rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}")))?;
-        if request.is_array() {
-            return Err(rpc_error(
-                Value::Null,
-                code::INVALID_REQUEST,
-                "batched requests are not supported",
-            ));
-        }
-        Ok(RpcRequest {
-            id: request.get("id").cloned().unwrap_or(Value::Null),
-            method: request
-                .get("method")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            params: request.get("params").cloned().unwrap_or_else(|| json!({})),
-        })
-    }
+            /// The request's parts as the old dispatch read them (`get` +
+            /// `cloned` on the parsed value) — the reading `parse_request`
+            /// replaced. Pinned against it so moving the parts out decides
+            /// exactly as copying them did.
+            fn copied_reading(body: &str) -> Result<RpcRequest, Value> {
+                let request: Value = serde_json::from_str(body).map_err(|e| {
+                    rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}"))
+                })?;
+                if request.is_array() {
+                    return Err(rpc_error(
+                        Value::Null,
+                        code::INVALID_REQUEST,
+                        "batched requests are not supported",
+                    ));
+                }
+                Ok(RpcRequest {
+                    id: request.get("id").cloned().unwrap_or(Value::Null),
+                    method: request
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    params: request.get("params").cloned().unwrap_or_else(|| json!({})),
+                })
+            }
 
-    #[test]
-    fn parse_request_moves_what_the_copying_reading_copied() {
-        for body in [
-            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
-            r#"{"jsonrpc":"2.0","id":"a-b","method":"tools/call","params":{"name":"list_tasks","arguments":{"status":"open"}}}"#,
-            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-            r#"{"jsonrpc":"2.0","id":null,"method":"tools/list","params":[]}"#,
-            r#"{"jsonrpc":"2.0","id":7}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":42}"#,
-            r#"{"id":{"nested":[1,2]},"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
-            r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
-            r#"42"#,
-            r#""ping""#,
-            r#"null"#,
-            r#"{"id":1,"method":"ping""#,
-            "",
-        ] {
-            assert_eq!(
-                parse_request(body.as_bytes()),
-                copied_reading(body),
-                "body {body:?}"
-            );
-        }
-    }
+            #[test]
+            fn parse_request_moves_what_the_copying_reading_copied() {
+                for body in [
+                    r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+                    r#"{"jsonrpc":"2.0","id":"a-b","method":"tools/call","params":{"name":"list_tasks","arguments":{"status":"open"}}}"#,
+                    r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                    r#"{"jsonrpc":"2.0","id":null,"method":"tools/list","params":[]}"#,
+                    r#"{"jsonrpc":"2.0","id":7}"#,
+                    r#"{"jsonrpc":"2.0","id":7,"method":42}"#,
+                    r#"{"id":{"nested":[1,2]},"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+                    r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+                    r#"42"#,
+                    r#""ping""#,
+                    r#"null"#,
+                    r#"{"id":1,"method":"ping""#,
+                    "",
+                ] {
+                    assert_eq!(
+                        parse_request(body.as_bytes()),
+                        copied_reading(body),
+                        "body {body:?}"
+                    );
+                }
+            }
 
-    #[test]
-    fn a_body_that_is_not_utf8_is_a_parse_error() {
-        let refusal = parse_request(b"{\"id\":1,\"method\":\"\xff\"}").unwrap_err();
-        assert_eq!(refusal["error"]["code"], code::PARSE);
-        assert_eq!(refusal["id"], Value::Null);
-    }
+            #[test]
+            fn a_body_that_is_not_utf8_is_a_parse_error() {
+                let refusal = parse_request(b"{\"id\":1,\"method\":\"\xff\"}").unwrap_err();
+                assert_eq!(refusal["error"]["code"], code::PARSE);
+                assert_eq!(refusal["id"], Value::Null);
+            }
 
-    #[test]
-    fn split_tool_call_matches_the_copying_reading() {
-        for params in [
-            json!({ "name": "list_tasks", "arguments": { "org": "alpha" } }),
-            json!({ "name": "list_tasks" }),
-            json!({ "arguments": { "org": "alpha" } }),
-            json!({ "name": 3, "arguments": [] }),
-            json!([]),
-            json!("list_tasks"),
-            json!({}),
-        ] {
-            let copied = (
-                params
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                params
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or_else(|| json!({})),
-            );
-            assert_eq!(split_tool_call(params.clone()), copied, "params {params}");
-        }
-    }
+            #[test]
+            fn split_tool_call_matches_the_copying_reading() {
+                for params in [
+                    json!({ "name": "list_tasks", "arguments": { "org": "alpha" } }),
+                    json!({ "name": "list_tasks" }),
+                    json!({ "arguments": { "org": "alpha" } }),
+                    json!({ "name": 3, "arguments": [] }),
+                    json!([]),
+                    json!("list_tasks"),
+                    json!({}),
+                ] {
+                    let copied = (
+                        params
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        params
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or_else(|| json!({})),
+                    );
+                    assert_eq!(split_tool_call(params.clone()), copied, "params {params}");
+                }
+            }
 
-    #[test]
-    fn account_tools_payload_adds_org_to_every_schema() {
-        let payload = json!({ "tools": [
-            { "name": "a", "inputSchema": { "type": "object", "properties": {} } },
-            { "name": "b" },
-        ]});
-        let out = account_tools_payload(payload, "home");
-        let tools = out["tools"].as_array().unwrap();
-        assert_eq!(tools[0]["name"], "list_orgs");
-        assert_eq!(tools[1]["name"], "a");
-        assert_eq!(
-            tools[1]["inputSchema"]["properties"]["org"]["type"],
-            "string"
-        );
-        assert_eq!(tools[2], json!({ "name": "b" }));
-        assert_eq!(
-            account_tools_payload(json!({}), "home")["tools"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-    }
+            #[test]
+            fn account_tools_payload_adds_org_to_every_schema() {
+                let payload = json!({ "tools": [
+                    { "name": "a", "inputSchema": { "type": "object", "properties": {} } },
+                    { "name": "b" },
+                ]});
+                let out = account_tools_payload(payload, "home");
+                let tools = out["tools"].as_array().unwrap();
+                assert_eq!(tools[0]["name"], "list_orgs");
+                assert_eq!(tools[1]["name"], "a");
+                assert_eq!(
+                    tools[1]["inputSchema"]["properties"]["org"]["type"],
+                    "string"
+                );
+                assert_eq!(tools[2], json!({ "name": "b" }));
+                assert_eq!(
+                    account_tools_payload(json!({}), "home")["tools"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            }
 
-    #[test]
-    fn the_catalog_is_built_once() {
-        assert!(std::ptr::eq(tool_catalog(), tool_catalog()));
-    }
+            #[test]
+            fn the_catalog_is_built_once() {
+                assert!(std::ptr::eq(tool_catalog(), tool_catalog()));
+            }
 
             let schema = (tool.schema)();
             assert_eq!(schema["type"], "object", "`{}` schema", tool.name);

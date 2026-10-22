@@ -645,11 +645,11 @@ mod tests {
             .find(|l| l.volume_key == "primary")
             .expect("primary is a location");
         core.issue_grant(files_storage::GrantSpec {
-            org: entry.org.clone(),
+            org: entry.org,
             location_id: location.id,
             capabilities: location.capabilities.clone(),
             quota_bytes: entry.quota_bytes,
-            path_prefix: entry.path_prefix.clone(),
+            path_prefix: entry.path_prefix,
         })
         .expect("grant issues");
 

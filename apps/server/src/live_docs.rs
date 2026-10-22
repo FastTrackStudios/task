@@ -1148,12 +1148,12 @@ mod tests {
         doc
     }
 
-    fn ops(v: Value) -> Vec<Op> {
-        parse_ops(&v).unwrap()
+    fn ops(v: &Value) -> Vec<Op> {
+        parse_ops(v).unwrap()
     }
 
     fn apply_all(doc: &LoroDoc, v: Value) -> Result<(), String> {
-        for op in ops(v) {
+        for op in ops(&v) {
             run(doc, &op)?;
         }
         doc.commit();
@@ -1166,7 +1166,7 @@ mod tests {
 
     #[test]
     fn ops_parse_from_json_and_paths_from_either_form() {
-        let parsed = ops(json!([
+        let parsed = ops(&json!([
             { "op": "set", "path": ["song", "tempo"], "value": 80 },
             { "op": "set", "path": "/song/sections/0", "value": "intro" },
             { "op": "insert", "path": "song/sections", "value": "bridge" },
@@ -1243,7 +1243,7 @@ mod tests {
     fn the_schema_check_keeps_a_fields_kind_and_the_paths_real() {
         let d = doc();
         let refuse = |v: Value| {
-            let op = ops(json!([v])).remove(0);
+            let op = ops(&json!([v])).remove(0);
             run(&d.fork(), &op).unwrap_err()
         };
         let e = refuse(json!({ "op": "set", "path": ["song", "tempo"], "value": "fast" }));

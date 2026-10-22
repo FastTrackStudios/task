@@ -28,6 +28,16 @@
 //! Write `tests/it/<name>.rs` and add a `mod` line below. A file directly
 //! under `tests/` would quietly become a fifty-fourth binary again.
 
+// The copy lints, denied here once the crate is clean of them
+// (zero-copy audit S7, `docs/perf/zero-copy-audit.md`). They move into
+// `[workspace.lints.clippy]` once every crate carries this.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
+
 #[allow(dead_code)]
 mod support;
 

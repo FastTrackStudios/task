@@ -17,6 +17,16 @@
 //! `project-crdt` crates. CRDT now lives only at the per-file
 //! editor layer (future); vault is the sole storage path.
 
+// The copy lints, denied here once the crate is clean of them
+// (zero-copy audit S7, `docs/perf/zero-copy-audit.md`). They move into
+// `[workspace.lints.clippy]` once every crate carries this.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
+
 pub mod account_devices;
 pub mod activity;
 pub mod admin_cli;
@@ -976,7 +986,7 @@ pub(crate) async fn build_org_state(
             org_root
                 .manifest()
                 .ok()
-                .map(|m| task_plugin::PluginChoice::Disabled(m.disabled_plugins.0.clone()))
+                .map(|m| task_plugin::PluginChoice::Disabled(m.disabled_plugins.0))
                 .as_ref(),
         );
 
@@ -1254,7 +1264,10 @@ pub(crate) async fn build_org_state(
                 .parent()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| org_root.path().to_path_buf());
-            let domains = wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok());
+            let domains = wiki_domains(
+                &orgs_dir,
+                std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
+            );
             let local = wiki_live::subscriptions_backend::LocalOrgs::new(
                 orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
                 domains,
@@ -1888,7 +1901,10 @@ pub(crate) async fn build_org_state(
             let root = orgs_dir.parent().unwrap_or(&orgs_dir).to_path_buf();
             links.with_homes(std::sync::Arc::new(node_homes::LocalHomes::new(
                 root,
-                wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok()),
+                wiki_domains(
+                    &orgs_dir,
+                    std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
+                ),
                 org_root.slug(),
                 org_root.path().to_path_buf(),
             )))
@@ -3018,12 +3034,9 @@ pub fn router(state: AppState) -> Router {
         .orgs
         .read()
         .ok()
-        .and_then(|guard| guard.values().next().cloned())
-        .map(|org| {
-            let blob_state = AttachmentRouteState {
-                service: org.attachments.clone(),
-            };
-            attachments::attachment_router().with_state(blob_state)
+        .and_then(|guard| guard.values().next().map(|org| org.attachments.clone()))
+        .map(|service| {
+            attachments::attachment_router().with_state(AttachmentRouteState { service })
         })
         .unwrap_or_default();
 
@@ -3517,7 +3530,7 @@ async fn per_org_vox_handler(
             format!("org `{slug}` not hosted"),
         ));
     };
-    serve_org_vox(&org, state.write_gate.clone(), ws, &headers)
+    serve_org_vox(&org, state.write_gate, ws, &headers)
 }
 
 /// `/server/vox` — server-management WebSocket. Hosts the
@@ -3657,7 +3670,7 @@ async fn legacy_vox_handler(
             "no org hosted on this server",
         ));
     };
-    serve_org_vox(&org, state.write_gate.clone(), ws, &headers)
+    serve_org_vox(&org, state.write_gate, ws, &headers)
 }
 
 /// Build the per-org [`LayerRouter`]: every service this org hosts,
@@ -4244,7 +4257,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             // The hub lives on the `WikiBackend`, so every committed
             // page write / ingest enqueue / review enqueue publishes
             // into it.
-            .merge(wiki_proto::service::events::stream_layer(wiki.clone()));
+            .merge(wiki_proto::service::events::stream_layer(wiki));
     }
 
     // Project / Goal / Milestone / Task readers (vault-backed).
@@ -5005,7 +5018,7 @@ pub const FIRST_PARTY_DOMAIN: &str = "fasttrackstudio.app";
 #[must_use]
 pub fn wiki_domains(
     orgs_dir: &std::path::Path,
-    configured: Option<String>,
+    configured: Option<&str>,
 ) -> std::collections::HashMap<String, String> {
     let mut domains = std::collections::HashMap::new();
     if let Ok(entries) = std::fs::read_dir(orgs_dir) {
@@ -5024,7 +5037,7 @@ pub fn wiki_domains(
             (*slug).to_owned(),
         );
     }
-    for pair in configured.as_deref().unwrap_or_default().split(',') {
+    for pair in configured.unwrap_or_default().split(',') {
         if let Some((domain, slug)) = pair.split_once('=') {
             let (domain, slug) = (domain.trim(), slug.trim());
             if !domain.is_empty() && !slug.is_empty() {
@@ -5044,7 +5057,9 @@ mod wiki_domain_tests {
         std::fs::create_dir_all(dir.path().join("codywright")).unwrap();
         let d = super::wiki_domains(
             dir.path(),
-            Some(" fasttrackstudio.app=fasttrackstudios, codywright.fasttrackstudio.app = codywright ,bad".into()),
+            Some(
+                " fasttrackstudio.app=fasttrackstudios, codywright.fasttrackstudio.app = codywright ,bad",
+            ),
         );
         assert_eq!(d["fasttrackstudios"], "fasttrackstudios");
         assert_eq!(d["fasttrackstudio.app"], "fasttrackstudios");

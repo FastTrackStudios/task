@@ -1404,7 +1404,7 @@ async fn a_client_manages_its_own_subscriptions() -> eyre::Result<()> {
     };
     backend.subscribe(me.clone(), music.clone())?;
     // Twice is refused rather than silently ignored.
-    assert!(backend.subscribe(me.clone(), music.clone()).is_err());
+    assert!(backend.subscribe(me.clone(), music).is_err());
 
     // Nothing is on disk until it is refreshed.
     let before = backend.list_subscriptions(me.clone())?;

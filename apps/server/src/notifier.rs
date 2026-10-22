@@ -67,7 +67,7 @@ type SubCall = std::pin::Pin<Box<dyn Future<Output = bool> + Send>>;
 pub fn spawn(state: &AppState) {
     for slug in state.org_slugs() {
         if let Some(org) = state.org(&slug) {
-            spawn_org(org, Arc::clone(&state.scope));
+            spawn_org(&org, Arc::clone(&state.scope));
         }
     }
 }
@@ -76,7 +76,7 @@ pub fn spawn(state: &AppState) {
 /// in-process link, and start one pump per subscribed hub. The pumps
 /// live until `scope` closes (their LocalServer acceptors are
 /// deferred on it).
-fn spawn_org(org: Arc<OrgAppState>, scope: Arc<architect::Scope>) {
+fn spawn_org(org: &Arc<OrgAppState>, scope: Arc<architect::Scope>) {
     let deliver = Arc::new(Deliverer::new(&org));
     let local = Arc::new(architect::LocalServer::serve(
         crate::org_layer_router(&org),
@@ -761,11 +761,10 @@ where
         misses = 0;
         let drain = async {
             while let Ok(Some(msg)) = rx.recv().await {
-                // `SelfRef` has no owned extraction; `map` lends the
-                // value, so cloning out is sound — events own their
-                // data.
+                // `SelfRef` has no owned extraction; `map` hands the
+                // value to the closure, which moves it out.
                 let mut owned: Option<Ev> = None;
-                let _ = msg.map(|ev| owned = Some(ev.clone()));
+                let _ = msg.map(|ev| owned = Some(ev));
                 if let Some(ev) = owned {
                     on_event(ev);
                 }

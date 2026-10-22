@@ -88,10 +88,10 @@ whole vault per request.
 
 | # | Site | Copy | Bytes × frequency | Status |
 |---|------|------|-------------------|--------|
-| S1 | `AppState::org(slug)` | clones the whole `OrgAppState` (strings, roots, plugin set, auth, sharing handles) out of the map on every request | struct × every MCP / HTTP call (`authenticate_for` 682 k allocs) | **next**: store `Arc<OrgAppState>`, hand out the `Arc` |
-| S2 | `mcp::mcp_dispatch` | body `String` parsed to a `serde_json::Value`, then `params` and `id` deep-cloned out of it | request size × 2 × calls (1.69 M allocs) | **next**: take `params`/`id` out of the owned map (`remove`), parse from the body bytes |
-| S3 | `mcp::authenticate_for` | `std::env::var("TASK_MCP_TOKEN")` (a `String`) per call; token cloned per session lookup | per call | **next**: read the static token once at startup; pass the token by reference where architect allows |
-| S4 | `mcp::call_tool`, `tool_ok`, `rpc_result` | tool results built as `Value` then serialized; the catalogue rebuilt per `tools/list` | 388 k + 73 k + 105 k allocs | **next**: build `tool_catalog` once (`OnceLock`) and serialize straight to the response |
+| S1 | `AppState::org(slug)` | clones the whole `OrgAppState` (strings, roots, plugin set, auth, sharing handles) out of the map on every request | struct × every MCP / HTTP call (`authenticate_for` 682 k allocs) | **done** (PR 2: `orgs` holds `Arc<OrgAppState>`, `org()` hands out the `Arc`) |
+| S2 | `mcp::mcp_dispatch` | body `String` parsed to a `serde_json::Value`, then `params` and `id` deep-cloned out of it | request size × 2 × calls (1.69 M allocs) | **done** (PR 2: `Bytes` body + `from_slice`; `parse_request` / `split_tool_call` move `id`, `params`, `name`, `arguments` out; parity test against the copying reading) |
+| S3 | `mcp::authenticate_for` | `std::env::var("TASK_MCP_TOKEN")` (a `String`) per call; token cloned per session lookup | per call | **done** (PR 2: `AppState::static_token`, read once per boot). The bearer is still cloned once per session lookup: `architect_auth::CurrentSession` takes an owned `String` |
+| S4 | `mcp::call_tool`, `tool_ok`, `rpc_result` | tool results built as `Value` then serialized; the catalogue rebuilt per `tools/list` | 388 k + 73 k + 105 k allocs | **done** (PR 2: `tool_catalog()` is a `OnceLock`'d `&'static [ToolDef]`). `tool_ok`/`rpc_result` already move their values; the response is still one `Value` serialized by `Json` |
 | S5 | `iroh_host::bind_org` | 22.7 MiB of the 67 MiB peak | retained, not churn | **leave** here: iroh endpoint and blob store state, owned by t_4219725c / t_911268fa |
 | S6 | `sharing::{sources, subtree}` | path strings rebuilt per entry while walking a shared subtree | entries × share listings | **later** |
 | S7 | 36 copy-lint hits (server) | mostly `needless_pass_by_value` on handlers' `String`/`Vec` args | small each | **next**, with the deny |

@@ -780,6 +780,7 @@ async fn plant_bound_sample(
 
 /// Which pass of a deliverable synth this is — the two must LOOK
 /// different, or the review screen's compare demonstrates nothing.
+#[derive(Clone, Copy)]
 enum VideoCut {
     /// Classic bars, shorter, a low tone: obviously the draft.
     Rough,
