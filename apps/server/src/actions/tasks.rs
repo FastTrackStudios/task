@@ -10,7 +10,7 @@ use architect::action::{ActionError, ActionList, ActionMeta, Effect};
 use facet::Facet;
 use serde_json::{Value, json};
 
-use super::{CallContext, change, limit, meta, register, required, text, who};
+use super::{CallContext, change, limit, meta, required, text, who};
 use crate::mcp::{ToolFailure, backend_err, date_of, parse_assignee, parse_uuid, task_json};
 
 /// `task_context`.
