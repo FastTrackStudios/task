@@ -31,7 +31,7 @@ pub use link::{
 };
 pub use project::{
     GuestPart, GuestProject, SHARED_PROJECT_FIELDS, STRIPPED_PROJECT_FIELDS, guest_deliverable,
-    guest_deliverable_items, guest_part, guest_pieces, guest_project, guest_projects,
+    guest_deliverable_items, guest_part, guest_piece, guest_pieces, guest_project, guest_projects,
 };
 pub use task::{
     GuestTask, GuestWorkflow, SHARED_TASK_FIELDS, SHARED_WORKFLOW_FIELDS, STRIPPED_TASK_FIELDS,

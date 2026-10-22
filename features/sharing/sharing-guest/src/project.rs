@@ -247,11 +247,19 @@ pub fn guest_pieces<S>(pieces: Vec<Piece>, in_scope: &S) -> Vec<Linked<Piece>>
 where
     S: Fn(ObjectRef<'_>) -> bool + ?Sized,
 {
-    let pieces = pieces.into_iter().map(|p| {
-        let Piece { id, name, promoted } = p;
-        Piece { id, name, promoted }
-    });
-    redact_list(pieces, |p| ObjectRef::Piece(p.id), in_scope)
+    redact_list(
+        pieces.into_iter().map(guest_piece),
+        |p| ObjectRef::Piece(p.id),
+        in_scope,
+    )
+}
+
+/// One piece. Carries no money, so it passes whole — through a
+/// destructure, so a field added to [`Piece`] later is decided here.
+#[must_use]
+pub fn guest_piece(piece: Piece) -> Piece {
+    let Piece { id, name, promoted } = piece;
+    Piece { id, name, promoted }
 }
 
 /// One deliverable declaration. Carries no money and no link, so it
@@ -464,7 +472,17 @@ mod tests {
             .chain(STRIPPED_PROJECT_FIELDS)
             .copied()
             .collect();
-        assert_eq!(keys, classified, "a ProjectInfo field is unclassified");
+        // `form` is `skip_serializing_if = "Option::is_none"` and unset in
+        // the fixture, so compare as subsets: every key on the wire is
+        // classified, and every stripped key really is on the wire.
+        assert!(
+            keys.is_subset(&classified),
+            "a ProjectInfo field is unclassified: {:?}",
+            keys.difference(&classified)
+        );
+        for k in STRIPPED_PROJECT_FIELDS {
+            assert!(keys.contains(k), "{k} is not a ProjectInfo key");
+        }
         let guest = guest_json();
         let guest_keys: BTreeSet<&str> = guest
             .as_object()
