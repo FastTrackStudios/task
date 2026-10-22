@@ -107,6 +107,7 @@ mod permits_cover_router;
 mod personal_org_e2e;
 mod plugin_toggle_e2e;
 mod presence_relay;
+mod ranged_routes_e2e;
 mod rename_org;
 mod rendition_route;
 mod scheduling_durability;
