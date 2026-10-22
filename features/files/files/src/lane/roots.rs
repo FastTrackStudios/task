@@ -275,7 +275,7 @@ impl RootsService for FilesBackend {
         } = request;
 
         let root =
-            crate::lane::blocking(move || this.create_root_in_place(path, name, flavor)).await?;
+            crate::lane::blocking(move || this.create_root_in_place(&path, name, flavor)).await?;
 
         // The work happens behind the return, which is the whole of
         // `files.adopt.catalogue-first`: a 77 GB album is a root the
@@ -334,7 +334,7 @@ impl RootsService for FilesBackend {
             self.confine_root().join(requested)
         };
         let this = self.clone();
-        crate::lane::blocking(move || this.drive_browse_inner(at.display().to_string())).await
+        crate::lane::blocking(move || this.drive_browse_inner(&at.display().to_string())).await
     }
 
     // t[impl files.adopt.resumable]

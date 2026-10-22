@@ -579,13 +579,13 @@ async fn an_interrupted_pull_completes_on_retry() {
             // One-level tree here (root); import it and each file's
             // manifest + chunks.
             let tree_bytes = pb.sync_object(root_id, &tree).unwrap();
-            rb.sync_import_object(root_id, &tree, tree_bytes).unwrap();
+            rb.sync_import_object(root_id, &tree, &tree_bytes).unwrap();
             let meta = pb.sync_tree_meta(root_id, &tree).unwrap();
             let mut trees: Vec<String> = meta.subtrees.into_iter().map(|(_, id)| id).collect();
             let mut all_files: Vec<String> = meta.files.into_iter().map(|(_, id, _)| id).collect();
             while let Some(t) = trees.pop() {
                 let tb = pb.sync_object(root_id, &t).unwrap();
-                rb.sync_import_object(root_id, &t, tb).unwrap();
+                rb.sync_import_object(root_id, &t, &tb).unwrap();
                 let m = pb.sync_tree_meta(root_id, &t).unwrap();
                 trees.extend(m.subtrees.into_iter().map(|(_, id)| id));
                 all_files.extend(m.files.into_iter().map(|(_, id, _)| id));

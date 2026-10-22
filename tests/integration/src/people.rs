@@ -136,7 +136,7 @@ impl People {
                 &alice.subject,
                 sam.subject.clone(),
                 acme_root,
-                RootPath::root(),
+                &RootPath::root(),
                 m_sam.holds.capabilities(),
             )
             .expect("Alice hires Sam onto the project");
@@ -150,7 +150,7 @@ impl People {
                 &alice.subject,
                 casey.subject.clone(),
                 acme_root,
-                RootPath::parse(m_casey.scope).expect("the client's scope is a path"),
+                &RootPath::parse(m_casey.scope).expect("the client's scope is a path"),
                 m_casey.holds.capabilities(),
             )
             .expect("Alice sends the client the deliverables");

@@ -64,7 +64,7 @@ async fn dir_tree(
         .into_resolved()
         .map_err(|_| Error::Repo("browsing a conflicted tree is unsupported (v1)".into()))?;
     let mut current = backend.read_tree(RepoPath::root(), &tree_id).await?;
-    let mut walked = RepoPathBuf::root().to_owned();
+    let mut walked = RepoPathBuf::root();
     for component in dir.components() {
         walked = walked.join(component);
         match current.value(component) {
@@ -204,7 +204,7 @@ pub fn repo_dir(subpath: &str) -> Result<RepoPathBuf> {
         .trim_matches('/')
         .to_owned();
     if normalized.is_empty() {
-        return Ok(RepoPathBuf::root().to_owned());
+        return Ok(RepoPathBuf::root());
     }
     // Belt and braces with jj's own validation: a `.`/`..` component
     // must never reach the tracked-path lookup, because that lookup is

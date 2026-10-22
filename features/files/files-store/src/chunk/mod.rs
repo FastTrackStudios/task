@@ -19,8 +19,8 @@
 //!
 //! let store = ChunkStore::open("/tmp/files-cas-example").await?;
 //! let file_id = store.write_stream(&b"hello, files"[..]).await?;
-//! let bytes = store.read_to_vec(file_id).await?;
-//! assert_eq!(bytes, b"hello, files");
+//! let bytes = store.read_bytes(file_id).await?;
+//! assert_eq!(bytes, &b"hello, files"[..]);
 //! store.shutdown().await?;
 //! # Ok(())
 //! # }

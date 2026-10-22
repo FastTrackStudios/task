@@ -93,8 +93,8 @@ async fn protected_manifest_survives_gc_regardless_of_age() {
 
     assert!(store.has(file_id).await);
     assert_eq!(
-        store.read_to_vec(file_id).await.unwrap(),
-        b"a version the Vault still points at"
+        store.read_bytes(file_id).await.unwrap(),
+        &b"a version the Vault still points at"[..]
     );
 }
 
@@ -155,8 +155,8 @@ async fn a_file_written_after_the_only_gc_call_survives_later_background_sweeps(
          even though gc() was never called again"
     );
     assert_eq!(
-        store.read_to_vec(file_id).await.unwrap(),
-        b"written after the only gc() call"
+        store.read_bytes(file_id).await.unwrap(),
+        &b"written after the only gc() call"[..]
     );
 }
 

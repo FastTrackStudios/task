@@ -168,12 +168,12 @@ impl<'a> ContentStore<'a> {
         let known = probed
             .as_ref()
             .map(|id| gix::ObjectId::from_bytes_or_panic(id.as_bytes()));
-        if let (Some(id), Some(oid)) = (&probed, &known)
+        if let (Some(id), Some(oid)) = (probed, &known)
             && git_repo.objects.exists(oid)
         {
             // Identical bytes are already an object here — nothing to
             // write, and the blob is immutable, so this is complete.
-            return Ok(id.clone());
+            return Ok(id);
         }
 
         let len = std::fs::metadata(disk_path)?.len();

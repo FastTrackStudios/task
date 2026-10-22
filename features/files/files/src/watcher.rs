@@ -84,7 +84,7 @@ impl RootWatcher {
         root_path: &Path,
         sink: std::sync::Arc<S>,
     ) -> Result<Self> {
-        Self::spawn_many(vec![(root_id, root_path.to_path_buf())], sink)?
+        Self::spawn_many(&[(root_id, root_path.to_path_buf())], sink)?
             .pop()
             .ok_or_else(|| Error::Repo(format!("watch {}: not watched", root_path.display())))
     }
@@ -93,10 +93,10 @@ impl RootWatcher {
     /// then committed once. A root that cannot be watched is left out
     /// (and logged); the rest are returned, one handle each.
     pub fn spawn_many<S: ActivitySink>(
-        roots: Vec<(Uuid, PathBuf)>,
+        roots: &[(Uuid, PathBuf)],
         sink: std::sync::Arc<S>,
     ) -> Result<Vec<Self>> {
-        let routes = std::sync::Arc::new(std::sync::Mutex::new(roots.clone()));
+        let routes = std::sync::Arc::new(std::sync::Mutex::new(roots.to_vec()));
         let routing = routes.clone();
         let handler = move |res: notify_fs::Result<Event>| {
             let Ok(event) = res else {
@@ -132,7 +132,7 @@ impl RootWatcher {
         let mut watched = Vec::with_capacity(roots.len());
         {
             let mut paths = watcher.paths_mut();
-            for (root_id, root_path) in &roots {
+            for (root_id, root_path) in roots {
                 match paths.add(root_path, RecursiveMode::Recursive) {
                     Ok(()) => watched.push(*root_id),
                     Err(e) => {

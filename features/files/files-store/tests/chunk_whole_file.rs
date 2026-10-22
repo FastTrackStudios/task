@@ -78,7 +78,7 @@ async fn a_large_file_is_stored_as_one_blob_and_reads_back_whole() {
         blake3::hash(&bytes),
         "the single entry's hash must be the blake3 of the whole file"
     );
-    assert_eq!(store.read_to_vec(file_id).await.unwrap(), bytes);
+    assert_eq!(store.read_bytes(file_id).await.unwrap(), bytes);
     assert_eq!(
         store.content_len(file_id).await.unwrap(),
         bytes.len() as u64
@@ -99,7 +99,7 @@ async fn a_small_file_still_chunks_and_matches_the_streaming_write() {
         by_path, by_stream,
         "below the threshold, write_path is write_stream — same id"
     );
-    assert_eq!(store.read_to_vec(by_path).await.unwrap(), bytes);
+    assert_eq!(store.read_bytes(by_path).await.unwrap(), bytes);
 }
 
 /// The invariant that quietly destroys everything if it breaks: a
@@ -280,7 +280,7 @@ async fn storing_a_large_file_does_not_consume_a_second_copy() {
     // And it is a real, readable version — a clone that couldn't be read
     // back would be a very cheap way to lose data.
     let store = store_at(dir.path()).await;
-    assert_eq!(store.read_to_vec(file_id).await.unwrap(), bytes);
+    assert_eq!(store.read_bytes(file_id).await.unwrap(), bytes);
 }
 
 /// The requirement in one test: **the content cannot be lost by
@@ -307,7 +307,7 @@ async fn deleting_the_original_does_not_lose_the_stored_content() {
     assert!(!path.exists());
 
     assert_eq!(
-        store.read_to_vec(file_id).await.unwrap(),
+        store.read_bytes(file_id).await.unwrap(),
         bytes,
         "the store must still hold the content after the original is deleted"
     );
@@ -316,7 +316,7 @@ async fn deleting_the_original_does_not_lose_the_stored_content() {
     // this process happens to be holding.
     store.shutdown().await.unwrap();
     let store = store_at(dir.path()).await;
-    assert_eq!(store.read_to_vec(file_id).await.unwrap(), bytes);
+    assert_eq!(store.read_bytes(file_id).await.unwrap(), bytes);
 }
 
 /// Storing content that is already on the same filesystem must consume
@@ -352,7 +352,7 @@ async fn linking_content_in_consumes_no_space() {
     );
 
     let store = store_at(dir.path()).await;
-    assert_eq!(store.read_to_vec(file_id).await.unwrap(), bytes);
+    assert_eq!(store.read_bytes(file_id).await.unwrap(), bytes);
 }
 
 /// A whole-tier blob nothing references is reclaimed. Without this the
@@ -441,11 +441,11 @@ async fn replacing_the_live_file_versions_it_and_keeps_the_old_one() {
 
     assert_ne!(v1, v2);
     assert_eq!(
-        store.read_to_vec(v1).await.unwrap(),
+        store.read_bytes(v1).await.unwrap(),
         original,
         "the first version must still read back byte-for-byte"
     );
-    assert_eq!(store.read_to_vec(v2).await.unwrap(), edited);
+    assert_eq!(store.read_bytes(v2).await.unwrap(), edited);
 }
 
 /// A version already stored survives the live file being rewritten
@@ -478,10 +478,10 @@ async fn a_stored_version_survives_an_in_place_rewrite() {
     assert_ne!(v1, v2);
 
     assert_eq!(
-        store.read_to_vec(v1).await.unwrap(),
+        store.read_bytes(v1).await.unwrap(),
         first,
         "the first version must still read back byte-for-byte after the \
          live file was rewritten under it"
     );
-    assert_eq!(store.read_to_vec(v2).await.unwrap(), second);
+    assert_eq!(store.read_bytes(v2).await.unwrap(), second);
 }

@@ -491,7 +491,7 @@ impl FilesBackend {
                 } else {
                     // Empty on a host holding structure only: the
                     // entry is real, and no location here answers for it.
-                    root.path.clone().into_iter().collect()
+                    root.path.into_iter().collect()
                 },
                 modified_at: meta.modified().map_or(now, DateTime::<Utc>::from),
                 confirmed_at: now,
