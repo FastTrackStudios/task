@@ -9,7 +9,6 @@
 //! and `share_files_e2e.rs`.
 
 use attachments_proto::{AttachmentService as _, ContentHashArg};
-use task_server::attachments::ObjectStore as _;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
 /// The bytes both routes serve: 1000 distinct-ish bytes so every window
