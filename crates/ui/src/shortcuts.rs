@@ -1,6 +1,7 @@
-//! App-wide keyboard shortcuts, driven by the `input` crate's
-//! trie-based [`InputProcessor`] (multi-key sequences, leader keys,
-//! modal-ready) and the shared actions registry ([`crate::actions`]).
+//! App-wide keyboard shortcuts, driven by architect's keymap engine
+//! (`architect-input`: a key trie, a modal [`InputProcessor`] with
+//! multi-key sequences and leader keys, and the which-key model) and the
+//! shared actions registry ([`crate::actions`]).
 //!
 //! ## Architecture
 //!
@@ -9,8 +10,9 @@
 //! it fires (an id the [`crate::actions`] registry knows), a which-key
 //! label, and an optional **web alternate** for combos the browser
 //! refuses to yield. [`keymap_config`] compiles the table into an
-//! `input::KeymapConfig`; the processor resolves sequences — including
-//! leader sequences like `<space> g h` — through its prefix trie.
+//! `architect_input::KeymapConfig`; the processor resolves sequences,
+//! including leader sequences like `<space> g h`, through its prefix
+//! trie.
 //!
 //! Matched actions are executed through
 //! [`actions_standalone::StandaloneActions::execute`]: the same code
@@ -23,22 +25,22 @@
 //! The wasm build installs **capture-phase** `keydown`/`keyup`
 //! listeners on the document:
 //!
-//! - the raw DOM closure runs the processor *synchronously* so a match
-//!   can `preventDefault()` + `stopPropagation()` in the same tick
-//!   (that's what lets app shortcuts win over browser natives, and
+//! - the raw DOM closure runs the processor *synchronously* (`press`)
+//!   so a match can `preventDefault()` + `stopPropagation()` in the same
+//!   tick (that's what lets app shortcuts win over browser natives, and
 //!   stops `<space>` from scrolling while a leader sequence is pending);
 //! - matched ids / which-key updates cross back into the Dioxus runtime
 //!   over a channel a spawned task drains;
 //! - `keyup` feeds [`InputProcessor::notify_key_release`] so held-key /
-//!   sticky-prefix bookkeeping stays correct.
+//!   sticky-prefix bookkeeping stays correct (without it a second
+//!   `<space>` reads as auto-repeat and `space space` never fires).
 //!
 //! ## Which-key
 //!
-//! While a leader sequence is pending the DOM closure derives a
-//! which-key view from [`BINDINGS`] — every entry whose sequence extends
-//! the pending prefix by one chord — and renders [`WhichKeyOverlay`].
-//! Leaf continuations show the action label; deeper prefixes render as a
-//! named group (see [`group_label`]).
+//! While a sequence is pending, [`InputProcessor::which_key`] lists what
+//! can follow it, named by [`which_key_labels`]: leaf continuations show
+//! the binding's label, deeper prefixes a group name ([`GROUPS`]).
+//! [`WhichKeyOverlay`] draws it.
 //!
 //! **Typing guard**: when the focused element is a text control or a
 //! contenteditable region (the vault editor), plain-key shortcuts are
@@ -57,8 +59,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(any(target_arch = "wasm32", test))]
+use architect_input::{InputCommand, InputContext, InputEvent, KeyEvent};
+use architect_input::{
+    InputProcessor, KeyChord, KeyCode, KeymapConfig, WhichKey, WhichKeyEntry, WhichKeyLabels,
+    parse_key_sequence,
+};
 use dioxus::prelude::*;
-use input::{InputProcessor, KeymapConfig};
 
 use crate::actions;
 
@@ -69,7 +76,7 @@ use crate::actions;
 /// Settings table.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Binding {
-    /// Key sequence (`input::parse_key_sequence` syntax: chords
+    /// Key sequence (`architect_input::parse_key_sequence` syntax: chords
     /// space-separated, `ctrl+`/`alt+`/`shift+`/`cmd+` modifiers, and
     /// tokens like `space`, `comma`). Leader sequences begin with
     /// `space`.
@@ -283,7 +290,24 @@ pub fn keymap_config(prioritize_app: bool) -> KeymapConfig {
     cfg
 }
 
-// ── which-key derivation ────────────────────────────────────────────
+// ── which-key ───────────────────────────────────────────────────────
+
+/// Names for the intermediate prefixes (the which-key groups), in
+/// [`BINDINGS`] syntax. A prefix not listed shows its key.
+pub const GROUPS: &[(&str, &str)] = &[("space", "Leader"), ("space g", "Go to"), ("g", "Go to")];
+
+/// The which-key labels: each binding's label at the sequence this build
+/// binds, each [`GROUPS`] name at its prefix.
+#[must_use]
+pub fn which_key_labels() -> WhichKeyLabels {
+    let leaves = BINDINGS.iter().map(|b| (effective_sequence(b), b.label));
+    GROUPS
+        .iter()
+        .copied()
+        .chain(leaves)
+        .filter_map(|(seq, label)| Some((parse_key_sequence(seq).ok()?, label.to_owned())))
+        .collect()
+}
 
 /// A which-key overlay snapshot: the pending prefix + its continuations.
 #[derive(Clone, PartialEq, Debug)]
@@ -305,81 +329,87 @@ pub struct WkEntry {
     pub is_branch: bool,
 }
 
-/// Human name for an intermediate prefix (a which-key group). `None`
-/// falls back to the raw key.
-#[must_use]
-pub fn group_label(prefix_tokens: &[String]) -> Option<&'static str> {
-    match prefix_tokens.join(" ").as_str() {
-        "space" => Some("Leader"),
-        "space g" => Some("Go to"),
-        "g" => Some("Go to"),
-        _ => None,
+impl WhichKeyView {
+    /// The overlay's rows for the processor's which-key model.
+    #[must_use]
+    pub fn from_model(model: &WhichKey) -> Self {
+        Self {
+            prefix: model
+                .typed
+                .iter()
+                .map(chord_display)
+                .collect::<Vec<_>>()
+                .join(" "),
+            entries: model.entries.iter().map(WkEntry::from_model).collect(),
+        }
     }
 }
 
-/// Pretty single-token display (`space` → `SPC`).
-fn token_display(tok: &str) -> String {
-    match tok {
-        "space" => "SPC".to_string(),
-        other => other.to_string(),
+impl WkEntry {
+    fn from_model(entry: &WhichKeyEntry) -> Self {
+        let key = chord_display(&entry.chord);
+        Self {
+            label: entry.label.clone().unwrap_or_else(|| key.clone()),
+            is_branch: entry.is_group(),
+            key,
+        }
     }
 }
 
-/// Build the which-key view for a pending prefix (a list of chord
-/// tokens in [`BINDINGS`] syntax), or `None` if nothing extends it.
-#[must_use]
-pub fn derive_whichkey(prefix: &[String]) -> Option<WhichKeyView> {
-    use std::collections::BTreeMap;
+/// How the overlay shows one chord: `SPC` for the leader, otherwise the
+/// keymap notation (`n`, `Ctrl+p`).
+fn chord_display(chord: &KeyChord) -> String {
+    if *chord == KeyChord::plain(KeyCode::char(' ')) {
+        "SPC".to_owned()
+    } else {
+        chord.to_string()
+    }
+}
 
-    if prefix.is_empty() {
-        return None;
+// ── one keydown ─────────────────────────────────────────────────────
+
+/// What one keydown resolved to.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, PartialEq)]
+struct KeyPress {
+    /// Action ids to run, in order.
+    actions: Vec<String>,
+    /// The which-key view while a sequence is pending; `None` once it
+    /// ends.
+    which_key: Option<WhichKeyView>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KeyPress {
+    /// The app owns the event when it ran an action or holds a pending
+    /// prefix (so `<space>` doesn't scroll mid-leader); misses are left
+    /// to the browser.
+    const fn claims_event(&self) -> bool {
+        !self.actions.is_empty() || self.which_key.is_some()
     }
-    // key token -> (label, is_branch). First writer wins; a leaf beats a
-    // later branch discovery for the same key (shouldn't collide in a
-    // well-formed table).
-    let mut next: BTreeMap<String, (String, bool)> = BTreeMap::new();
-    for b in BINDINGS {
-        let toks: Vec<&str> = effective_sequence(b).split(' ').collect();
-        if toks.len() <= prefix.len() {
-            continue;
-        }
-        if !prefix.iter().zip(&toks).all(|(p, t)| p.as_str() == *t) {
-            continue;
-        }
-        let key = toks[prefix.len()].to_string();
-        let is_leaf = toks.len() == prefix.len() + 1;
-        next.entry(key.clone()).or_insert_with(|| {
-            if is_leaf {
-                (b.label.to_string(), false)
-            } else {
-                let mut deeper: Vec<String> = prefix.to_vec();
-                deeper.push(key.clone());
-                (
-                    group_label(&deeper).map_or_else(|| token_display(&key), str::to_string),
-                    true,
-                )
-            }
-        });
+}
+
+/// Feed one key to the processor: the actions it fires and the
+/// which-key view left behind.
+#[cfg(any(target_arch = "wasm32", test))]
+fn press(engine: &mut InputProcessor, key: KeyEvent, labels: &WhichKeyLabels) -> KeyPress {
+    let ctx = InputContext::new();
+    let commands = engine.process(InputEvent::Key(key), &ctx);
+    KeyPress {
+        actions: commands
+            .into_iter()
+            .filter_map(|command| match command {
+                InputCommand::Action(id) | InputCommand::ActionWithArgs { action: id, .. } => {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .collect(),
+        which_key: engine
+            .which_key(&ctx, labels)
+            .as_ref()
+            .map(WhichKeyView::from_model),
     }
-    if next.is_empty() {
-        return None;
-    }
-    let entries = next
-        .into_iter()
-        .map(|(key, (label, is_branch))| WkEntry {
-            key: token_display(&key),
-            label,
-            is_branch,
-        })
-        .collect();
-    Some(WhichKeyView {
-        prefix: prefix
-            .iter()
-            .map(|t| token_display(t))
-            .collect::<Vec<_>>()
-            .join(" "),
-        entries,
-    })
 }
 
 // ── which-key overlay ───────────────────────────────────────────────
@@ -437,10 +467,8 @@ pub fn WhichKeyOverlay(state: Signal<Option<WhichKeyView>>) -> Element {
 /// runtime. `Exec` runs an action through the registry (which enqueues
 /// an `Intent`); `Intent` is performed directly; `WhichKey` updates the
 /// overlay.
-// `Exec` / `WhichKey` have no construction site yet (the palette
-// performs Intents directly and which-key renders from its own
-// signal); the variants document the crossing contract and stay.
-#[allow(dead_code)]
+// `Exec` / `WhichKey` are only built by the wasm DOM listeners.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 enum Msg {
     Exec(String),
     Intent(actions::Intent),
@@ -550,7 +578,11 @@ pub fn use_app_shortcuts() -> Signal<Option<WhichKeyView>> {
                         Msg::Exec(id) => {
                             registry.execute(id).await;
                         }
-                        Msg::WhichKey(view) => whichkey.set(view),
+                        Msg::WhichKey(view) => {
+                            if *whichkey.peek() != view {
+                                whichkey.set(view);
+                            }
+                        }
                         Msg::Intent(intent) => perform_intent(
                             intent,
                             &mut palette,
@@ -727,6 +759,12 @@ pub fn spawn_new_note(
 
 /// Capture-phase document listeners. Installed once; the palette lives
 /// as long as the shell, so the listeners are `forget`-leaked.
+///
+/// The processor runs here, outside the Dioxus runtime, so a match can
+/// `preventDefault()` in the same tick. That is also why this does not
+/// use `architect_input::dioxus::use_input_processor`: its handle arms
+/// the timeout with `spawn` (needs the runtime) and has no way to report
+/// a key release.
 #[cfg(target_arch = "wasm32")]
 fn install_dom_listeners(
     engine: Rc<RefCell<InputProcessor>>,
@@ -739,17 +777,14 @@ fn install_dom_listeners(
 
     use_hook(move || {
         // Bumped on every processed keydown; a pending-sequence timeout
-        // only fires if no further key arrived (epoch dance — wasm has
-        // no tokio time).
+        // only fires if no further key arrived (the processor owns no
+        // clock).
         let epoch = Rc::new(Cell::new(0_u64));
-        // Mirrors the processor's pending sequence in BINDINGS-token
-        // syntax, so we can derive the which-key continuations.
-        let pending: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let labels = Rc::new(which_key_labels());
 
         let keydown = {
             let engine = engine.clone();
             let epoch = epoch.clone();
-            let pending = pending.clone();
             let msg_tx = msg_tx.clone();
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
                 // Typing guard: plain keys belong to the focused text
@@ -761,7 +796,7 @@ fn install_dom_listeners(
                 if text_entry_focused() && !(e.ctrl_key() || e.meta_key()) {
                     let leader_ok = editor_vim_normal()
                         && editor_root_focused()
-                        && (e.key() == " " || !pending.borrow().is_empty());
+                        && (e.key() == " " || !engine.borrow().pending_keys().is_empty());
                     if !leader_ok {
                         return;
                     }
@@ -770,72 +805,33 @@ fn install_dom_listeners(
                 if e.repeat() {
                     return;
                 }
-                let Some(event) = convert_key_event(&e) else {
+                let Some(key) = key_event(&e) else {
                     return;
                 };
-                let token = seq_token(&event);
                 epoch.set(epoch.get().wrapping_add(1));
-                let ctx = input::ActionContext::new();
-                let commands = engine
-                    .borrow_mut()
-                    .process(input::InputEvent::Key(event), &ctx);
-
-                let mut matched = false;
-                let mut is_pending = false;
-                for cmd in commands {
-                    match cmd {
-                        input::InputCommand::Action(id) => {
-                            matched = true;
-                            let _ = msg_tx.unbounded_send(Msg::Exec(id.as_str().to_string()));
-                        }
-                        input::InputCommand::ActionWithArgs { action, .. } => {
-                            matched = true;
-                            let _ = msg_tx.unbounded_send(Msg::Exec(action.as_str().to_string()));
-                        }
-                        input::InputCommand::Pending { .. } => {
-                            is_pending = true;
-                            schedule_sequence_timeout(
-                                engine.clone(),
-                                epoch.clone(),
-                                pending.clone(),
-                                msg_tx.clone(),
-                            );
-                        }
-                        _ => {}
-                    }
+                let outcome = press(&mut engine.borrow_mut(), key, &labels);
+                if engine.borrow().needs_timeout() {
+                    schedule_sequence_timeout(engine.clone(), epoch.clone(), msg_tx.clone());
                 }
-
-                if is_pending {
-                    if let Some(tok) = token {
-                        pending.borrow_mut().push(tok);
-                    }
-                    let view = derive_whichkey(&pending.borrow());
-                    let _ = msg_tx.unbounded_send(Msg::WhichKey(view));
-                } else {
-                    // Match or miss ends any pending sequence.
-                    if !pending.borrow().is_empty() {
-                        pending.borrow_mut().clear();
-                        let _ = msg_tx.unbounded_send(Msg::WhichKey(None));
-                    }
-                }
-
-                // A match OR an owned pending prefix claims the event
-                // (so `<space>` doesn't scroll mid-leader); misses are
-                // left to the browser/native behavior.
-                if matched || is_pending {
+                if outcome.claims_event() {
                     e.prevent_default();
                     e.stop_propagation();
                 }
+                let KeyPress { actions, which_key } = outcome;
+                for id in actions {
+                    let _ = msg_tx.unbounded_send(Msg::Exec(id));
+                }
+                let _ = msg_tx.unbounded_send(Msg::WhichKey(which_key));
             })
         };
 
         let keyup = {
             let engine = engine.clone();
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-                if let Some(k) = convert_key_event(&e) {
+                if let Some(k) = key_event(&e) {
                     let _ = engine
                         .borrow_mut()
-                        .notify_key_release(input::KeyChord::new(k.key, k.modifiers));
+                        .notify_key_release(&KeyChord::new(k.key, k.modifiers));
                 }
             })
         };
@@ -858,12 +854,11 @@ fn install_dom_listeners(
 }
 
 /// Expire a pending prefix after the processor's timeout, unless another
-/// key arrived first. Also clears the which-key mirror + overlay.
+/// key arrived first. Also clears the which-key overlay.
 #[cfg(target_arch = "wasm32")]
 fn schedule_sequence_timeout(
     engine: Rc<RefCell<InputProcessor>>,
     epoch: Rc<std::cell::Cell<u64>>,
-    pending: Rc<RefCell<Vec<String>>>,
     msg_tx: futures_channel::mpsc::UnboundedSender<Msg>,
 ) {
     let want = epoch.get();
@@ -871,42 +866,27 @@ fn schedule_sequence_timeout(
     gloo_timers::callback::Timeout::new(ms, move || {
         if epoch.get() == want {
             let _ = engine.borrow_mut().timeout_expired();
-            pending.borrow_mut().clear();
             let _ = msg_tx.unbounded_send(Msg::WhichKey(None));
         }
     })
     .forget();
 }
 
-/// The BINDINGS-syntax token for a key event, or `None` for keys that
-/// never start/extend a sequence (non-character keys).
+/// `web_sys::KeyboardEvent` → an input key event, through architect's
+/// key mapping. `None` for keys no binding can name (bare modifiers,
+/// media keys).
 #[cfg(target_arch = "wasm32")]
-fn seq_token(ev: &input::KeyEvent) -> Option<String> {
-    let base = match &ev.key {
-        input::KeyCode::Character(c) if c == " " => "space".to_string(),
-        input::KeyCode::Character(c) => c.clone(),
-        _ => return None,
-    };
-    let m = ev.modifiers;
-    if m.ctrl || m.alt || m.shift || m.meta {
-        let mut s = String::new();
-        if m.ctrl {
-            s.push_str("ctrl+");
-        }
-        if m.alt {
-            s.push_str("alt+");
-        }
-        if m.shift {
-            s.push_str("shift+");
-        }
-        if m.meta {
-            s.push_str("cmd+");
-        }
-        s.push_str(&base);
-        Some(s)
-    } else {
-        Some(base)
-    }
+fn key_event(e: &web_sys::KeyboardEvent) -> Option<KeyEvent> {
+    let key = e.key().parse::<Key>().ok()?;
+    Some(KeyEvent {
+        key: architect_input::dioxus::convert_key(&key)?,
+        modifiers: architect_input::Modifiers {
+            ctrl: e.ctrl_key(),
+            alt: e.alt_key(),
+            shift: e.shift_key(),
+            meta: e.meta_key(),
+        },
+    })
 }
 
 // ── editor vim-mode bridge ──────────────────────────────────────────
@@ -958,55 +938,46 @@ fn text_entry_focused() -> bool {
         .is_some_and(|h| h.is_content_editable())
 }
 
-/// `web_sys::KeyboardEvent` → `input::KeyEvent`.
-#[cfg(target_arch = "wasm32")]
-fn convert_key_event(e: &web_sys::KeyboardEvent) -> Option<input::KeyEvent> {
-    let key = e.key();
-    let code = match key.as_str() {
-        "ArrowUp" => input::KeyCode::ArrowUp,
-        "ArrowDown" => input::KeyCode::ArrowDown,
-        "ArrowLeft" => input::KeyCode::ArrowLeft,
-        "ArrowRight" => input::KeyCode::ArrowRight,
-        "Enter" => input::KeyCode::Enter,
-        "Escape" => input::KeyCode::Escape,
-        "Tab" => input::KeyCode::Tab,
-        "Backspace" => input::KeyCode::Backspace,
-        "Delete" => input::KeyCode::Delete,
-        f if f.len() >= 2 && f.starts_with('F') => {
-            input::KeyCode::F(f[1..].parse::<u8>().ok().filter(|n| (1..=12).contains(n))?)
-        }
-        c if c.chars().count() == 1 => input::KeyCode::Character(c.to_lowercase()),
-        _ => return None,
-    };
-    Some(input::KeyEvent {
-        key: code,
-        modifiers: input::Modifiers {
-            ctrl: e.ctrl_key(),
-            alt: e.alt_key(),
-            shift: e.shift_key(),
-            meta: e.meta_key(),
-        },
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    use architect_input::{Modifiers, parse_key_chord};
+
     use super::*;
+
+    fn engine(prioritize_app: bool) -> InputProcessor {
+        InputProcessor::from_config(keymap_config(prioritize_app)).expect("keymap compiles")
+    }
+
+    /// Press then release every chord of `seq` the way the DOM does,
+    /// returning the last keydown's outcome.
+    fn type_seq(engine: &mut InputProcessor, seq: &str) -> KeyPress {
+        let labels = which_key_labels();
+        let mut last = None;
+        for token in seq.split(' ') {
+            let chord = parse_key_chord(token).expect("chord parses");
+            let key = KeyEvent {
+                key: chord.key.clone(),
+                modifiers: chord.modifiers,
+            };
+            last = Some(press(engine, key, &labels));
+            let _ = engine.notify_key_release(&chord);
+        }
+        last.expect("a non-empty sequence")
+    }
 
     #[test]
     fn every_sequence_parses() {
         for b in BINDINGS {
-            input::parse_key_sequence(b.seq).unwrap_or_else(|e| panic!("bad seq {:?}: {e}", b.seq));
+            parse_key_sequence(b.seq).unwrap_or_else(|e| panic!("bad seq {:?}: {e}", b.seq));
             if let Some(web) = b.web {
-                input::parse_key_sequence(web)
-                    .unwrap_or_else(|e| panic!("bad web alt {:?}: {e}", web));
+                parse_key_sequence(web).unwrap_or_else(|e| panic!("bad web alt {:?}: {e}", web));
             }
         }
     }
 
     #[test]
     fn full_keymap_compiles_into_a_processor() {
-        assert!(InputProcessor::from_config(keymap_config(true)).is_ok());
+        assert!(InputProcessor::<String>::from_config(keymap_config(true)).is_ok());
     }
 
     #[test]
@@ -1019,6 +990,16 @@ mod tests {
                 "unregistered action {}",
                 b.action
             );
+        }
+    }
+
+    #[test]
+    fn every_binding_fires_its_action() {
+        for b in BINDINGS {
+            let seq = effective_sequence(b);
+            let got = type_seq(&mut engine(true), seq);
+            assert_eq!(got.actions, vec![b.action.to_owned()], "{seq}");
+            assert!(got.which_key.is_none(), "{seq} leaves nothing pending");
         }
     }
 
@@ -1036,8 +1017,50 @@ mod tests {
     }
 
     #[test]
+    fn priority_off_leaves_browser_combos_to_the_browser() {
+        let mut keys = engine(false);
+        let got = type_seq(&mut keys, "ctrl+p");
+        assert!(got.actions.is_empty());
+        assert!(!got.claims_event());
+        assert_eq!(
+            type_seq(&mut keys, "ctrl+\\").actions,
+            vec![actions::TOGGLE_SIDEBAR.to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_leader_prefix_claims_the_key_and_shows_which_key() {
+        let got = type_seq(&mut engine(true), "space");
+        assert!(got.actions.is_empty());
+        assert!(got.claims_event(), "space must not scroll mid-leader");
+        assert_eq!(got.which_key.expect("pending").prefix, "SPC");
+    }
+
+    #[test]
+    fn space_space_searches_everything() {
+        assert_eq!(
+            type_seq(&mut engine(true), "space space").actions,
+            vec![actions::SEARCH_ALL.to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_miss_ends_the_sequence() {
+        let mut keys = engine(true);
+        let got = type_seq(&mut keys, "g x");
+        assert!(got.actions.is_empty());
+        assert!(got.which_key.is_none());
+        assert_eq!(
+            type_seq(&mut keys, "g h").actions,
+            vec![actions::NAV_HOME.to_owned()]
+        );
+    }
+
+    #[test]
     fn whichkey_lists_leader_group() {
-        let view = derive_whichkey(&["space".to_string()]).expect("leader has entries");
+        let view = type_seq(&mut engine(true), "space")
+            .which_key
+            .expect("leader has entries");
         assert_eq!(view.prefix, "SPC");
         // `g` under the leader is a branch (the go-to group).
         let g = view
@@ -1047,19 +1070,26 @@ mod tests {
             .expect("g present");
         assert!(g.is_branch);
         assert_eq!(g.label, "Go to");
-        // `n` is a leaf (new note).
+        // `n` is a leaf (new note); `SPC` is the search leaf.
         let n = view
             .entries
             .iter()
             .find(|e| e.key == "n")
             .expect("n present");
         assert!(!n.is_branch);
+        assert_eq!(n.label, "New note");
+        assert!(
+            view.entries
+                .iter()
+                .any(|e| e.key == "SPC" && e.label == "Search everything")
+        );
     }
 
     #[test]
     fn whichkey_descends_into_go_group() {
-        let view =
-            derive_whichkey(&["space".to_string(), "g".to_string()]).expect("go group entries");
+        let view = type_seq(&mut engine(true), "space g")
+            .which_key
+            .expect("go group entries");
         assert_eq!(view.prefix, "SPC g");
         assert!(view.entries.iter().all(|e| !e.is_branch));
         assert!(
@@ -1067,5 +1097,11 @@ mod tests {
                 .iter()
                 .any(|e| e.key == "h" && e.label == "Home")
         );
+    }
+
+    #[test]
+    fn the_overlay_shows_modified_chords_in_keymap_notation() {
+        let chord = KeyChord::new(KeyCode::char('p'), Modifiers::CTRL);
+        assert_eq!(chord_display(&chord), "Ctrl+p");
     }
 }
