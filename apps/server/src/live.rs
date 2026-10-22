@@ -397,7 +397,7 @@ impl LiveHost {
             let mut sets = lock(&self.inner.sets);
             let state = sets.get_mut(setlist)?;
             let mut admitted = lock(&self.inner.admitted);
-            let old: Vec<Uuid> = state.ids.drain(..).collect();
+            let old: Vec<Uuid> = std::mem::take(&mut state.ids);
             for id in &old {
                 admitted.remove(id);
             }
