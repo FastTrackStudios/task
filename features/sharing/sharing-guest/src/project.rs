@@ -453,7 +453,12 @@ mod tests {
     #[test]
     fn every_project_field_is_classified_shared_or_stripped() {
         let full = serde_json::to_value(crescendum()).unwrap();
-        let keys: BTreeSet<&str> = full.as_object().unwrap().keys().map(String::as_str).collect();
+        let keys: BTreeSet<&str> = full
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         let classified: BTreeSet<&str> = SHARED_PROJECT_FIELDS
             .iter()
             .chain(STRIPPED_PROJECT_FIELDS)
@@ -461,8 +466,12 @@ mod tests {
             .collect();
         assert_eq!(keys, classified, "a ProjectInfo field is unclassified");
         let guest = guest_json();
-        let guest_keys: BTreeSet<&str> =
-            guest.as_object().unwrap().keys().map(String::as_str).collect();
+        let guest_keys: BTreeSet<&str> = guest
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         for k in STRIPPED_PROJECT_FIELDS {
             assert!(!guest_keys.contains(k), "{k} leaked");
         }

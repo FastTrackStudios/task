@@ -19,7 +19,9 @@
 //! - `created_by` — the creator's principal ref (`user:<uuid>` /
 //!   `bot:<uuid>`), an id into the owner org's directory and bot
 //!   roster. The display name (`created_by_name`) is carried, so the
-//!   guest still sees who made the task without learning an account id.
+//!   guest still sees who made the task without learning an account id;
+//! - `on_behalf_of` — the same kind of ref, for the person a personal
+//!   bot acted for. Its display name (`on_behalf_of_name`) is carried.
 //!
 //! `time_estimate` (minutes) and `workflow.estimate` (a size) are
 //! planning, not money, and are carried.
@@ -46,6 +48,7 @@ pub const STRIPPED_TASK_FIELDS: &[&str] = &[
     "agentProfile",
     "dispatchedAgentTasks",
     "createdBy",
+    "onBehalfOf",
 ];
 
 /// `TaskInfo` fields (serde names) the guest view carries, some of them
@@ -71,11 +74,13 @@ pub const SHARED_TASK_FIELDS: &[&str] = &[
     "dateCreated",
     "dateModified",
     "createdByName",
+    "onBehalfOfName",
     "workflow",
 ];
 
 /// `WorkflowAttrs` fields (serde names) the guest view drops.
-pub const STRIPPED_WORKFLOW_FIELDS: &[&str] = &["session", "verifyCommand", "capabilities", "model"];
+pub const STRIPPED_WORKFLOW_FIELDS: &[&str] =
+    &["session", "verifyCommand", "capabilities", "model"];
 
 /// `WorkflowAttrs` fields (serde names) the guest view carries.
 pub const SHARED_WORKFLOW_FIELDS: &[&str] = &[
@@ -116,6 +121,10 @@ pub struct GuestTask {
     /// The creator's display name; the principal ref is stripped.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub created_by_name: Option<String>,
+    /// Display name of the person a personal bot acted for; the ref is
+    /// stripped.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_behalf_of_name: Option<String>,
     pub details: String,
     pub workflow: Option<GuestWorkflow>,
 }
@@ -170,8 +179,10 @@ where
         date_modified,
         // ── stripped: an owner-directory account id ──
         created_by: _,
+        on_behalf_of: _,
         // ── carried ──
         created_by_name,
+        on_behalf_of_name,
         details,
         workflow,
     } = task;
@@ -197,6 +208,7 @@ where
         date_created,
         date_modified,
         created_by_name,
+        on_behalf_of_name,
         details,
         workflow: workflow.map(|w| guest_workflow(w, in_scope)),
     }
@@ -295,6 +307,8 @@ mod tests {
             date_modified: None,
             created_by: Some("user:0b5e55ed-0000-0000-0000-00000000c0d1".into()),
             created_by_name: Some("Cody".into()),
+            on_behalf_of: Some("user:0b0b0b0b-0000-0000-0000-0000000000f0".into()),
+            on_behalf_of_name: Some("Robin".into()),
             details: "Balance strings.".into(),
             workflow: Some(WorkflowAttrs {
                 cycle: Some(CYCLE),
@@ -360,12 +374,18 @@ mod tests {
         runner_capabilities_are_absent: "workflow" / "capabilities" => "secret-runner-cap".to_owned();
         model_is_absent: "workflow" / "model" => "secret-model-id".to_owned();
         created_by_ref_is_absent: "task" / "createdBy" => "0b5e55ed".to_owned();
+        on_behalf_of_ref_is_absent: "task" / "onBehalfOf" => "0b0b0b0b".to_owned();
     }
 
     #[test]
     fn every_task_field_is_classified_shared_or_stripped() {
         let full = serde_json::to_value(mix_task()).unwrap();
-        let keys: BTreeSet<&str> = full.as_object().unwrap().keys().map(String::as_str).collect();
+        let keys: BTreeSet<&str> = full
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         let classified: BTreeSet<&str> = SHARED_TASK_FIELDS
             .iter()
             .chain(STRIPPED_TASK_FIELDS)
@@ -373,7 +393,11 @@ mod tests {
             .collect();
         // Every key on the wire is classified (fields serialized only
         // when set are set in `mix_task` where it matters).
-        assert!(keys.is_subset(&classified), "unclassified: {:?}", keys.difference(&classified));
+        assert!(
+            keys.is_subset(&classified),
+            "unclassified: {:?}",
+            keys.difference(&classified)
+        );
 
         // WorkflowAttrs: every field, set or not.
         let full_wf: BTreeSet<&str> = full["workflow"]
@@ -434,6 +458,7 @@ mod tests {
         assert_eq!(g.details, "Balance strings.");
         assert_eq!(g.path, "Projects/Crescendum/tasks/mix.md");
         assert_eq!(g.created_by_name.as_deref(), Some("Cody"));
+        assert_eq!(g.on_behalf_of_name.as_deref(), Some("Robin"));
     }
 
     #[test]

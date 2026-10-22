@@ -273,9 +273,11 @@ mod tests {
     #[test]
     fn many_out_of_scope_links_collapse_to_one_marker_so_nothing_is_counted() {
         let scope = ScopeSet::new([id(1), id(3)]);
-        let got = redact_list([id(9), id(1), id(8), id(3), id(7)], |u| ObjectRef::Task(*u), &|r| {
-            scope.contains(r)
-        });
+        let got = redact_list(
+            [id(9), id(1), id(8), id(3), id(7)],
+            |u| ObjectRef::Task(*u),
+            &|r| scope.contains(r),
+        );
         assert_eq!(
             got,
             vec![
@@ -337,7 +339,9 @@ mod tests {
 
         assert_eq!(
             redact_processed_into(Some("Projects/Crescendum/tasks/mix.md"), &pred),
-            Some(Linked::Shared("Projects/Crescendum/tasks/mix.md".to_owned()))
+            Some(Linked::Shared(
+                "Projects/Crescendum/tasks/mix.md".to_owned()
+            ))
         );
         let got = redact_processed_into(Some("Wiki/Private Rates.md"), &pred);
         assert_eq!(got, Some(Linked::NotShared));
