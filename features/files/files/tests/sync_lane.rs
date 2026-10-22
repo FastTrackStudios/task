@@ -20,9 +20,22 @@ use files_proto::service::tree::TreeService;
 use files_proto::service::version::VersionService;
 use files_proto::{FilesFault, RootPath};
 
+/// A collaborative album's project page: music production and video
+/// production at once, which is what makes both tools' layouts apply.
+const BOTH: &str = "---\ntype: project\ntitle: Album\ncapabilities: [music-production, video-production]\n---\n\n# Album\n";
+
 /// An album root: one session with its media, some footage, and a
 /// directory that is a convention of this job rather than of any tool.
+/// Its project declares both kinds of work.
 async fn album(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
+    album_declaring(name, Some(BOTH)).await
+}
+
+/// [`album`], with `page` as its `project.md` — or none at all.
+async fn album_declaring(
+    name: &str,
+    page: Option<&str>,
+) -> (tempfile::TempDir, FilesBackend, RootId) {
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let dir = data_dir.path().join(name);
 
@@ -44,6 +57,9 @@ async fn album(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
     std::fs::write(dir.join("Proxies/reel.mov"), b"footage bytes here").unwrap();
     std::fs::write(dir.join("Project Assembly/click.wav"), b"click track").unwrap();
     std::fs::write(dir.join("Client Notes/brief.md"), b"# brief").unwrap();
+    if let Some(page) = page {
+        std::fs::write(dir.join("project.md"), page).unwrap();
+    }
     // Junk both layers must swallow.
     std::fs::write(dir.join(".DS_Store"), b"finder").unwrap();
     std::fs::write(dir.join("01 Song/01 Song.rpp-bak"), b"reaper backup").unwrap();
@@ -219,10 +235,10 @@ async fn unmapped_directories_are_reported_rather_than_guessed() {
     assert_eq!(bounces.facet, Some(FacetName("mixes".into())));
     assert!(!bounces.atomic);
 
-    // Resolve's layouts apply to a media root too: a collaborative
-    // album is music production and video production at once, so the
-    // capability set is both and `Proxies` is a tool directory rather
-    // than a convention of this job.
+    // Resolve's layouts apply because this album's project says so: a
+    // collaborative album is music production and video production at
+    // once, its page declares both, and `Proxies` is a tool directory
+    // rather than a convention of this job.
     let proxies = find("Proxies");
     assert_eq!(proxies.source, FacetSource::ToolLayout);
     assert_eq!(proxies.facet, Some(FacetName("proxies".into())));
@@ -793,4 +809,244 @@ async fn a_legacy_file_collapses_to_one_row_for_this_node() {
     let (rows, local) = on_disk(tmp.path());
     assert_eq!(rows, 2);
     assert!(local.contains(&newest.0.to_string()), "{local}");
+}
+
+// ── Capabilities bound to the root, and a session as one unit ───────
+
+const MUSIC: &str = "---\ntype: project\ntitle: Album\ncapabilities:\n  - music-production\n---\n";
+
+fn binding(bindings: &[files_proto::service::sync::FacetBinding], path: &str) -> FacetSource {
+    bindings
+        .iter()
+        .find(|b| b.path.as_str() == path)
+        .unwrap_or_else(|| panic!("{path} was not reported: {bindings:?}"))
+        .source
+}
+
+/// A root holds the work its own project page declares, not every kind
+/// of work a media root could hold.
+///
+/// The same tree under three pages: a music project does not recognise
+/// Resolve's `Proxies` (it reports it, for a decision), a project that
+/// declared both does, and a tree with no page recognises nothing at
+/// all — not even Pro Tools' `Audio Files` — because nobody said which
+/// tool wrote it.
+// t[verify project.capability.conventions]
+// t[verify files.facet.tool-layout]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_roots_conventions_are_the_ones_its_project_declares() {
+    let (_m, music, music_root) = album_declaring("music", Some(MUSIC)).await;
+    let facets = music.facets(music_root).await.expect("facets");
+    assert_eq!(
+        binding(&facets, "01 Song/Audio Files"),
+        FacetSource::ToolLayout
+    );
+    assert_eq!(
+        binding(&facets, "Proxies"),
+        FacetSource::Unmapped,
+        "a music project is not assumed to be a video one too"
+    );
+    let ignores = SyncService::ignore_set(&music, music_root).await.unwrap();
+    assert!(ignores.capability.iter().any(|p| p == "*.rpp-bak"));
+
+    let (_b, both, both_root) = album("both").await;
+    let facets = both.facets(both_root).await.expect("facets");
+    assert_eq!(binding(&facets, "Proxies"), FacetSource::ToolLayout);
+
+    let (_n, none, none_root) = album_declaring("undeclared", None).await;
+    let facets = none.facets(none_root).await.expect("facets");
+    for dir in ["01 Song", "Proxies", "Project Assembly"] {
+        assert_eq!(binding(&facets, dir), FacetSource::Unmapped, "{dir}");
+    }
+    assert!(
+        SyncService::ignore_set(&none, none_root)
+            .await
+            .unwrap()
+            .capability
+            .is_empty(),
+        "no declared work, no tool's droppings hidden"
+    );
+}
+
+/// A REAPER album: two songs, footage, and a samples folder the first
+/// song's session reaches into. Its project declares music production.
+async fn reaper_album(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
+    let data_dir = tempfile::tempdir().expect("data tempdir");
+    let dir = data_dir.path().join(name);
+    let files: &[(&str, &[u8])] = &[
+        ("project.md", MUSIC.as_bytes()),
+        (
+            "Track One/Track One.RPP",
+            b"<REAPER_PROJECT 0.1 \"7.09\" 1\n  <TRACK\n    <ITEM\n      <SOURCE WAVE\n        FILE \"Audio Files/Vox_1.wav\"\n      >\n    >\n    <ITEM\n      <SOURCE WAVE\n        FILE \"../Shared Samples/clap.wav\"\n      >\n    >\n    <ITEM\n      <SOURCE WAVE\n        FILE \"Audio Files/Vox_2.wav\"\n      >\n    >\n    <ITEM\n      <SOURCE WAVE\n        FILE \"/Volumes/Old Drive/stray.wav\"\n      >\n    >\n  >\n>\n".as_slice(),
+        ),
+        ("Track One/Audio Files/Vox_1.wav", b"track one vocal".as_slice()),
+        ("Track One/Audio Files/Unused take.wav", b"never placed in the session".as_slice()),
+        ("Track Two/Track Two.RPP", b"<REAPER_PROJECT 0.1 \"7.09\" 1\n  FILE \"Audio Files/Vox_1.wav\"\n>\n".as_slice()),
+        ("Track Two/Audio Files/Vox_1.wav", b"track two vocal".as_slice()),
+        ("Shared Samples/clap.wav", b"clap".as_slice()),
+        ("Footage/cam-a.mov", b"unrelated footage".as_slice()),
+    ];
+    for (path, bytes) in files {
+        let full = dir.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, bytes).unwrap();
+    }
+    let backend =
+        FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
+    let root = backend
+        .adopt(AdoptRequest {
+            path: dir.to_string_lossy().into_owned(),
+            name: name.to_string(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        })
+        .await
+        .expect("adopt");
+    let root = RootId::new(root.id);
+    backend.settled(root).await;
+    VersionService::checkpoint(&backend, root, Some("staged".into()))
+        .await
+        .expect("checkpoint");
+    (data_dir, backend, root)
+}
+
+/// Selecting one session — pinning its file — keeps the session and
+/// exactly what it references: its own take, and a sample in a folder
+/// no tool layout names. The other song, the unused take beside it and
+/// the footage stay stubs, and the project page stays put.
+// t[verify files.sync.selective]
+// t[verify files.device.control]
+#[tokio::test(flavor = "multi_thread")]
+async fn selecting_a_session_keeps_it_and_its_media_and_nothing_else() {
+    let (_tmp, backend, root) = reaper_album("select").await;
+    let session = RootPath::parse("Track One/Track One.RPP").unwrap();
+
+    backend
+        .pin(root, vec![session.clone()], true)
+        .await
+        .expect("select the session");
+
+    for kept in [
+        "Track One/Track One.RPP",
+        "Track One/Audio Files/Vox_1.wav",
+        "Shared Samples/clap.wav",
+        "project.md",
+    ] {
+        assert!(
+            !is_stub(&backend, root, kept).await,
+            "{kept} must be resident"
+        );
+    }
+    for released in [
+        "Track One/Audio Files/Unused take.wav",
+        "Track Two/Track Two.RPP",
+        "Track Two/Audio Files/Vox_1.wav",
+        "Footage/cam-a.mov",
+    ] {
+        assert!(
+            is_stub(&backend, root, released).await,
+            "{released} must be a stub"
+        );
+    }
+
+    let unit = backend
+        .session_media(root, session.clone())
+        .await
+        .expect("session_media");
+    assert!(unit.parsed);
+    assert_eq!(
+        unit.media,
+        vec![
+            RootPath::parse("Shared Samples/clap.wav").unwrap(),
+            RootPath::parse("Track One/Audio Files/Vox_1.wav").unwrap(),
+        ]
+    );
+    assert_eq!(
+        unit.missing,
+        vec![RootPath::parse("Track One/Audio Files/Vox_2.wav").unwrap()],
+        "a take the session names but the root lacks is reported, not discovered in the DAW"
+    );
+    assert_eq!(
+        unit.outside,
+        vec!["/Volumes/Old Drive/stray.wav".to_string()]
+    );
+
+    // Deselecting returns it all to the subscription, which is empty.
+    backend
+        .pin(root, vec![session], false)
+        .await
+        .expect("deselect");
+    assert!(is_stub(&backend, root, "Shared Samples/clap.wav").await);
+    assert!(is_stub(&backend, root, "Track One/Track One.RPP").await);
+    assert!(
+        !is_stub(&backend, root, "project.md").await,
+        "the page is never released"
+    );
+}
+
+/// Subscribing to `sessions` keeps every session file — not only the
+/// tool directories beside them — and each brings its own media.
+// t[verify files.sync.selective]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sessions_facet_keeps_session_files_and_what_they_reference() {
+    let (_tmp, backend, root) = reaper_album("facet").await;
+    backend
+        .subscribe(root, vec![FacetName("sessions".into())])
+        .await
+        .expect("subscribe");
+    for kept in [
+        "Track One/Track One.RPP",
+        "Track Two/Track Two.RPP",
+        "Shared Samples/clap.wav",
+    ] {
+        assert!(
+            !is_stub(&backend, root, kept).await,
+            "{kept} must be resident"
+        );
+    }
+    assert!(is_stub(&backend, root, "Footage/cam-a.mov").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_that_is_not_a_declared_session_is_refused() {
+    let (_tmp, backend, root) = reaper_album("refuse").await;
+    let err = backend
+        .session_media(root, RootPath::parse("Footage/cam-a.mov").unwrap())
+        .await
+        .expect_err("footage is not a session");
+    assert!(matches!(err, FilesFault::Invalid(_)), "{err:?}");
+    let err = backend
+        .session_media(root, RootPath::parse("Track Nine/Track Nine.RPP").unwrap())
+        .await
+        .expect_err("no such session");
+    assert!(matches!(err, FilesFault::PathNotFound(_)), "{err:?}");
+}
+
+/// A selected session is still selected after a restart, and a fresh
+/// pass over the restarted node keeps the same files — the references
+/// are read again from the session on disk, not remembered.
+// t[verify files.device.control]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_selected_session_survives_a_restart() {
+    let (tmp, backend, root) = reaper_album("restart").await;
+    let session = RootPath::parse("Track One/Track One.RPP").unwrap();
+    backend
+        .pin(root, vec![session.clone()], true)
+        .await
+        .expect("select");
+    // Closed the way a process exit closes it, so the next backend can
+    // open the same stores.
+    backend.shutdown().await;
+    drop(backend);
+
+    let on_disk = std::fs::read_to_string(tmp.path().join("sync.json")).expect("sync.json");
+    assert!(on_disk.contains("Track One.RPP"), "{on_disk}");
+
+    let second = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("restart");
+    let sub = second.subscription(root).await.expect("subscription");
+    assert!(sub.pinned.contains(&session), "{sub:?}");
+    // An empty pin is a re-application of what is stored.
+    second.pin(root, Vec::new(), true).await.expect("re-apply");
+    assert!(!is_stub(&second, root, "Shared Samples/clap.wav").await);
+    assert!(is_stub(&second, root, "Footage/cam-a.mov").await);
 }

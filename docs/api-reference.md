@@ -503,7 +503,7 @@ Plugin: `core` — schema stamp: `578176a115cfe9b9`
 
 ## `files-sync` (SyncService)
 
-Plugin: `core` — schema stamp: `5f412dcb4809521f`
+Plugin: `core` — schema stamp: `2752d9efdf9f2e94`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -523,10 +523,11 @@ Plugin: `core` — schema stamp: `5f412dcb4809521f`
 | `coordinator` | — | `read` on `files/**` | — |
 | `set_transfer_policy` | `device`, `policy` | `write` on `files/**` | — |
 | `revoke_device` | `device` | `write` on `files/**` | audited |
+| `session_media` | `root_id`, `session` | `read` on `files/**` | — |
 
 ## `files-replica` (SyncService)
 
-Plugin: `core` — schema stamp: `5f412dcb4809521f`
+Plugin: `core` — schema stamp: `2752d9efdf9f2e94`
 
 | method | args | permit | notes |
 |---|---|---|---|

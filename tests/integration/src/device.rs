@@ -68,6 +68,16 @@ impl Laptop {
             b"vox take one",
         )
         .unwrap();
+        // The project's page, as both companies declared it: the album is
+        // music production *and* video production, which is what makes
+        // REAPER's layout and Resolve's both apply here. A root's
+        // conventions are what its project declares — a page saying only
+        // music would leave `Proxies` unmapped (`session_media.rs`).
+        std::fs::write(
+            tree.join("project.md"),
+            b"---\ntype: project\ntitle: Album\ncapabilities: [music-production, video-production]\n---\n\n# Album\n",
+        )
+        .unwrap();
         // Deliberately the largest thing here: it is what the laptop is
         // trying not to carry.
         std::fs::write(
@@ -168,6 +178,31 @@ impl Laptop {
     pub async fn restart(&mut self) {
         self.endpoint.close().await;
         self.endpoint = serve(&self.backend, self.key.clone()).await;
+    }
+
+    /// Stop this laptop altogether and start it again on the same disk
+    /// and the same key.
+    ///
+    /// Unlike [`Self::restart`], the backend goes too: a fresh one is
+    /// opened over the same data directory, so what comes back is what
+    /// the laptop wrote down — the lane's state file, the stubs and the
+    /// resident bytes on disk — and nothing its last process remembered.
+    pub async fn reboot(&mut self) {
+        self.endpoint.close().await;
+        // Everything holding the disk, as a process exit releases it, so
+        // the reopened backend can take the same stores.
+        self.backend.shutdown().await;
+        let dir = self._dir.path().to_path_buf();
+        self.backend = files::FilesBackend::new(&dir, dir.join("vault"))
+            .expect("the laptop's backend, reopened over its own disk");
+        self.endpoint = serve(&self.backend, self.key.clone()).await;
+    }
+
+    /// This laptop's data directory — where its lane state and stores
+    /// live, beside the tree.
+    #[must_use]
+    pub fn data_dir(&self) -> &std::path::Path {
+        self._dir.path()
     }
 
     /// Open the files sync lane on `origin` **as this device**.

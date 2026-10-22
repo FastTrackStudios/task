@@ -24,6 +24,7 @@
 //! | [`ignore`] | `files.ignore.*` — the two layers |
 //! | [`labels`] | `files.version.labels` — read, never parsed |
 //! | [`peering`] | `files.peering.*` — which servers host which orgs |
+//! | [`session`] | `files.sync.selective` — what a session references |
 //! | [`tree`] | the org-tree grammar; `project.identity.declaration` |
 //!
 //! [`facet`] classifies and [`hydration`] decides: together they are what
@@ -45,6 +46,7 @@ pub mod ignore;
 pub mod labels;
 pub mod layout;
 pub mod peering;
+pub mod session;
 pub mod tree;
 
 pub use adopt::Adoption;

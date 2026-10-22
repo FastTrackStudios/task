@@ -111,6 +111,34 @@ pub struct DeviceInfo {
     pub revoked: bool,
 }
 
+/// What a session brings with it — the atomic unit
+/// `files.sync.selective` promises, spelled out for one session file.
+///
+/// A device keeps a session by subscribing to `sessions` or by pinning
+/// the session file; either way the session and every path in
+/// [`Self::media`] stay resident together, and nothing else in the root
+/// is implied. What the session names but this root cannot supply is
+/// reported here rather than discovered when the DAW opens it.
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[repr(C)]
+pub struct SessionMedia {
+    pub session: RootPath,
+    /// Files in this root the session references. Selecting the
+    /// session keeps every one of them resident.
+    pub media: Vec<RootPath>,
+    /// Referenced inside this root but not present in it — moved,
+    /// renamed, or never saved here.
+    pub missing: Vec<RootPath>,
+    /// Referenced outside this root, as written in the session:
+    /// absolute paths from the machine that recorded them, or relative
+    /// ones that climb out of the root.
+    pub outside: Vec<String>,
+    /// Whether the references were read from the session file. `false`
+    /// for a format the lane cannot read (Pro Tools' binary `.ptx`),
+    /// whose media is taken to be the atomic tool directories beside it.
+    pub parsed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum SyncEvent {
@@ -235,4 +263,17 @@ pub trait SyncService {
     /// local copy of org content on next contact — the answer to a
     /// laptop with a client's unreleased material on it.
     async fn revoke_device(&self, device: DeviceId) -> Result<DeviceInfo, FilesFault>;
+
+    /// What `session` references and what of that this root holds — the
+    /// unit subscribing to `sessions`, or pinning the session file,
+    /// keeps resident together.
+    ///
+    /// A path that is not a session file of a capability this root's
+    /// project declares is refused: which files are sessions is a
+    /// convention of the declared work, not of a file name alone.
+    async fn session_media(
+        &self,
+        root_id: RootId,
+        session: RootPath,
+    ) -> Result<SessionMedia, FilesFault>;
 }

@@ -555,6 +555,11 @@ const FILES_SYNC: ServicePermits = ServicePermits {
         rd("residency", "files/**"),
         wr("set_residency", "files/**"),
         wr("apply_residency", "files/**"),
+        // What a session references, and what of it this root holds.
+        // A read of the root's content (the session file's own lines),
+        // so a member's like `facets`; a device learns it from the root
+        // it already holds rather than by asking.
+        rd("session_media", "files/**"),
     ],
 };
 

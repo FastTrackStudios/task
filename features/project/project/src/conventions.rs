@@ -138,6 +138,53 @@ mod tests {
         );
     }
 
+    /// A declaration reads the same in both crates.
+    ///
+    /// `files_domain::facet::declaration` reads a root's `project.md` to
+    /// decide which tool layouts apply to it, and `project`'s entity
+    /// parser reads the same page to list the project. Two readings of
+    /// one page that disagreed would sync a laptop by one set of
+    /// conventions and show it another.
+    #[test]
+    fn a_declared_name_parses_the_same_in_both_crates() {
+        use files_domain::facet::Capability as Files;
+        for name in [
+            "music-production",
+            "MUSIC_production",
+            " video-production ",
+            "video_production",
+            "keyflow",
+            "session",
+            "",
+        ] {
+            assert_eq!(
+                Capability::parse(name).map(convention_of),
+                Files::parse(name),
+                "{name:?}"
+            );
+        }
+        for legacy in [
+            "music",
+            "audio",
+            "album",
+            "song",
+            "video",
+            "film",
+            "documentary",
+            "general",
+            "audio-production",
+        ] {
+            assert_eq!(
+                Capability::from_project_type(legacy).map(convention_of),
+                Files::from_project_type(legacy),
+                "{legacy:?}"
+            );
+        }
+        for c in Capability::all() {
+            assert_eq!(Files::parse(c.as_str()), Some(convention_of(*c)));
+        }
+    }
+
     /// A declared capability brings its tool's artifacts with it.
     // t[verify project.capability.conventions] — the half that exists:
     // a declared capability brings its tool's artifacts with it, and

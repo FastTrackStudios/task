@@ -1,3 +1,37 @@
 <REAPER_PROJECT 0.1 "7.09" 1728662400
   TEMPO 120 4 4
+  RECORD_PATH "Audio Files" ""
+  <TRACK
+    NAME Bass
+    <ITEM
+      POSITION 0
+      LENGTH 4
+      NAME Bass.wav
+      <SOURCE WAVE
+        FILE "Audio Files/Bass.wav"
+      >
+    >
+  >
+  <TRACK
+    NAME Piano L
+    <ITEM
+      POSITION 0
+      LENGTH 4
+      NAME Piano Left.wav
+      <SOURCE WAVE
+        FILE "Audio Files/Piano Left.wav"
+      >
+    >
+  >
+  <TRACK
+    NAME Piano R
+    <ITEM
+      POSITION 0
+      LENGTH 4
+      NAME Piano Right.wav
+      <SOURCE WAVE
+        FILE "Audio Files/Piano Right.wav"
+      >
+    >
+  >
 >
