@@ -40,6 +40,7 @@ pub mod bible_cli;
 pub mod bots;
 pub mod capability;
 pub mod central_auth;
+pub mod config;
 #[cfg(feature = "plugin-git")]
 pub mod connections;
 pub mod debug_profile;
@@ -977,6 +978,8 @@ pub(crate) async fn build_org_state(
     blob_root: &std::path::Path,
 ) -> eyre::Result<OrgAppState> {
     {
+        // The environment, read once for this org's boot.
+        let config = crate::config::ServerConfig::load();
         // The org's effective plugin set, resolved once from the
         // manifest's deny-list. A missing/unreadable manifest resolves
         // to "everything on" — the safe default and the pre-plugin
@@ -994,7 +997,7 @@ pub(crate) async fn build_org_state(
         // path; the keypair signs upload/download URLs.
         let object_store: Arc<dyn attachments::ObjectStore> =
             Arc::new(attachments::LocalFsStore::new(blob_root.to_path_buf()));
-        let public_base_url = std::env::var("TASK_SERVER_PUBLIC_URL").unwrap_or_default();
+        let public_base_url = config.public_url.clone().unwrap_or_default();
         let attachment_service = Arc::new(attachments::AttachmentServiceImpl::new(
             keypair.clone(),
             object_store,
@@ -1006,8 +1009,10 @@ pub(crate) async fn build_org_state(
         // `TASK_SERVER_VAULT_ROOT` still wins as a hard
         // override (for tests / containers that want a
         // flat parent dir).
-        let vault_root = std::env::var("TASK_SERVER_VAULT_ROOT")
-            .map_or_else(|_| org_root.vault_dir(), PathBuf::from);
+        let vault_root = config
+            .vault_root
+            .as_deref()
+            .map_or_else(|| org_root.vault_dir(), PathBuf::from);
         // Every wiki this org holds, not one. `LLM/` scratch stays a
         // sibling subtree the wiki backend doesn't touch — agents
         // read/write it through plain filesystem ops.
@@ -1028,12 +1033,14 @@ pub(crate) async fn build_org_state(
         // it: each wiki root is also a vault root (`wiki:<slug>`), which
         // is what lets the vault editor open a wiki page.
         #[cfg(any(feature = "plugin-wiki", feature = "plugin-mealplan"))]
-        let wiki_root = std::env::var("TASK_SERVER_WIKI_ROOT")
-            .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from);
+        let wiki_root = config
+            .wiki_root
+            .as_deref()
+            .map_or_else(|| org_root.wiki_knowledge_dir(), PathBuf::from);
         #[cfg(feature = "plugin-wiki")]
         let wiki_roots: std::collections::HashMap<String, PathBuf> = {
             let mut roots = std::collections::HashMap::new();
-            if std::env::var_os("TASK_SERVER_WIKI_ROOT").is_some() {
+            if config.wiki_root.is_some() {
                 roots.insert(org_proto::DEFAULT_WIKI.to_string(), wiki_root.clone());
             } else {
                 roots.extend(org_root.named_wikis());
@@ -1109,8 +1116,10 @@ pub(crate) async fn build_org_state(
         let vault_sync_state = vault_sync_state.with_recipe_roots(
             [(
                 "default".to_string(),
-                std::env::var("TASK_SERVER_WIKI_ROOT")
-                    .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from),
+                config
+                    .wiki_root
+                    .as_deref()
+                    .map_or_else(|| org_root.wiki_knowledge_dir(), PathBuf::from),
             )]
             .into_iter()
             .collect(),
@@ -1122,8 +1131,10 @@ pub(crate) async fn build_org_state(
         // dirs ever move into a database. The inbound listener folds
         // every `VaultEvent::Put` (non-CRDT `put_file` callers AND
         // the watcher below) into whichever per-file docs are open.
-        let crdt_root = std::env::var("TASK_SERVER_CRDT_ROOT")
-            .map_or_else(|_| org_root.path().join("crdt"), PathBuf::from);
+        let crdt_root = config
+            .crdt_root
+            .as_deref()
+            .map_or_else(|| org_root.path().join("crdt"), PathBuf::from);
         let vault_collab = vault_collab::VaultCollab::new(vault_sync_state.clone(), crdt_root);
         // The registry that turns a shelf into a collaborative one. The
         // wiki backend joins it below, for the event bridge only; the
@@ -1264,10 +1275,7 @@ pub(crate) async fn build_org_state(
                 .parent()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| org_root.path().to_path_buf());
-            let domains = wiki_domains(
-                &orgs_dir,
-                std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
-            );
+            let domains = wiki_domains(&orgs_dir, config.wiki_domains.as_deref());
             let local = wiki_live::subscriptions_backend::LocalOrgs::new(
                 orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
                 domains,
@@ -1291,7 +1299,7 @@ pub(crate) async fn build_org_state(
         // dbs by hand for now. PR 4 promotes this to a
         // first-class resolver.
         #[cfg(feature = "plugin-agent")]
-        let agent_tasks_url = std::env::var("TASK_SERVER_AGENT_TASKS_URL").unwrap_or_else(|_| {
+        let agent_tasks_url = config.agent_tasks_url.clone().unwrap_or_else(|| {
             format!(
                 "sqlite://{}?mode=rwc",
                 org_root.path().join("agent-tasks.sqlite").display()
@@ -1311,13 +1319,12 @@ pub(crate) async fn build_org_state(
         // applies nothing. There is a regression test for that in
         // `agent-runners`; do not co-locate this with agent-tasks.
         #[cfg(feature = "plugin-agent")]
-        let agent_runners_url =
-            std::env::var("TASK_SERVER_AGENT_RUNNERS_URL").unwrap_or_else(|_| {
-                format!(
-                    "sqlite://{}?mode=rwc",
-                    org_root.path().join("agent-runners.sqlite").display()
-                )
-            });
+        let agent_runners_url = config.agent_runners_url.clone().unwrap_or_else(|| {
+            format!(
+                "sqlite://{}?mode=rwc",
+                org_root.path().join("agent-runners.sqlite").display()
+            )
+        });
         #[cfg(feature = "plugin-agent")]
         let agent_runners_conn =
             open_sqlite_pool(scope, agent_runners_url, "agent-runners", |db| {
@@ -1363,8 +1370,10 @@ pub(crate) async fn build_org_state(
         // rest of the server uses — the rate cascade calls
         // `VaultProjectDefaults::lookup` to read each
         // session's project markdown on close.
-        let timer_url = std::env::var("TASK_SERVER_TIMER_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.timer_db().display()));
+        let timer_url = config
+            .timer_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.timer_db().display()));
         let timer_conn = open_sqlite_pool(scope, timer_url, "timer", |db| {
             Box::pin(async move { timer::Migrator::up(&db, None).await.map(|()| db) })
         })
@@ -1379,8 +1388,10 @@ pub(crate) async fn build_org_state(
         // Threads — conversations/topics anchored to tasks/projects.
         // SeaORM-backed (DB swappable); migrations run on open. Override
         // via `TASK_SERVER_THREADS_URL`.
-        let threads_url = std::env::var("TASK_SERVER_THREADS_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.threads_db().display()));
+        let threads_url = config
+            .threads_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.threads_db().display()));
         let threads_conn = open_sqlite_pool(scope, threads_url, "threads", |db| {
             Box::pin(async move { threads::Migrator::up(&db, None).await.map(|()| db) })
         })
@@ -1391,7 +1402,7 @@ pub(crate) async fn build_org_state(
         // `<data_root>/orgs/<slug>/notify.sqlite` (override via
         // `TASK_SERVER_NOTIFY_URL`); migrations run on open. Fed by
         // the notifier (`crate::notifier`), served as `Notify`.
-        let notify_url = std::env::var("TASK_SERVER_NOTIFY_URL").unwrap_or_else(|_| {
+        let notify_url = config.notify_url.clone().unwrap_or_else(|| {
             format!(
                 "sqlite://{}?mode=rwc",
                 org_root.path().join("notify.sqlite").display()
@@ -1407,8 +1418,10 @@ pub(crate) async fn build_org_state(
         // Per-user preferences. SQLite at
         // `<data_root>/orgs/<slug>/prefs.sqlite` (override via
         // `TASK_SERVER_PREFS_URL`); migrations run on open.
-        let prefs_url = std::env::var("TASK_SERVER_PREFS_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.prefs_db().display()));
+        let prefs_url = config
+            .prefs_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.prefs_db().display()));
         let prefs_conn = open_sqlite_pool(scope, prefs_url, "prefs", |db| {
             Box::pin(async move { prefs::Migrator::up(&db, None).await.map(|()| db) })
         })
@@ -1479,8 +1492,10 @@ pub(crate) async fn build_org_state(
         // task-cli `finance invoice` flow writes against it
         // when that feature lands.
         #[cfg(feature = "plugin-finance")]
-        let finance_url = std::env::var("TASK_SERVER_FINANCE_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.finance_db().display()));
+        let finance_url = config
+            .finance_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.finance_db().display()));
         #[cfg(feature = "plugin-finance")]
         let finance_conn = open_sqlite_pool(scope, finance_url, "finance", |db| {
             Box::pin(async move { finance_db::Migrator::up(&db, None).await.map(|()| db) })
@@ -1540,8 +1555,8 @@ pub(crate) async fn build_org_state(
         // this does not strand anyone's existing accounts; the warning
         // says what to do about it.
         #[cfg(feature = "plugin-email")]
-        let mail_root = std::env::var("TASK_SERVER_MAIL_ROOT").map_or_else(
-            |_| {
+        let mail_root = config.mail_root.as_deref().map_or_else(
+            || {
                 let beside = org_root.path().join("mail");
                 let legacy = vault_root.join("Mail");
                 if !beside.exists() && legacy.exists() {
@@ -1672,13 +1687,9 @@ pub(crate) async fn build_org_state(
         // list. `from_token` only errors when called outside a tokio
         // runtime, which `build_org_state` always is.
         #[cfg(feature = "plugin-git")]
-        let forgejo_base = std::env::var("TASK_FORGEJO_BASE_URL").unwrap_or_default();
+        let forgejo_base = config.forgejo_base_url.clone().unwrap_or_default();
         #[cfg(feature = "plugin-git")]
-        let forgejo_token = std::env::var("TASK_FORGEJO_TOKEN")
-            .ok()
-            .filter(|t| !t.is_empty())
-            .or_else(|| std::env::var("FORGEJO_TOKEN").ok())
-            .unwrap_or_default();
+        let forgejo_token = config.forgejo_token().to_owned();
         #[cfg(feature = "plugin-git")]
         let forge = git_forgejo::Backend::from_token(forgejo_base.clone(), forgejo_token)
             .map_err(|e| eyre::eyre!("forge backend: {e}"))?;
@@ -1690,12 +1701,8 @@ pub(crate) async fn build_org_state(
         // agent-owned tasks still sync — just under the human
         // identity until the bot token is configured.
         #[cfg(feature = "plugin-git")]
-        let forge_agent = match std::env::var("TASK_FORGEJO_BOT_TOKEN")
-            .ok()
-            .or_else(|| std::env::var("FTS_CODEBERG_ACCESS_TOKEN").ok())
-            .filter(|t| !t.is_empty())
-        {
-            Some(bot_token) => git_forgejo::Backend::from_token(forgejo_base, bot_token)
+        let forge_agent = match config.forgejo_bot_token() {
+            Some(bot_token) => git_forgejo::Backend::from_token(forgejo_base, bot_token.to_owned())
                 .map_err(|e| eyre::eyre!("forge agent backend: {e}"))?,
             None => forge.clone(),
         };
@@ -1848,11 +1855,8 @@ pub(crate) async fn build_org_state(
                 wiki.clone(),
                 std::sync::Arc::new(crate::wiki_tracker::TaskTracker::new(tasks.clone())),
             );
-            if let Some(secs) = std::env::var("TASK_WIKI_CLAIM_TTL_SECS")
-                .ok()
-                .and_then(|v| v.trim().parse::<u64>().ok())
-            {
-                edits = edits.with_claim_ttl(std::time::Duration::from_secs(secs));
+            if let Some(ttl) = config.wiki_claim_ttl() {
+                edits = edits.with_claim_ttl(ttl);
             }
             // t[impl wiki.source.sync] — every wiki with a repository
             // behind it is fetched on a schedule, first pass at boot
@@ -1901,10 +1905,7 @@ pub(crate) async fn build_org_state(
             let root = orgs_dir.parent().unwrap_or(&orgs_dir).to_path_buf();
             links.with_homes(std::sync::Arc::new(node_homes::LocalHomes::new(
                 root,
-                wiki_domains(
-                    &orgs_dir,
-                    std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
-                ),
+                wiki_domains(&orgs_dir, config.wiki_domains.as_deref()),
                 org_root.slug(),
                 org_root.path().to_path_buf(),
             )))
@@ -1920,25 +1921,20 @@ pub(crate) async fn build_org_state(
         #[cfg(feature = "plugin-scripture")]
         let mut scripture_api = Vec::new();
         #[cfg(feature = "plugin-scripture")]
-        if let Ok(key) = std::env::var("TASK_ESV_API_KEY").or_else(|_| std::env::var("ESV_API_KEY"))
-        {
-            if !key.is_empty() {
-                scripture_api.push(scripture::ApiTranslation::esv(key));
-            }
+        if let Some(key) = config.esv_api_key() {
+            scripture_api.push(scripture::ApiTranslation::esv(key.to_owned()));
         }
         #[cfg(feature = "plugin-scripture")]
-        if let (Ok(key), Ok(bible_id)) = (
-            std::env::var("TASK_API_BIBLE_KEY").or_else(|_| std::env::var("API_BIBLE_KEY")),
-            std::env::var("TASK_API_BIBLE_NIV_ID"),
+        if let (Some(key), Some(bible_id)) = (
+            config.api_bible_key().map(str::to_owned),
+            config.api_bible_niv_id.clone(),
         ) {
-            if !key.is_empty() && !bible_id.is_empty() {
-                scripture_api.push(scripture::ApiTranslation::api_bible(
-                    "NIV",
-                    "New International Version",
-                    bible_id,
-                    key,
-                ));
-            }
+            scripture_api.push(scripture::ApiTranslation::api_bible(
+                "NIV",
+                "New International Version",
+                bible_id,
+                key,
+            ));
         }
         // Two places hold editions and the difference is who put them
         // there: this org installed the first, a subscription brought the
@@ -2495,9 +2491,9 @@ pub fn install_auth_secret(secret: String) -> bool {
 /// hardcoded [`DEFAULT_AUTH_SECRET`], a dev convenience that makes tokens
 /// forgeable (with a warning). A real deployment MUST set one.
 pub(crate) fn auth_secret() -> String {
-    match std::env::var("TASK_AUTH_SECRET") {
-        Ok(s) if !s.is_empty() => s,
-        _ => {
+    match crate::config::ServerConfig::load().auth_secret {
+        Some(s) => s,
+        None => {
             if let Some(installed) = INSTALLED_AUTH_SECRET.get() {
                 return installed.clone();
             }
@@ -2532,7 +2528,7 @@ fn pick_server_orgs(
 ) -> eyre::Result<Vec<org_proto::OrgRoot>> {
     let explicit = slug_filter
         .map(str::to_owned)
-        .or_else(|| std::env::var("TASK_SERVER_ORG").ok())
+        .or_else(|| crate::config::ServerConfig::load().org)
         .filter(|s| !s.is_empty());
     if let Some(slug) = explicit {
         let (org_root, _) = data_root
@@ -2601,7 +2597,7 @@ pub struct MediaQuery {
 /// [`enforce_permissions`].
 #[must_use]
 pub fn enforce_media_token() -> bool {
-    std::env::var("TASK_ENFORCE_MEDIA_TOKEN").is_ok_and(|v| v == "1")
+    crate::config::ServerConfig::load().enforces_media_token()
 }
 
 /// Decide whether a media read is allowed. `None` = proceed;
@@ -3129,7 +3125,9 @@ fn cors_layer() -> tower_http::cors::CorsLayer {
     use axum::http::HeaderValue;
     use tower_http::cors::{AllowOrigin, CorsLayer};
 
-    let raw = std::env::var("TASK_CORS_ALLOWED_ORIGINS").unwrap_or_default();
+    let raw = crate::config::ServerConfig::load()
+        .cors_allowed_origins
+        .unwrap_or_default();
     let raw = raw.trim();
     let permissive = |why: &str| {
         tracing::warn!(
@@ -3347,7 +3345,7 @@ pub async fn discovery_document(state: &AppState, bearer: Option<String>) -> ser
         // image env by the flake; "unknown" outside that path). CI's
         // verify-live step polls this until it matches the pushed sha —
         // a green run means the deployment is actually serving it.
-        "build": std::env::var("TASK_BUILD_REV").unwrap_or_else(|_| "unknown".to_owned()),
+        "build": crate::config::ServerConfig::load().build_rev,
         "orgs": orgs,
         // The account the bearer resolved to (`null` without one, or when
         // nothing here or at the issuer recognised it). `via` says which.
@@ -3593,7 +3591,7 @@ pub const DEFAULT_ORG_ROLE: &str = "member";
 /// exactly as before permit tables existed.
 #[must_use]
 pub fn enforce_permissions() -> bool {
-    std::env::var("TASK_ENFORCE_PERMISSIONS").is_ok_and(|v| v == "1")
+    crate::config::ServerConfig::load().enforces_permissions()
 }
 
 /// Server-wide tally of every (would-be) denial the gate produced. Read
@@ -4521,23 +4519,17 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
 /// the bind address (a remote browser would dial 127.0.0.1); absent,
 /// the guest app falls back to same-origin, which is right in prod.
 pub(crate) fn share_public_base_explicit() -> Option<String> {
-    std::env::var("TASK_SHARE_PUBLIC_BASE")
-        .or_else(|_| std::env::var("TASK_SERVER_PUBLIC_URL"))
-        .ok()
-        .filter(|s| !s.is_empty())
+    crate::config::ServerConfig::load()
+        .share_public_base_explicit()
+        .map(str::to_owned)
 }
 
 /// Public base URL share links are composed against.
 pub(crate) fn share_public_base() -> String {
-    std::env::var("TASK_SHARE_PUBLIC_BASE")
-        .or_else(|_| std::env::var("TASK_SERVER_PUBLIC_URL"))
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            let bind =
-                std::env::var("TASK_SERVER_BIND").unwrap_or_else(|_| "127.0.0.1:3456".into());
-            format!("http://{bind}")
-        })
+    let config = crate::config::ServerConfig::load();
+    config
+        .share_public_base_explicit()
+        .map_or_else(|| format!("http://{}", config.share_bind()), str::to_owned)
 }
 
 // The share landing / browse / rendition / download handlers live in

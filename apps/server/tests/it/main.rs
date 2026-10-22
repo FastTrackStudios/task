@@ -115,6 +115,7 @@ mod schema_stamps_e2e;
 #[cfg(feature = "plugin-scripture")]
 mod scripture_install_e2e;
 mod sermon_resources_e2e;
+mod server_config;
 mod share_files_e2e;
 mod share_wiki_note_e2e;
 mod sharing_grants_e2e;

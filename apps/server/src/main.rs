@@ -65,8 +65,11 @@ async fn main() -> eyre::Result<()> {
         }
     };
 
-    let bind: SocketAddr = std::env::var("TASK_SERVER_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:9090".into())
+    // Every variable the server reads is a field of `ServerConfig`
+    // (`task_server::config`), under its old name.
+    let config = task_server::config::ServerConfig::load();
+    let bind: SocketAddr = config
+        .listen_bind()
         .parse()
         .wrap_err("invalid TASK_SERVER_BIND")?;
 
@@ -76,8 +79,7 @@ async fn main() -> eyre::Result<()> {
     // to single-org auto-pick (or auto-bootstraps `default`).
     // PR 4 will scan the orgs dir and serve all of them at
     // `/org/<slug>/...`.
-    let org_slug = std::env::var("TASK_SERVER_ORG").ok();
-    let state = AppState::new(org_slug.as_deref()).await?;
+    let state = AppState::new(config.org.as_deref()).await?;
 
     // Every hosted org gets an iroh endpoint, and gets it *before* the
     // router is built: `iroh_host::start` installs the dialler on each
@@ -169,7 +171,7 @@ async fn main() -> eyre::Result<()> {
     // through to index.html so the wasm router handles SPA deep links
     // like `/session/{org}/{collection}`. Vox/health/blob routes above
     // take precedence.
-    if let Ok(web_dir) = std::env::var("TASK_SERVER_WEB_DIR") {
+    if let Some(web_dir) = config.web_dir.clone() {
         use axum::response::Html;
         use tower_http::services::ServeDir;
         let web = std::path::PathBuf::from(&web_dir);
