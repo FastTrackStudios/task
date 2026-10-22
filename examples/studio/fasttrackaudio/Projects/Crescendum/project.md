@@ -28,5 +28,5 @@ no new grant.
 
 What it never reaches: the billing on this page (the client and the
 rate are FastTrackAudio's business), the timer and the invoices, the
-contacts, and *Northbeam Jingles* — FastTrackAudio's other project,
-which sits beside this one and is not shared with anybody.
+contacts, and any other project FastTrackAudio keeps. A grant names
+one subtree; nothing outside it is shared, or even named, here.
