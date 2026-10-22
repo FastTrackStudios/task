@@ -316,8 +316,10 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/node-binaries.yml
-    # TASK_RELEASE_MINISIGN_KEY signs the release's SHA256SUMS.
-    secrets: inherit
+    # No `secrets: inherit`: the one secret the called workflow needs
+    # (TASK_RELEASE_MINISIGN_KEY, which signs SHA256SUMS) lives in the
+    # `release-signing` environment and is read by its `publish` job
+    # directly, so the repo's other secrets never reach it.
 
   # The release is tagged: build the Linux desktop package at the tag and
   # push it to fasttrackstudio.cachix.org, so NixOS hosts (nix-fleet's
