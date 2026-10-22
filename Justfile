@@ -91,6 +91,7 @@ live: css
 # `source(none)` and names every source explicitly, so the output does
 # not depend on the working directory.
 css:
+    bash scripts/architect-ui-link.sh
     tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css
     tailwindcss -i apps/tailwind.css -o apps/mobile/assets/tailwind.css
     tailwindcss -i apps/tailwind.css -o apps/web/assets/tailwind.css
@@ -381,6 +382,13 @@ clippy: ci-clippy
 ci-fmt:
     cargo fmt --all -- --check
 
+# Task's token sheet is architect-ui's, imported through apps/.architect-ui
+# (no vendored copy). Fails on drift: a re-vendored copy, an import that
+# no longer goes through the link, or a link left on another pin. Depends
+# on `css` so the sheet was also compiled from that link.
+ci-architect-css: css
+    bash scripts/architect-ui-link.sh --check
+
 ci-manifests:
     cargo metadata --locked --format-version 1 > /dev/null
 
@@ -462,7 +470,7 @@ ci-docs: css
 # card: on a PR into dev this IS the gate (CI does not run there), and
 # its output is the evidence the reviewer checks on the card. (`ci-docs`
 # runs only on release PRs; `just ci-release` adds it.)
-ci: ci-fmt ci-manifests ci-versions ci-tests ci-clippy ci-wasm
+ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
 #

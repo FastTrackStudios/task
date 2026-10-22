@@ -49,6 +49,7 @@ if [ "$BUILD" = 1 ]; then
         set -euo pipefail
         unset DEVELOPER_DIR SDKROOT RUSTC_WRAPPER
         export PATH='$BIN_IOS':\$PATH
+        bash '$ROOT/scripts/architect-ui-link.sh'
         cd '$ROOT/apps' && tailwindcss -i tailwind.css -o mobile/assets/tailwind.css
         cd '$ROOT/apps/mobile' && dx build --platform ios $( [ "$PROFILE" = release ] && echo --release )"
 fi

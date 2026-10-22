@@ -1,74 +1,128 @@
-//! Task's toasts: the shared primitive's queue and timing, drawn here.
+//! Task's toast host: architect-ui's `ToastProvider`, with Task's timing.
 //!
-//! The rendering lives in Task rather than `architect-ui` for two
-//! reasons: toasts can carry an **action** ("Undo" after completing or
-//! deleting a task — `ToastOptions::action`), which architect-ui's
-//! renderer does not yet pass through; and the status reads from an
-//! icon beside the title instead of a thick coloured left edge.
+//! The renderer is architect-ui's (`architect_ui::components::toast::Toast`). It
+//! passes a toast's **action** through (the "Undo" after completing or
+//! deleting a task, `ToastOptions::action`), so Task no longer draws its
+//! own. Where the toast region sits on screen is set in `apps/tailwind.css`,
+//! because architect-ui's provider takes no class for it.
 //!
 //! Every `use_toast()` caller (architect-ui's re-export is the same
 //! primitive) lands here once this provider is mounted.
 
 use std::time::Duration;
 
-use architect_ui::lucide_dioxus::{CircleAlert, CircleCheck, Info, TriangleAlert, X};
-use dioxus::dioxus_core::DynamicNode;
 use dioxus::prelude::*;
-use dioxus_primitives::toast::{
-    Toast as PrimitiveToast, ToastActionButton, ToastCloseButton, ToastContent, ToastDescription,
-    ToastProps, ToastPropsWithOwner, ToastProvider as PrimitiveToastProvider, ToastTitle,
-    ToastType,
-};
 
 /// How long a toast stays: long enough to reach for Undo.
 const DEFAULT_DURATION: Duration = Duration::from_secs(6);
 
+/// How many toasts show at once; older ones drop off.
+const MAX_TOASTS: usize = 4;
+
 #[component]
 pub fn ToastProvider(children: Element) -> Element {
     rsx! {
-        PrimitiveToastProvider {
+        architect_ui::components::toast::ToastProvider {
             default_duration: Some(DEFAULT_DURATION),
-            max_toasts: 4usize,
-            // Bottom-centre on a phone (clear of the tab bar), bottom-
-            // right on a desk.
-            class: "pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] z-[60] flex justify-center px-3 md:inset-x-auto md:bottom-10 md:right-4 md:justify-end md:px-0 [&_ol]:flex [&_ol]:w-full [&_ol]:max-w-sm [&_ol]:flex-col [&_ol]:gap-2",
-            render_toast: Callback::new(|props: ToastPropsWithOwner| {
-                rsx! { {DynamicNode::Component(props.into_vcomponent(TaskToast))} }
-            }),
+            max_toasts: MAX_TOASTS,
             {children}
         }
     }
 }
 
-#[component]
-fn TaskToast(props: ToastProps) -> Element {
-    let (icon, tint) = match props.toast_type {
-        ToastType::Success => (rsx! { CircleCheck { size: 16 } }, "text-emerald-500"),
-        ToastType::Error => (rsx! { CircleAlert { size: 16 } }, "text-destructive"),
-        ToastType::Warning => (rsx! { TriangleAlert { size: 16 } }, "text-amber-500"),
-        ToastType::Info => (rsx! { Info { size: 16 } }, "text-muted-foreground"),
-    };
-    rsx! {
-        PrimitiveToast {
-            id: props.id,
-            index: props.index,
-            title: props.title,
-            description: props.description,
-            toast_type: props.toast_type,
-            on_close: props.on_close,
-            permanent: props.permanent,
-            duration: props.duration,
-            action: props.action,
-            class: "pointer-events-auto flex w-full items-start gap-3 rounded-lg border border-border bg-popover px-3.5 py-3 text-sm text-popover-foreground shadow-[0_8px_24px_-8px_rgb(0_0_0/0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            span { class: "mt-0.5 shrink-0 {tint}", aria_hidden: "true", {icon} }
-            ToastContent { class: "flex min-w-0 flex-1 flex-col gap-0.5",
-                ToastTitle { class: "font-medium leading-snug" }
-                ToastDescription { class: "text-muted-foreground leading-snug" }
-            }
-            ToastActionButton { class: "-my-1 shrink-0 rounded-md px-2.5 py-1.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" }
-            ToastCloseButton { class: "-my-1 -mr-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                X { size: 15 }
-            }
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use architect_ui::components::toast::{ToastOptions, use_toast};
+    use dioxus::dioxus_core::NoOpMutations;
+
+    use super::*;
+
+    /// Attributes whose values carry ids from process-wide counters.
+    const ID_ATTRS: [&str; 3] = ["id=\"", "aria-labelledby=\"", "aria-describedby=\""];
+
+    /// Raises one toast with an action while the provider first renders.
+    #[component]
+    fn RaiseUndo() -> Element {
+        let toasts = use_toast();
+        use_hook(move || {
+            toasts.success(
+                "Marked done".to_owned(),
+                ToastOptions::new()
+                    .description("Write the release notes")
+                    .permanent(true)
+                    .action("Undo", || {}),
+            );
+        });
+        rsx! {}
+    }
+
+    fn app() -> Element {
+        rsx! {
+            ToastProvider { RaiseUndo {} }
         }
+    }
+
+    /// Replaces the digits in generated ids, so the snapshot does not
+    /// depend on which tests ran first in the process.
+    fn normalize_ids(html: &str) -> String {
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html;
+        while let Some(start) = ID_ATTRS
+            .iter()
+            .filter_map(|attr| rest.find(attr).map(|at| at + attr.len()))
+            .min()
+        {
+            let (before, after) = rest.split_at(start);
+            out.push_str(before);
+            let end = after.find('"').unwrap_or(after.len());
+            let (value, tail) = after.split_at(end);
+            out.extend(
+                value
+                    .chars()
+                    .map(|c| if c.is_ascii_digit() { 'N' } else { c }),
+            );
+            rest = tail;
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// The toast Task shows after "Mark done": architect-ui's renderer,
+    /// with the Undo action button. `TASK_UPDATE_SNAPSHOTS=1` rewrites
+    /// the snapshot.
+    #[test]
+    fn toast_with_action_snapshot() {
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        // The toast was queued during the first render; draw it.
+        dom.render_immediate(&mut NoOpMutations);
+        let html = normalize_ids(&dioxus_ssr::render(&dom));
+
+        assert!(
+            html.contains("data-toast-action=\"true\"") && html.contains(">Undo</button>"),
+            "the toast has no Undo action button: {html}"
+        );
+        assert!(html.contains("Marked done") && html.contains("Write the release notes"));
+
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snapshots/toast_with_action.html");
+        let pretty = html.replace("><", ">\n<") + "\n";
+        if std::env::var_os("TASK_UPDATE_SNAPSHOTS").is_some() {
+            std::fs::create_dir_all(path.parent().expect("snapshot dir")).expect("mkdir snapshots");
+            std::fs::write(&path, &pretty).expect("write snapshot");
+            return;
+        }
+        let want = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "no snapshot at {} ({e}); run with TASK_UPDATE_SNAPSHOTS=1",
+                path.display()
+            )
+        });
+        assert_eq!(
+            pretty, want,
+            "toast markup changed; re-run with TASK_UPDATE_SNAPSHOTS=1 if intended"
+        );
     }
 }

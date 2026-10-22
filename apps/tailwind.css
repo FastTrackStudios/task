@@ -19,7 +19,7 @@
  * cwd — which is what lets `dx` own this build. */
 @import "tailwindcss" source(none);
 /* Task's palette: the canonical architect-ui design tokens plus the Obsidian
- * overrides. See apps/task/fts-theme.css. */
+ * overrides. See apps/fts-theme.css. */
 @import "./fts-theme.css";
 
 /* The app crates themselves (main.rs is a thin shell — kept so a stray
@@ -60,13 +60,16 @@
    See the block below. */
 @source "../features/view/view-*/src/**/*.rs";
 
-/* Sibling checkouts. The workspace `[patch]`es architect to `../architect`
- * (Cargo.toml) while the local-first work lands, so architect-ui's classes
- * finally have a path again; the editor's live in `../editor` when it is
- * checked out beside us. From this file (apps/) a sibling repo is two
- * levels up. Where a checkout is absent these match nothing — silently —
- * and the gap described below comes back. */
-@source "../../architect/features/ui/architect-ui/src/**/*.rs";
+/* architect-ui, through the link scripts/architect-ui-link.sh writes to the
+ * checkout cargo resolved for Cargo.lock's pin (`just css` runs it). Its
+ * components draw their own utility classes (the toasts' action button and
+ * close button, sheet and badge variants); without this scan they render
+ * unstyled. The link also carries the token sheet apps/fts-theme.css
+ * imports, so the build fails loudly when it is missing. */
+@source "./.architect-ui/src/**/*.rs";
+/* The editor's classes live in `../editor` when it is checked out beside
+ * us (a sibling repo is two levels up from apps/). Where it is absent this
+ * matches nothing, silently, and the gap described below comes back. */
 @source "../../editor/features/ui/src/**/*.rs";
 
 /* GONE WITH THE AUGUST 2026 SPLIT, and a real (if cosmetic) regression.
@@ -93,6 +96,20 @@
 
 @theme {
     --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Where toasts sit. architect-ui's `ToastProvider` passes no class to the
+ * primitive's portal region (`div[role=region]` with `--toast-count`), so
+ * it is placed here: bottom-centre on a phone, clear of the tab bar;
+ * bottom-right on a desk. Drop this once architect-ui's provider takes a
+ * class. */
+@layer components {
+    [role="region"][style*="--toast-count"] {
+        @apply pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] z-[60] flex justify-center px-3 md:inset-x-auto md:bottom-10 md:right-4 md:justify-end md:px-0;
+    }
+    [role="region"][style*="--toast-count"] > ol {
+        @apply flex w-full max-w-sm flex-col gap-2;
+    }
 }
 
 @layer base {

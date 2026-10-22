@@ -399,7 +399,7 @@ desktop() {
   # The stylesheet is generated and git-ignored (`just desktop-css`) —
   # regenerate when the tool is here, so a fresh clone works.
   if command -v tailwindcss >/dev/null 2>&1; then
-    ( cd "$REPO_ROOT" && tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css )
+    ( cd "$REPO_ROOT" && bash scripts/architect-ui-link.sh >/dev/null && tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css )
   elif [ ! -f "$REPO_ROOT/apps/desktop/assets/tailwind.css" ]; then
     echo "!! no tailwindcss on PATH and no generated stylesheet — run 'just desktop-css' first" >&2
     exit 1
@@ -426,7 +426,7 @@ desktop() {
 local_node() {
   telemetry_env
   if command -v tailwindcss >/dev/null 2>&1; then
-    ( cd "$REPO_ROOT" && tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css )
+    ( cd "$REPO_ROOT" && bash scripts/architect-ui-link.sh >/dev/null && tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css )
   fi
   mkdir -p "$DEMO_ROOT/device"
   echo ">> desktop app, no server: its own node at $DEMO_ROOT/device/task/node"

@@ -109,6 +109,7 @@ else
         # own directory: Tailwind v4's automatic content detection is rooted
         # at the working directory, so the wrong cwd silently drops rules.
         # Matches apps/tailwind_build.rs.
+        ${DX_TAILWIND:+bash '$ROOT/scripts/architect-ui-link.sh'}
         ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" && tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css')}
         dx build --platform macos --release
     " > /tmp/task-macos-build.log 2>&1 || true

@@ -537,6 +537,8 @@ vox-codegen = "0.10.0-rc.7"
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false, features = ["lib"] }
 dioxus-native = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", features = ["prelude", "system-fonts", "svg", "autofocus", "incremental", "data-uri"] }
 dioxus-router = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false }
+# Render-to-string, for UI markup snapshots in tests (crates/ui toasts).
+dioxus-ssr = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc" }
 dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", branch = "main" }
 neo_frizbee = { version = "0.11", features = ["match_end_col"] }
 nucleo-matcher = "0.3"

@@ -79,6 +79,7 @@
       # one shared input up front, as web-bundles.nix does (dx would also
       # run Tailwind itself, but reads assets/ before cargo runs).
       tailwind = ''
+        bash scripts/architect-ui-link.sh
         (cd apps && tailwindcss -i tailwind.css -o desktop/assets/tailwind.css)
       '';
 
