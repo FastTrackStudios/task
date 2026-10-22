@@ -2552,43 +2552,6 @@ fn pick_server_orgs(
     Ok(scanned.into_iter().map(|(org, _)| org).collect())
 }
 
-/// Parse a single HTTP byte-range request (`bytes=start-end`, `bytes=start-`,
-/// or the suffix form `bytes=-N`) against a known total size, returning the
-/// inclusive `[start, end]` it resolves to. Multi-range and unsatisfiable
-/// requests return `None` (the caller then serves the full body).
-pub(crate) fn parse_byte_range(value: &str, total: u64) -> Option<(u64, u64)> {
-    if total == 0 {
-        return None;
-    }
-    let spec = value.trim().strip_prefix("bytes=")?;
-    // Only a single range is supported; a comma means multi-range → fall back.
-    if spec.contains(',') {
-        return None;
-    }
-    let (a, b) = spec.split_once('-')?;
-    let last = total - 1;
-    let (start, end) = if a.is_empty() {
-        // Suffix range: the final N bytes.
-        let n: u64 = b.trim().parse().ok()?;
-        if n == 0 {
-            return None;
-        }
-        (total.saturating_sub(n), last)
-    } else {
-        let start: u64 = a.trim().parse().ok()?;
-        let end = if b.trim().is_empty() {
-            last
-        } else {
-            b.trim().parse::<u64>().ok()?.min(last)
-        };
-        (start, end)
-    };
-    if start > end || start > last {
-        return None;
-    }
-    Some((start, end))
-}
-
 /// JSON listing of a media directory's immediate entries, sorted by name.
 /// Each entry is `{ "name": String, "dir": bool, "size": u64 }` (`size` is 0
 /// for directories). Lets a manifest-less song enumerate its stem files over
@@ -2759,8 +2722,7 @@ async fn per_org_media_handler(
     axum::extract::Query(q): axum::extract::Query<MediaQuery>,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
-    use axum::http::{StatusCode, header};
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    use axum::http::StatusCode;
     if rel.split('/').any(|s| s == ".." || s.is_empty()) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -2788,7 +2750,6 @@ async fn per_org_media_handler(
     if !meta.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let total = meta.len();
     let ct = match file.extension().and_then(|x| x.to_str()) {
         Some("json") => "application/json",
         Some("ogg") => "audio/ogg",
@@ -2799,52 +2760,13 @@ async fn per_org_media_handler(
         _ => "application/octet-stream",
     };
 
-    // Honour a single byte-range request → 206 Partial Content.
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| parse_byte_range(s, total));
-    if let Some((start, end)) = range {
-        let len = end - start + 1;
-        let mut f = match tokio::fs::File::open(&file).await {
-            Ok(f) => f,
-            Err(_) => return StatusCode::NOT_FOUND.into_response(),
-        };
-        if f.seek(std::io::SeekFrom::Start(start)).await.is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        let mut buf = vec![0u8; len as usize];
-        if f.read_exact(&mut buf).await.is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        return (
-            StatusCode::PARTIAL_CONTENT,
-            [
-                (header::CONTENT_TYPE, ct.to_string()),
-                (header::ACCEPT_RANGES, "bytes".to_string()),
-                (
-                    header::CONTENT_RANGE,
-                    format!("bytes {start}-{end}/{total}"),
-                ),
-                (header::CONTENT_LENGTH, len.to_string()),
-            ],
-            buf,
-        )
-            .into_response();
-    }
-
-    // No (or unsatisfiable) range → full body, but still advertise range support.
-    match tokio::fs::read(&file).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, ct.to_string()),
-                (header::ACCEPT_RANGES, "bytes".to_string()),
-                (header::CONTENT_LENGTH, total.to_string()),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    // A single byte range → 206, streamed from disk; no range → 200 whole
+    // body; an unsatisfiable one → 416. Every answer advertises
+    // `Accept-Ranges`.
+    match architect::http::ranged::serve_file(&headers, &file, ct).await {
+        Ok(resp) => resp,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -2879,7 +2801,7 @@ async fn files_rendition_handler(
     axum::extract::Query(q): axum::extract::Query<MediaQuery>,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
-    use axum::http::{StatusCode, header};
+    use axum::http::StatusCode;
     let rel = format!("files/renditions/{root_id}/{kind}/{file_id}");
     if let Some(refusal) = authorize_media(&state, &slug, &rel, q.token.as_deref(), &headers).await
     {
@@ -2905,14 +2827,11 @@ async fn files_rendition_handler(
         }
     };
 
-    // Single byte range → 206; absent/malformed/unsatisfiable → full
-    // body 200, still advertising range support (same contract as the
-    // `/media` route — browser media elements need `Accept-Ranges` to
-    // consider the source seekable at all).
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| parse_byte_range(s, total));
+    // Single byte range → 206; absent/malformed → full body 200;
+    // unsatisfiable → 416; every answer advertises range support (same
+    // contract as the `/media` route — browser media elements need
+    // `Accept-Ranges` to consider the source seekable at all).
+    let range = architect::http::ranged::range_of(&headers, total);
     rendition_stream_response(&org, root_id, &file_id, kind.mime(), total, range)
 }
 
@@ -2933,7 +2852,7 @@ pub(crate) fn rendition_stream_response(
     file_id: &str,
     mime: &str,
     total: u64,
-    range: Option<(u64, u64)>,
+    range: architect::http::ranged::ByteRange,
 ) -> axum::response::Response {
     stream_response(
         org,
@@ -2964,13 +2883,12 @@ pub(crate) fn stream_response(
     from: StreamFrom,
     mime: &str,
     total: u64,
-    range: Option<(u64, u64)>,
+    range: architect::http::ranged::ByteRange,
 ) -> axum::response::Response {
-    use axum::http::{StatusCode, header};
-    use axum::response::IntoResponse;
-    let (start, len) = match range {
-        Some((start, end)) => (start, end - start + 1),
-        None => (0, total),
+    use architect::http::ranged::respond;
+    // A 416 has no body: nothing to read.
+    let Some((start, len)) = range.window(total) else {
+        return respond(range, total, mime, axum::body::Body::empty());
     };
     let (mut writer, reader) = tokio::io::duplex(64 * 1024);
     let files = org.files.clone();
@@ -3000,24 +2918,7 @@ pub(crate) fn stream_response(
         }
     });
     let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(reader));
-    let base_headers = [
-        (header::CONTENT_TYPE, mime.to_string()),
-        (header::ACCEPT_RANGES, "bytes".to_string()),
-        (header::CONTENT_LENGTH, len.to_string()),
-    ];
-    match range {
-        Some((start, end)) => (
-            StatusCode::PARTIAL_CONTENT,
-            base_headers,
-            [(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )],
-            body,
-        )
-            .into_response(),
-        None => (StatusCode::OK, base_headers, body).into_response(),
-    }
+    respond(range, total, mime, body)
 }
 
 pub fn router(state: AppState) -> Router {
@@ -4955,42 +4856,58 @@ mod upgrade_bearer_tests {
     }
 }
 
+/// The `/media`, rendition and share routes resolve `Range` through
+/// `architect::http::ranged` (v0.9.12); these pin the cases they rely on.
 #[cfg(test)]
 mod range_tests {
-    use super::parse_byte_range;
+    use architect::http::ranged::{ByteRange, parse_range};
 
     #[test]
     fn full_open_range() {
         // Chrome's initial media probe: `bytes=0-`.
-        assert_eq!(parse_byte_range("bytes=0-", 1000), Some((0, 999)));
+        assert_eq!(
+            parse_range("bytes=0-", 1000),
+            ByteRange::Satisfiable(0, 999)
+        );
     }
 
     #[test]
     fn clamped_end() {
-        assert_eq!(parse_byte_range("bytes=0-100000", 1000), Some((0, 999)));
+        assert_eq!(
+            parse_range("bytes=0-100000", 1000),
+            ByteRange::Satisfiable(0, 999)
+        );
     }
 
     #[test]
     fn mid_range() {
         assert_eq!(
-            parse_byte_range("bytes=500-799", 3_415_886),
-            Some((500, 799))
+            parse_range("bytes=500-799", 3_415_886),
+            ByteRange::Satisfiable(500, 799)
         );
     }
 
     #[test]
     fn suffix_range() {
-        assert_eq!(parse_byte_range("bytes=-500", 1000), Some((500, 999)));
+        assert_eq!(
+            parse_range("bytes=-500", 1000),
+            ByteRange::Satisfiable(500, 999)
+        );
     }
 
     #[test]
     fn rejects_bad() {
-        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
-        assert_eq!(parse_byte_range("bytes=800-500", 1000), None); // start > end
-        assert_eq!(parse_byte_range("bytes=0-", 0), None); // empty file
-        assert_eq!(parse_byte_range("bytes=0-10,20-30", 1000), None); // multi-range
-        assert_eq!(parse_byte_range("garbage", 1000), None);
-        assert_eq!(parse_byte_range("bytes=5000-6000", 1000), None); // start past end
+        // Well-formed but selecting nothing: 416 now (was a whole-body 200).
+        assert_eq!(parse_range("bytes=-0", 1000), ByteRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=800-500", 1000), ByteRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=0-", 0), ByteRange::Unsatisfiable);
+        assert_eq!(
+            parse_range("bytes=5000-6000", 1000),
+            ByteRange::Unsatisfiable
+        );
+        // Not understood: ignored, whole body.
+        assert_eq!(parse_range("bytes=0-10,20-30", 1000), ByteRange::Absent);
+        assert_eq!(parse_range("garbage", 1000), ByteRange::Absent);
     }
 }
 
