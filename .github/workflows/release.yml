@@ -29,7 +29,7 @@ name: release
 on:
   pull_request:
     branches: [main, "release/**"]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
   workflow_dispatch:
 
@@ -39,7 +39,12 @@ permissions:
 jobs:
   guard:
     name: Release guard
-    if: ${{ github.event_name == 'pull_request' }}
+    # Only release PRs (head `release/*`, e.g. `release/pending`) and PRs into
+    # a `release/**` hotfix line. Every other PR skips it at once (no runner;
+    # a skipped required check counts as passed).
+    if: >-
+      github.event_name == 'pull_request' &&
+      (startsWith(github.head_ref, 'release/') || startsWith(github.base_ref, 'release/'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
