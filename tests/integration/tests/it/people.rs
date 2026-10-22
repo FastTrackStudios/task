@@ -99,7 +99,7 @@ async fn an_employee_without_share_cannot_widen_the_guest_list() {
         &s.people.sam.subject,
         s.people.casey.subject.clone(),
         s.acme_root,
-        RootPath::root(),
+        &RootPath::root(),
         vec![Capability::Read],
     );
     assert!(
@@ -117,7 +117,7 @@ async fn a_grant_cannot_convey_what_the_granter_does_not_hold() {
         &s.people.casey.subject,
         s.people.sam.subject.clone(),
         s.acme_root,
-        RootPath::parse("Deliverables").unwrap(),
+        &RootPath::parse("Deliverables").unwrap(),
         vec![Capability::Write],
     );
     assert!(over.is_err(), "a read-only client granted write");
