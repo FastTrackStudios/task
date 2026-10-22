@@ -50,24 +50,42 @@ once production runs the release:
 
 OpenSSL is linked in; the only runtime dependency is the system's libc.
 
+The release key (the minisign public key; `RELEASE_SIGNING_KEY` in
+`apps/server/src/self_update.rs`, pinned from v0.2.5 on):
+
+```
+RWRh9Gk9qaStQMhku4THMidEYrQsmAEsm2dDprUkZxShEtqfIcroM8Od
+```
+
 **Install script** (non-Nix hosts): picks the newest release for this
-platform, checks the sha256 and that the binary reports that version, and
-installs `task-server` into `/usr/local/bin` (as root) or `~/.local/bin`:
+platform, checks `SHA256SUMS.minisig` against the release key (pinned in
+the script) when `minisign` is on PATH, checks the sha256 and that the
+binary reports that version, and installs `task-server` into
+`/usr/local/bin` (as root) or `~/.local/bin`.
+Without `minisign` the sha256 only proves the download is intact, not who
+built it: that first install trusts GitHub and the copy of the script you
+fetched from it (trust on first use), and the script says so. Every
+`task-server self-update` after it checks the signature. Install
+[minisign](https://jedisct1.github.io/minisign/) first to check the first
+install too. Releases from before signing (v0.2.4 and older) carry no
+signature; with `minisign` installed the script refuses them unless you
+pass `--unsigned`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FastTrackStudios/task/main/scripts/install-node.sh | sh
 # or a given release / place:
-sh scripts/install-node.sh --version 0.2.3 --prefix /opt/task
+sh scripts/install-node.sh --version 0.2.5 --prefix /opt/task
 ```
 
 By hand:
 
 ```bash
-v=0.2.3; a=task-server-linux-x86_64
+v=0.2.5; a=task-server-linux-x86_64
 curl -fLO https://github.com/FastTrackStudios/task/releases/download/v$v/$a
 curl -fLO https://github.com/FastTrackStudios/task/releases/download/v$v/SHA256SUMS
 curl -fLO https://github.com/FastTrackStudios/task/releases/download/v$v/SHA256SUMS.minisig
-minisign -V -P <RELEASE_SIGNING_KEY from apps/server/src/self_update.rs> -m SHA256SUMS
+minisign -V -P RWRh9Gk9qaStQMhku4THMidEYrQsmAEsm2dDprUkZxShEtqfIcroM8Od -m SHA256SUMS
+# must print: Trusted comment: task-server v$v SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS      # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
 install -m 755 $a /usr/local/bin/task-server && task-server --version
 ```
@@ -221,9 +239,10 @@ as it was.
   update runs as root on every node. The minisign secret key lives
   outside the release (the `TASK_RELEASE_MINISIGN_KEY` Actions secret,
   used by `node-binaries.yml`, which also refuses to sign with a key the
-  source does not pin). A binary built while `RELEASE_SIGNING_KEY` is
-  still `None` installs nothing and says so, and so does an unsigned
-  release.
+  source does not pin, and fails rather than publish unsigned binaries for
+  a tag that pins one). A binary built while `RELEASE_SIGNING_KEY` was
+  still `None` (v0.2.4 and older) installs nothing and says so, and so
+  does an unsigned release: move such a node on with the install script.
 - **By hand:** run `scripts/install-node.sh` again; it is a no-op when the
   newest release is already installed.
 

@@ -15,9 +15,10 @@
 # The secret half is the TASK_RELEASE_MINISIGN_KEY Actions secret (an
 # unencrypted minisign secret key file, `minisign -G -W`); the public half
 # is RELEASE_SIGNING_KEY in apps/server/src/self_update.rs, and the publish
-# job refuses to sign with a key that is not that one. Until the secret is
-# set, releases go out unsigned with a warning, and `self-update` installs
-# none of them.
+# job refuses to sign with a key that is not that one. A tag that pins a
+# key fails without the secret (an unsigned release would be one no pinned
+# node installs); only a backfill of a tag from before the pin (v0.2.4 and
+# older) goes out unsigned, with a warning.
 #
 # The asset names are a contract: `task-server self-update`
 # (apps/server/src/self_update.rs) and scripts/install-node.sh look them up
@@ -274,6 +275,10 @@ jobs:
           sha256sum task-server-* > SHA256SUMS
           cat SHA256SUMS
           assets=(task-server-* SHA256SUMS)
+          if [ -n "$pinned" ] && [ -z "$MINISIGN_KEY" ]; then
+            echo "::error::$TAG pins RELEASE_SIGNING_KEY but TASK_RELEASE_MINISIGN_KEY is not set (release-signing environment): an unsigned release would install on no node"
+            exit 1
+          fi
           if [ -n "$MINISIGN_KEY" ]; then
             [ -n "$pinned" ] || { echo "::error::TASK_RELEASE_MINISIGN_KEY is set but $TAG pins no RELEASE_SIGNING_KEY: nodes could not verify this signature"; exit 1; }
             sudo apt-get install -y -q minisign >/dev/null
@@ -285,7 +290,7 @@ jobs:
             minisign -V -P "$pinned" -m SHA256SUMS -x SHA256SUMS.minisig
             assets+=(SHA256SUMS.minisig)
           else
-            echo "::warning::TASK_RELEASE_MINISIGN_KEY is not set: $TAG's node binaries go out unsigned, and task-server self-update will not install them"
+            echo "::warning::$TAG pins no RELEASE_SIGNING_KEY (a tag from before the pin) and TASK_RELEASE_MINISIGN_KEY is not set: its node binaries go out unsigned, and task-server self-update will not install them"
           fi
           gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           {
