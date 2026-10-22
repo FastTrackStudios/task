@@ -643,13 +643,17 @@ address is `local://this-device` (the native default with nothing
 configured). Verified by `apps/server/tests/it/local_node_e2e.rs` and the
 `task_ui_core::node` routing tests. Gaps:
 
-- **HTTP-only surfaces.** A node has no HTTP listener, so what the UI
-  reaches over plain HTTP rather than vox does not work locally: song media
-  at `/media/…`, `/blobs/*` signed URLs, rendition URLs in the review
+- **HTTP-only surfaces.** The UI's lanes to a node are in-process, so what
+  it reaches over plain HTTP rather than vox does not work locally: song
+  media at `/media/…`, `/blobs/*` signed URLs, rendition URLs in the review
   player, and the deliverable download link (`pages/project_detail/
-  deliverable.rs`). Vox media (`MediaService` chunks) works. Either a
-  loopback listener for those routes or a webview custom protocol would
-  close it.
+  deliverable.rs`). Vox media (`MediaService` chunks) works. The node side
+  of org-less song media is closed: `/media/…` is in `task_server::router`
+  (`media_router`, ADR 0006 audit C4), so a node's loopback listener
+  (`LocalNode::serve_loopback`) serves the same bytes a server does, also
+  with the server stopped (`apps/server/tests/it/media_route_e2e.rs`). What
+  is left is the app pointing those URLs at that loopback base (or a
+  webview custom protocol).
 - **The auth secret** is the dev default unless `TASK_AUTH_SECRET` is set
   — a node should mint its own per data root.
 - **An org created after boot** over the node's `/server` lane is hosted

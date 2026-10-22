@@ -2745,15 +2745,7 @@ async fn per_org_media_handler(
     if !meta.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let ct = match file.extension().and_then(|x| x.to_str()) {
-        Some("json") => "application/json",
-        Some("ogg") => "audio/ogg",
-        Some("wav") => "audio/wav",
-        Some("mp3") => "audio/mpeg",
-        Some("webm") => "audio/webm",
-        Some("kf") | Some("txt") | Some("md") => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    };
+    let ct = media_content_type(&file);
 
     // A single byte range → 206, streamed from disk; no range → 200 whole
     // body; an unsatisfiable one → 416. Every answer advertises
@@ -2763,6 +2755,78 @@ async fn per_org_media_handler(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+/// The `Content-Type` a media file is served with, by extension — one
+/// table for both media routes (`/org/{slug}/media/…` and the org-less
+/// `/media/…`), so the two can't drift on what a stem is.
+fn media_content_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|x| x.to_str()) {
+        Some("json") => "application/json",
+        Some("ogg") => "audio/ogg",
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        Some("webm") => "audio/webm",
+        Some("kf" | "txt" | "md") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// The org-less song media route, `GET /media/{*path}`, as a router
+/// [`router`] merges — so **every node** serves it: the hosted server, a
+/// `task-server peer`, and a desktop node's loopback
+/// ([`local_node::LocalNode::serve_loopback`]) alike (ADR 0006 node
+/// parity, audit C4). It used to be bolted onto the router in the
+/// server binary's `main`, so a desktop node answered `/media/…` with a
+/// 404 while the server it stood in for served the file.
+///
+/// Filesystem-first: `/media/songs/<slug>/manifest.json` (or a stem) is
+/// resolved against EVERY hosted org's `resources/` dir and the first
+/// org that has the file wins. No ingest, no content-addressing, no env
+/// var: drop a file into an org's `resources/` and it's served. These
+/// are the same org-less, same-origin `/media/…` URLs the UI builds.
+///
+/// Unauthenticated, exactly as it was in `main`: unlike
+/// `/org/{slug}/media/…` it does not consult `TASK_ENFORCE_MEDIA_TOKEN`
+/// (it has no slug until the file is found). Files only — no directory
+/// listing, no ranges; the per-org route is the one that streams.
+pub fn media_router<S: Clone + Send + Sync + 'static>(state: AppState) -> Router<S> {
+    Router::new()
+        .route("/media/{*path}", get(org_less_media_handler))
+        .with_state(state)
+}
+
+async fn org_less_media_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(rel): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    // Reject traversal; `rel` is already percent-decoded.
+    if rel.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(path) = org_less_media_file(&state.data_root.orgs_dir(), &rel).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, media_content_type(&path))], bytes).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The first `<orgs>/<org>/resources/<rel>` that is a file.
+async fn org_less_media_file(orgs: &std::path::Path, rel: &str) -> Option<PathBuf> {
+    let mut entries = tokio::fs::read_dir(orgs).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let candidate = entry.path().join("resources").join(rel);
+        if tokio::fs::metadata(&candidate)
+            .await
+            .is_ok_and(|m| m.is_file())
+        {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Rendition streaming (issue #270): `GET
@@ -3068,6 +3132,9 @@ pub fn router(state: AppState) -> Router {
         .merge(per_org)
         .merge(server_mgmt)
         .merge(watch_bridge::watch_router())
+        // Org-less `/media/…`: here, not in the binary, so a desktop
+        // node's loopback serves what the server serves.
+        .merge(media_router(state.clone()))
         .merge(blob_router);
     // Authenticated OTLP ingest, only when an upstream collector is
     // configured — see `otlp`. Clients export through here rather than to

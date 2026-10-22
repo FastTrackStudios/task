@@ -93,6 +93,7 @@ mod mcp_refusals_e2e;
 mod mcp_telemetry_e2e;
 mod mcp_wiki_e2e;
 mod media_auth;
+mod media_route_e2e;
 mod media_stream_e2e;
 mod memory_budget;
 mod node_resolver_e2e;
