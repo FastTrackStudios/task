@@ -155,7 +155,10 @@ jobs:
 
   plan:
     name: Plan affected crates
-    runs-on: [self-hosted, task]
+    # Its own runner (macpro-task-plan on the Mac Pro VM): seconds of work
+    # and no build slot, so a run starts at once instead of queueing behind
+    # a long build on the shared `task` runner.
+    runs-on: [self-hosted, task-plan]
     timeout-minutes: 10
     outputs:
       full: ${{ steps.filter.outputs.full }}
