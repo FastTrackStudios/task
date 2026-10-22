@@ -30,9 +30,9 @@ app.kubernetes.io/component: {{ .component }}
 
 {{/* Image ref for a component; call with (dict "ctx" . "img" .Values.server.image).
 A repository containing "/" is treated as a FULL image name and used
-verbatim (no registry prefix) — that's what tools like
-argocd-image-updater write back; a bare name gets image.registry
-prepended. */}}
+verbatim (no registry prefix); a bare name gets image.registry
+prepended. The tag defaults to the chart's appVersion, which the release
+commit sets to the release version (scripts/ghcr-images.sh). */}}
 {{- define "task.image" -}}
 {{- $tag := .img.tag | default .ctx.Chart.AppVersion -}}
 {{- if contains "/" .img.repository -}}

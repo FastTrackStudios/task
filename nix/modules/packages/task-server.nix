@@ -55,11 +55,21 @@
             ExposedPorts = { "8080/tcp" = { }; };
             Volumes = { "/data" = { }; };
             WorkingDir = "/data";
+            Labels = config.fts.imageLabels;
           };
         };
     in
     {
       fts.mkServerImage = mkServerImage;
+      # OCI labels on every image this repo publishes. `source` is what
+      # links the ghcr.io/fasttrackstudios/task-* packages to this repo;
+      # `revision` is what `scripts/ghcr-images.sh check` holds to the
+      # commit a release tag names.
+      fts.imageLabels = {
+        "org.opencontainers.image.source" = "https://github.com/FastTrackStudios/task";
+        "org.opencontainers.image.revision" = config.fts.buildRev;
+        "org.opencontainers.image.version" = (lib.importTOML ../../../Cargo.toml).workspace.package.version;
+      };
       packages = { inherit task-server; }
       // lib.optionalAttrs pkgs.stdenv.isLinux {
         task-server-image = mkServerImage { server = task-server; };

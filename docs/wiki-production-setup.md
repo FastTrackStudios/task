@@ -12,8 +12,9 @@ Editor — so the agent creates the wikis and then grants the human.
 
 ## 1. The server
 
-Merging to `main` builds and rolls the image (`.github/workflows/deploy.yml`
-→ argocd-image-updater). Confirm the running server is new enough:
+A release rolls the image: the release commit on `main` pushes the images
+to GHCR (`.github/workflows/images.yml`), and the `v*` tag that follows is
+what Argo deploys. Confirm the running server is new enough:
 
 ```bash
 curl -fsS https://task.fasttrackstudio.app/.well-known/task-server.json | head -c 400

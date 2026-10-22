@@ -18,13 +18,13 @@ image is a `dockerTools.streamLayeredImage` defined in the repo-root
 itself a Nix derivation (`task-webapp`'s `dx build`), so the images
 self-contain their content with no out-of-band bundle step.
 
-Prebuilt images (pushed by `.github/workflows/deploy.yml` on a release tag,
-via skopeo to the in-cluster LAN registry):
+Prebuilt images (public, on GHCR; pushed by `.github/workflows/images.yml`
+when a release commit lands on main, before its `v*` tag exists):
 
 | image | tags |
 |---|---|
-| `registry.starcommand.live:30050/task-server` | `latest` (the last release), `dev`, `sha-<short>`, `v<version>` |
-| `registry.starcommand.live:30050/task-web`    | same |
+| `ghcr.io/fasttrackstudios/task-server` | `<version>` (= the chart's appVersion at tag `v<version>`), `sha-<short>`, `latest` (the last release) |
+| `ghcr.io/fasttrackstudios/task-web`    | same |
 
 ## The one architectural rule: same origin
 
@@ -119,11 +119,11 @@ docker-archive tarball to stdout**. Pipe it wherever you want — into
 $(nix build --no-link --print-out-paths .#task-server-image) | docker load
 $(nix build --no-link --print-out-paths .#task-web-image)    | docker load
 
-# Build + push to the LAN registry (what CI does, sans daemon):
+# Build + push to a registry of your own (what CI does for GHCR, sans daemon):
 $(nix build --no-link --print-out-paths .#task-web-image) \
-  | nix run nixpkgs#skopeo -- --insecure-policy copy --dest-tls-verify=false \
+  | nix run nixpkgs#skopeo -- --insecure-policy copy \
       docker-archive:/dev/stdin \
-      docker://registry.starcommand.live:30050/task-web:dev
+      docker://registry.example.com/task-web:dev
 ```
 
 The web bundle is built **without** `TASK_VOX_URL_WEB` baked in (the
@@ -259,11 +259,11 @@ task doctor
 ```
 
 against the instance to surface stamp drift / migration needs. Roll back by
-pinning the previous `sha-<short>` image tag (data is forward-written —
+pinning the previous release's image tag (data is forward-written —
 verify a backup exists before big jumps).
 
-Sequence for k8s: a release tag pushes the images and moves the `production`
-branch (deploy.yml); starcommand's ArgoCD Application follows `production`
-(chart) and the image-updater follows the `latest` digest (images),
+Sequence for k8s: the release commit on main pushes the images to GHCR
+(images.yml), then `just release-tag` pushes `v<version>`; starcommand's
+ArgoCD Application follows the newest `v*` tag (chart, images `:<appVersion>`),
 the server pod recreates (`Recreate` strategy frees the PVC first), web pods
 roll whenever — they are stateless.

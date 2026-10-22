@@ -49,6 +49,10 @@
         type = lib.types.raw;
         description = "static-web-server OCI image factory: { name, tag ?, siteRoot }.";
       };
+      imageLabels = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        description = "OCI labels on every published image (source repo, revision, version).";
+      };
       mkServerImage = lib.mkOption {
         type = lib.types.raw;
         description = "task-server OCI image factory: { server } — the package holding bin/task-server.";

@@ -15,7 +15,8 @@
 #                                                   from MARKETING_VER, default release.sh version
 #   iOS app (task-app-mobile), marketing version    MARKETING_VER in task-ios.yml / deploy-testflight.sh
 #   web bundle (task-app-web)                       CARGO_PKG_VERSION, version.workspace
-#   OCI image tag v<version>                        deploy.yml, from release.sh version
+#   OCI images ghcr.io/…/task-{server,web}:<version>  the chart's appVersion (images.yml,
+#                                                   scripts/ghcr-images.sh), set by the release commit
 #   GitHub Release v<version> + node binaries       release.sh publish / node-binaries.yml
 #   Nix package task-server                         nix/modules/packages/task-server.nix, from Cargo.toml
 #
@@ -66,9 +67,15 @@ for wf in .github/workflows/task-ios.yml .github/workflows/task-macos.yml; do
 done
 
 # ── Image tag, release tag, node binaries ────────────────────────────────
-# shellcheck disable=SC2016 # a literal line of the workflow
-grep -q 'v="v$(bash scripts/release.sh version)"' .github/workflows/deploy.yml \
-    || bad ".github/workflows/deploy.yml: the image's version tag must be v\$(scripts/release.sh version)"
+# The chart at a release tag renders `<registry>/task-*:<appVersion>`, and
+# that is the tag images.yml pushes: appVersion IS the release version.
+chart=deploy/chart/task/Chart.yaml
+[ "$(sed -n 's/^appVersion: *"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$chart" | head -1)" = "$want" ] \
+    || bad "$chart: appVersion must be \"$want\" (the release commit sets it; it is the image tag Argo pulls)"
+grep -qx "version: $want" "$chart" \
+    || bad "$chart: version must be $want (the release commit sets it)"
+grep -q 'scripts/ghcr-images.sh tag' .github/workflows/images.yml \
+    || bad ".github/workflows/images.yml: the image tag must come from \`scripts/ghcr-images.sh tag\` (the chart's appVersion)"
 grep -q 'scripts/release.sh version' .github/workflows/node-binaries.yml \
     || bad ".github/workflows/node-binaries.yml: the release tag must come from \`scripts/release.sh version\`"
 

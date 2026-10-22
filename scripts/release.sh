@@ -39,7 +39,7 @@
 # the release commit deletes. Only when there are none at all does it fall
 # back to git-cliff over the commit range, so a release is never empty.
 #
-#   scripts/release.sh version             the current version
+#   scripts/release.sh version [REV]       the current version (or at REV)
 #   scripts/release.sh next                the version the next release gets
 #   scripts/release.sh plan                latest tag, what main holds since, pending
 #                                           change files, migrations, moved git deps
@@ -75,6 +75,10 @@ RELEASE_BRANCH="release/pending"
 # The required check on main (checks.yml's aggregator job). `tag` refuses
 # a commit on which it is not green.
 CHECK_NAME="Checks (fmt + tests + clippy + wasm + docs)"
+# The Helm chart: the release commit sets its version and appVersion, and
+# appVersion is the image tag the chart at the tag renders
+# (scripts/ghcr-images.sh).
+CHART="deploy/chart/task/Chart.yaml"
 
 die() { echo "release: $*" >&2; exit 1; }
 note() { echo "release: $*" >&2; }
@@ -271,7 +275,7 @@ changes_section() { # <version> <date> [preamble line]
     [ "$any" = 1 ] || printf -- '- No user-visible changes.\n\n'
 }
 
-cmd_version() { version_at; }
+cmd_version() { version_at "${1:-}"; }
 
 cmd_next() {
     git fetch --quiet --tags origin 2>/dev/null || note "fetch failed; computing from local tags"
@@ -399,6 +403,12 @@ release_commit() { # <cur> <next> <from-tag> <preamble> <computed next, when ove
     # move. --offline first: a version bump needs no index.
     cargo update --workspace --offline 2>/dev/null || cargo update --workspace
 
+    # The chart's version and appVersion: the image tag Argo pulls at the tag.
+    sed -i.bak -E "s/^version: *\"?$cur\"?[[:space:]]*$/version: $next/; s/^appVersion: *\"?$cur\"?[[:space:]]*$/appVersion: \"$next\"/" "$CHART"
+    rm -f "$CHART.bak"
+    grep -qx "appVersion: \"$next\"" "$CHART" && grep -qx "version: $next" "$CHART" \
+        || die "failed to rewrite $CHART version/appVersion ($cur -> $next)"
+
     d="$(today)"
     sec="$(mktemp)"
     changes_section "$next" "$d" "$pre" > "$sec"
@@ -417,7 +427,7 @@ release_commit() { # <cur> <next> <from-tag> <preamble> <computed next, when ove
     mapfile -t files < <(change_files)
     [ "${#files[@]}" = 0 ] || git rm --quiet -- "${files[@]}"
 
-    git add Cargo.toml Cargo.lock CHANGELOG.md
+    git add Cargo.toml Cargo.lock CHANGELOG.md "$CHART"
     if [ -n "$computed" ]; then
         git commit --quiet -m "chore(release): v$next" -m "Release-Version-Override: v$next (computed v$computed)"
     else
@@ -588,6 +598,14 @@ cmd_tag() {
     state="$(check_state "$target")"
     [ "$state" = success ] || die "'$CHECK_NAME' on $(git rev-parse --short "$target") is $state: tag only once the full suite on the release commit is green (gh run list --commit $target)"
 
+    # Argo deploys the newest tag within minutes, so the images it will
+    # pull must be on GHCR (public, built from this commit) BEFORE the tag
+    # exists. images.yml pushes them when the release commit lands.
+    local itag; itag="$(bash scripts/ghcr-images.sh tag "$target")"
+    [ "$itag" = "$v" ] || die "$CHART at $(git rev-parse --short "$target") has appVersion $itag, not $v: the chart would deploy the wrong images"
+    bash scripts/ghcr-images.sh check "$itag" "$target" \
+        || die "the images for v$v are not on GHCR yet (or not public). Wait for the 'images' workflow on $(git rev-parse --short "$target") (gh run list -w images.yml --commit $target), then re-run."
+
     note "tagging v$v at $(git rev-parse --short "$target") on $branch (previous: ${latest:-none}). This deploys."
     # An annotated tag needs a committer identity; a bot checkout may have none.
     local ident=()
@@ -709,8 +727,8 @@ Tool: none (scripts/release.sh). Extent: generated. Human reviewed: no." | tail 
 }
 
 # Is the diff base..head ONLY a release commit's: Cargo.toml's version
-# line, the workspace members' version lines in Cargo.lock, CHANGELOG.md
-# and deleted .changes/*.md? (a version bump cannot change what the
+# line, the workspace members' version lines in Cargo.lock, the chart's
+# version + appVersion lines, CHANGELOG.md and deleted .changes/*.md? (a version bump cannot change what the
 # checks tested)
 release_diff_only() { # <base> <head>
     # No `... | grep -q` pipelines: under pipefail, grep -q exits at the first
@@ -719,7 +737,7 @@ release_diff_only() { # <base> <head>
     local base="$1" head="$2" st f out vb vh
     while IFS=$'\t' read -r st f; do
         case "$f" in
-            Cargo.toml|Cargo.lock|CHANGELOG.md) [ "$st" = M ] || return 1 ;;
+            Cargo.toml|Cargo.lock|CHANGELOG.md|"$CHART") [ "$st" = M ] || return 1 ;;
             .changes/*.md) [ "$st" = D ] || return 1 ;;
             *) return 1 ;;
         esac
@@ -742,6 +760,10 @@ release_diff_only() { # <base> <head>
     ob="${vb//./\\.}"; nb="${vh//./\\.}"
     out="$(git diff -U0 "$base" "$head" -- Cargo.lock | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
         | grep -vE "^-version = \"$ob\"$|^\+version = \"$nb\"$|^- \"[A-Za-z0-9_.-]+ $ob\",?$|^\+ \"[A-Za-z0-9_.-]+ $nb\",?$" || true)"
+    [ -z "$out" ] || return 1
+    # Chart.yaml: only its version and appVersion lines, to the new version.
+    out="$(git diff -U0 "$base" "$head" -- "$CHART" | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+        | grep -vE "^-(version|appVersion): \"?[0-9]+\.[0-9]+\.[0-9]+\"?$|^\+version: $nb$|^\+appVersion: \"$nb\"$" || true)"
     [ -z "$out" ] || return 1
     return 0
 }
@@ -803,7 +825,7 @@ cmd_guard() {
     [[ "$subject" =~ $(release_subject_re "$v") ]] \
         || fail "the commit must be 'chore(release): v$v' (it is '$subject')"
     release_diff_only "$base" "$head" \
-        || fail "the release commit may change only the version line in Cargo.toml, workspace version lines in Cargo.lock, CHANGELOG.md, and delete .changes/*.md"
+        || fail "the release commit may change only the version line in Cargo.toml, workspace version lines in Cargo.lock, CHANGELOG.md, the Chart.yaml version + appVersion lines, and delete .changes/*.md"
     [ -z "$(change_files "$head")" ] \
         || fail "change files left pending at the head ($(change_files "$head" | paste -sd' ' -)): the release consumes all of them"
     changelog_has "$head" "$v" || fail "CHANGELOG.md at the head has no [$v] section"
@@ -900,7 +922,7 @@ cmd_publish() {
         fi
         echo
         echo "---"
-        echo "Tag \`$tag\` at \`$(git rev-parse --short "$target")\` (images \`sha-$(git rev-parse --short "$target")\`, \`$tag\`)."
+        echo "Tag \`$tag\` at \`$(git rev-parse --short "$target")\` (images \`ghcr.io/fasttrackstudios/task-server:$v\`, \`task-web:$v\`)."
         [ -n "$prev" ] && echo "Full diff: https://github.com/$REPO/compare/$prev...$tag"
     } > "$notes"
     [ -s "$notes" ] || die "no release notes for $v"
