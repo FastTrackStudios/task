@@ -146,6 +146,11 @@ org-snapshot = { workspace = true }
 # `GatedRouter`'s `vox::Handler` impl names `facet::Shape` in a
 # method signature.
 facet = { workspace = true }
+# The MCP pilot actions (`actions/`) decode their arguments with
+# facet-json, the decoder the Action List itself uses, and serve through
+# architect-mcp's named-tool mode.
+facet-json = { workspace = true }
+architect-mcp = { workspace = true }
 timer-proto = { workspace = true, features = ["server", "vox"] }
 timer = { workspace = true }
 threads = { workspace = true, features = ["server", "vox"] }
@@ -220,7 +225,8 @@ vault-doc = { workspace = true }
 chrono.workspace = true
 # `release`: `task-server self-update` (signed release check, verify and
 # swap; the key is pinned in self_update.rs).
-architect = { workspace = true, features = ["server", "local", "release"] }
+# `action-list`: the MCP pilot tools (`actions/`).
+architect = { workspace = true, features = ["server", "local", "release", "action-list"] }
 architect-auth = { workspace = true, features = ["full"] }
 architect-permissions.workspace = true
 architect-permissions-proto.workspace = true

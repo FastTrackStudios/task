@@ -57,6 +57,7 @@ pub mod example_org;
 // Subscribing across a server boundary: the peer table plus the dialler
 // that reads a source through it. Wiki-shaped, so it lives and dies with
 // the wiki feature like the resolver it wraps.
+pub mod actions;
 #[cfg(feature = "plugin-wiki")]
 pub mod federated_orgs;
 pub mod files_docs;

@@ -483,6 +483,9 @@ architect-permissions = { git = "https://github.com/FastTrackStudios/architect",
 architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+# The Action List as an MCP server (named tools): Task's MCP lane runs its
+# pilot tools through it (`apps/server/src/actions/`).
+architect-mcp = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 # The primitives architect-ui is built on — the same git source and
 # branch, so cargo unifies them. Task renders its own toasts from these
 # (`crates/ui/src/toasts.rs`) to show toast action buttons.
