@@ -1,0 +1,22 @@
+filters:
+  and:
+    - 'type == "setlist-use"'
+    - file.hasLink("Gigs/example-album-release")
+formulas:
+  song_key: "note.song.key"
+  effective_key: "transpose_key(note.song.key, key_offset)"
+views:
+  - type: table
+    name: Setlist
+    order:
+      - position
+      - song
+      - formula.song_key
+      - key_offset
+      - formula.effective_key
+      - lead
+      - transition
+      - patch
+    sort:
+      - property: position
+        direction: ASC

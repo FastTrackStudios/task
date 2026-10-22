@@ -152,8 +152,12 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
     let names: Vec<&str> = upcoming.iter().filter_map(|r| r["name"].as_str()).collect();
     assert_eq!(
         names,
-        ["2026-11-06 The Hall", "2026-11-14 Wedding"],
-        "gig notes only, sorted by date: {all}"
+        [
+            "2026-11-06 The Hall",
+            "2026-11-14 Wedding",
+            "example-album-release"
+        ],
+        "gig notes only (not the release show's setlist-uses), sorted by date: {all}"
     );
     let hall = upcoming[0];
     assert_eq!(hall["path"], "Gigs/2026-11-06 The Hall.md");
@@ -210,7 +214,11 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
         .collect();
     assert_eq!(
         fast,
-        [("Night Drive", true), ("Paper Moon", false)],
+        [
+            ("Last Call", true),
+            ("Night Drive", true),
+            ("Paper Moon", false)
+        ],
         "{inline}"
     );
     // The note read is reported: the whole (small) seeded vault, none
@@ -245,7 +253,7 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
     .await;
     assert!(!err, "fan-out base: {fanned}");
     let fan_rows = rows(&fanned, "Fan");
-    assert_eq!(fan_rows.len(), 2, "{fanned}");
+    assert_eq!(fan_rows.len(), 3, "{fanned}");
     for r in &fan_rows {
         assert_eq!(r["values"]["formula.f0"], 32768.0, "{r}");
     }
