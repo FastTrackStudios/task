@@ -681,8 +681,12 @@ dependencies = [
  "futures",
  "gloo-timers",
  "iroh",
+ "minisign-verify",
+ "reqwest 0.12.28",
  "sea-orm",
  "sea-orm-migration",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -19704,6 +19708,7 @@ dependencies = [
 name = "task-app-desktop"
 version = "0.2.4"
 dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.24)",
  "architect-telemetry",
  "block2",
  "bzip2",
@@ -20175,7 +20180,6 @@ dependencies = [
  "mealplan",
  "media-proto",
  "milestone",
- "minisign-verify",
  "notify 0.2.4",
  "notify-proto",
  "org-proto",
