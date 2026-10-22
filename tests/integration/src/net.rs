@@ -63,6 +63,11 @@ pub async fn bind(key: iroh::SecretKey) -> iroh::Endpoint {
 /// be told — the same update a deployed endpoint makes by republishing
 /// its pkarr record. Without it, the id survives the restart and
 /// resolves to where the old process was.
+///
+/// A republished record *replaces* the old one, so this sets rather than
+/// adds. Merging left the dead process's ports in the entry beside the
+/// new ones, and a dial after a restart could spend its whole timeout on
+/// an address nothing listens on (#257).
 pub fn publish(endpoint: &iroh::Endpoint) {
-    book().add_endpoint_info(endpoint.addr());
+    book().set_endpoint_info(endpoint.addr());
 }
