@@ -431,7 +431,13 @@ ci-tests: css
     set -uo pipefail
     log="${TASK_CI_TEST_LOG:-${TMPDIR:-/tmp}/nextest-ci.log}"
     mkdir -p "$(dirname "$log")"
-    cargo nextest run --profile ci --workspace --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }} >"$log" 2>&1
+    # TASK_CI_TEST_FILTER: a nextest filterset from the plan job (only the
+    # packages a PR affects, scripts/ci-rail-plan.py). Empty = every test.
+    # The BUILD stays --workspace either way so the warm target dir keeps
+    # one artifact set; only which tests run narrows.
+    filter=()
+    [ -n "${TASK_CI_TEST_FILTER:-}" ] && filter=(-E "$TASK_CI_TEST_FILTER" --no-tests=pass)
+    cargo nextest run --profile ci --workspace "${filter[@]}" --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }} >"$log" 2>&1
     rc=$?
     { grep -E '^ *(FAIL|TRY [0-9]+ (FAIL|TMT)|SIGSEGV|SIGABRT|LEAK|TIMEOUT)|Summary \[|tests were not run|^error' "$log" | head -n 200
       echo "── tail of $log (full log: the step's nextest-ci artifact) ──"; tail -n 60 "$log"; } || true

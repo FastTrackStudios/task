@@ -12,15 +12,19 @@
 # On this runner the store is already warm, so entering the shell is
 # instant and nothing installs nix per job.
 #
-# CHANGE SELECTION: on a dispatched run with `base`, the `plan` job asks
-# `cargo rail plan` (patched flake build — nix/modules/cargo-rail.nix)
-# which workspace crates the range actually affects, walking cargo's
-# resolved reverse-dependency graph. This workspace is ~163 members, so
-# that selection is worth real minutes. Release PRs and the nightly run
-# skip selection and check everything. Gates are crate-membership checks
-# against the plan's execution set; infra changes (.github/**,
-# flake.nix, nix/**, … — see .config/rail.toml
-# [change-detection].infrastructure) or any rail failure FAIL OPEN.
+# CHANGE SELECTION: the `plan` job asks `cargo rail plan` (0.32, built in
+# nix/modules/cargo-rail.nix) which workspace packages a change affects,
+# through cargo's resolved reverse-dependency graph (~189 members), and
+# scripts/ci-rail-plan.py turns that into gates plus a nextest filterset.
+# Only which tests RUN narrows; the test BUILD stays --workspace so the
+# warm target dir keeps one artifact set. Full runs (push to main, the
+# nightly, a dispatch without `base`) record rail's observed-input
+# EVIDENCE for their commit (dep-info of every unit, no extra compiling)
+# into the Actions cache; a later plan against that commit restores it,
+# which is what lets a change to docs/fixtures/examples narrow instead of
+# widening to the whole workspace. Workflow, Justfile, nix, scripts or
+# nextest-config changes (.config/rail.toml [plan.work.*]), workspace
+# scope, or any rail failure FAIL OPEN to the full set.
 #
 # CACHE: there is none, and that is the point. The old hosted setup ran
 # `Swatinem/rust-cache`, which tars a multi-GB target dir up to the
@@ -43,43 +47,32 @@
 
 name: checks
 
-# WHEN THIS RUNS — the release model (skills/release-workflow.md):
+# WHEN THIS RUNS:
 #
-#   card PR -> dev      NOT here. The gate is the worker's own `cargo check
-#                       --workspace --all-targets` under the build lease,
-#                       recorded on the card; the squash merge follows. Running
-#                       the full set again here rebuilt the same tree in a second
-#                       target dir for ~20 minutes per push.
-#   PROMOTION PR dev -> main   HERE, automatically, the FULL set (no change
-#                       selection): main is "finished features", so this is
-#                       the one place the whole workspace is checked and
-#                       the Reviewer reads the diff. It runs once per promotion,
-#                       not once per card. Promotions happen whenever a feature
-#                       set is verified.
-#   hotfix/* -> main    the same full set.
-#   RELEASE PR release/vX.Y.Z -> main   a one-commit version bump + changelog on
-#                       top of main. The release guard proves it touches nothing
-#                       else, so this workflow SKIPS the heavy job (the job is
-#                       skipped, which counts as passing for the required
-#                       check): the content was checked when it was promoted.
+#   PR into main        the affected set (rail plan against the PR's base
+#                       commit). The release commit (version + changelog only,
+#                       proved by release.sh) skips the heavy job.
+#   push to main        the FULL set, once per merge, and records rail
+#                       evidence for that commit: it is the base the next PRs
+#                       plan against, and it catches two PRs that each passed
+#                       alone but break together.
 #   by hand             `gh workflow run checks.yml --ref <branch>` runs
-#                       everything on that branch; add `-f base=dev` to
-#                       check only what the branch changed against dev.
-#   nightly             dev's tip, once a day, so two cards that each
-#                       passed alone but break together are caught before
-#                       the promotion PR rather than in it. Cheap: dev moves
-#                       a few cards a day and the target dir is warm.
+#                       everything; add `-f base=main` to check only what the
+#                       branch changed against main.
+#   nightly             the FULL set on dev's tip while `dev` exists (flow v2),
+#                       else on main.
 #
-# A merge to main is never checked on push, and never deploys: the checks ran
-# on the PR's merge ref, which is the tree main receives. Production changes
-# only when a v* tag is pushed (deploy.yml).
+# A merge to main never deploys: production changes only when a v* tag is
+# pushed (deploy.yml).
 on:
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
       base:
-        description: "Only check crates affected since this ref (e.g. dev). Empty = everything."
+        description: "Only check crates affected since this ref (e.g. main). Empty = everything."
         required: false
         default: ""
   schedule:
@@ -157,110 +150,105 @@ jobs:
     runs-on: [self-hosted, task]
     timeout-minutes: 10
     outputs:
-      workspace: ${{ steps.filter.outputs.workspace }}
+      full: ${{ steps.filter.outputs.full }}
+      cargo: ${{ steps.filter.outputs.cargo }}
+      tests: ${{ steps.filter.outputs.tests }}
+      test_filter: ${{ steps.filter.outputs.test_filter }}
       wasm: ${{ steps.filter.outputs.wasm }}
       skip: ${{ steps.filter.outputs.skip }}
       ref: ${{ steps.filter.outputs.ref }}
+      record: ${{ steps.filter.outputs.record }}
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history: the plan needs both diff endpoints' ancestry.
           fetch-depth: 0
-      - name: Plan affected crates
-        id: filter
+      # Which commit to plan against, decided before the evidence restore
+      # (its cache key is that commit).
+      - name: Choose the comparison base
+        id: base
         env:
           DISPATCH_BASE: ${{ inputs.base }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          base=""
+          case "${GITHUB_EVENT_NAME:-}" in
+            pull_request) base="${BASE_SHA}" ;;
+            workflow_dispatch)
+              if [ -n "${DISPATCH_BASE}" ]; then
+                git fetch --quiet origin "${DISPATCH_BASE}" || true
+                base="$(git merge-base "origin/${DISPATCH_BASE}" HEAD 2>/dev/null || true)"
+              fi ;;
+          esac
+          echo "sha=${base}" >> "$GITHUB_OUTPUT"
+          echo "base: ${base:-<none: full run>}"
+      - name: Restore rail evidence for the base
+        if: ${{ steps.base.outputs.sha != '' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rail-evidence
+          key: rail-evidence-${{ runner.os }}-${{ runner.arch }}-cargo.test-${{ steps.base.outputs.sha }}
+      - name: Plan affected crates
+        id: filter
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVIDENCE: ${{ runner.temp }}/rail-evidence/cargo.test.json
         run: |
           set -u
 
           # Fail open: if we cannot compute an honest plan, run everything.
           run_all() {
             echo "plan: $1 — running EVERYTHING"
-            for o in workspace wasm; do
-              echo "$o=true" >> "$GITHUB_OUTPUT"
-            done
+            printf 'full=true\ncargo=true\ntests=true\ntest_filter=\nwasm=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           }
           skip_all() {
             echo "plan: $1 — nothing to run"
-            printf 'skip=true\nworkspace=false\nwasm=false\n' >> "$GITHUB_OUTPUT"
+            printf 'skip=true\nfull=false\ncargo=false\ntests=false\ntest_filter=\nwasm=false\n' >> "$GITHUB_OUTPUT"
             exit 0
           }
+          # Full runs record evidence for the commit they check, so later
+          # plans against it can narrow.
+          record() { echo "record=true" >> "$GITHUB_OUTPUT"; }
 
           case "${GITHUB_EVENT_NAME:-}" in
-            # PRs into main (promotions, hotfixes) run the full set. There
-            # is no skip token. The one exception is the release commit
-            # (version + changelog only, proved by release.sh): its
-            # content was checked when it was promoted.
             pull_request)
+              # The release commit: its content was checked before it.
               if bash scripts/release.sh release-only; then
-                skip_all "release commit only (${HEAD_REF}): content checked at promotion"
-              fi
-              run_all "PR into ${GITHUB_BASE_REF}" ;;
-            # Nightly: the integration branch's tip. Before `dev` exists
-            # (migration step 1) there is nothing to check.
+                skip_all "release commit only (${HEAD_REF})"
+              fi ;;
+            push)
+              record; run_all "push to ${GITHUB_REF_NAME}: full set after every merge" ;;
             schedule)
-              git ls-remote --exit-code --heads origin dev >/dev/null \
-                || skip_all "no dev branch yet"
-              echo "ref=dev" >> "$GITHUB_OUTPUT"
-              run_all "nightly check of dev"
-              ;;
+              if git ls-remote --exit-code --heads origin dev >/dev/null; then
+                echo "ref=dev" >> "$GITHUB_OUTPUT"
+              fi
+              record; run_all "nightly" ;;
             workflow_dispatch)
-              [ -n "${DISPATCH_BASE}" ] || run_all "manual dispatch"
-              git fetch --quiet origin "${DISPATCH_BASE}" 2>/dev/null || true
-              base="$(git merge-base "origin/${DISPATCH_BASE}" HEAD 2>/dev/null)" \
-                || run_all "no merge-base with ${DISPATCH_BASE}"
-              ;;
+              [ -n "${BASE}" ] || { record; run_all "manual dispatch"; } ;;
             *) run_all "event ${GITHUB_EVENT_NAME:-?}" ;;
           esac
+          [ -n "${BASE}" ] || run_all "no comparison base"
 
-          plan="$(${NIX_DEV} cargo rail plan --quiet --from "$base" --to HEAD -f json)" \
+          ev=()
+          if [ -f "${EVIDENCE}" ]; then
+            ev=(--evidence "${EVIDENCE}")
+            echo "plan: using rail evidence for ${BASE}"
+          else
+            echo "plan: no rail evidence for ${BASE} (non-Rust changes will widen)"
+          fi
+          plan="${RUNNER_TEMP}/rail-plan.json"
+          ${NIX_DEV} cargo rail plan --from "${BASE}" --to HEAD "${ev[@]}" --json > "${plan}" \
             || run_all "cargo rail plan failed"
+          ${NIX_DEV} cargo rail plan --from "${BASE}" --to HEAD "${ev[@]}" --explain-work cargo.test || true
 
-          gates="$(printf '%s' "$plan" | ${NIX_DEV} python3 -c '
-          import json, sys
-
-          plan = json.load(sys.stdin)
-
-          infra = bool(plan.get("surfaces", {}).get("infra", {}).get("enabled"))
-          if plan.get("result") != "success":
-              infra = True
-
-          crates = set(plan.get("scope", {}).get("crates", []))
-
-          # The browser build is a first-class target: these crates and
-          # everything they pull must stay wasm-clean or the web app stops
-          # building. rail already folded reverse deps into `crates`, so
-          # membership of the leaf entry points is enough.
-          WASM = {"ui", "task-ui-core", "task-player-ui", "task-app-web"}
-
-          gates = {
-              "workspace": bool(crates),
-              "wasm":      bool(crates & WASM),
-          }
-          if infra:
-              gates = {k: True for k in gates}
-              print("infra=true")
-          for k, v in gates.items():
-              print(f"{k}={str(v).lower()}")
-          print(f"n_crates={len(crates)}")
-          ')" || run_all "plan parse failed"
-          [ -n "$gates" ] || run_all "plan parse produced no gates"
-          eval "$gates"
-
-          # Infra surface (toolchain / flake / CI inputs changed) is a
-          # DELIBERATE full run, not a failure — everything's inputs
-          # changed, so everything rebuilds.
-          [ "${infra:-false}" = "true" ] && echo "plan: infra-surface change — full run (all gates on)"
-
-          {
-            echo "workspace=$workspace"
-            echo "wasm=$wasm"
-          } >> "$GITHUB_OUTPUT"
-          echo "rail plan: $n_crates affected crate(s) — workspace=$workspace wasm=$wasm"
+          gates="$(${NIX_DEV} python3 scripts/ci-rail-plan.py "${plan}")" \
+            || run_all "plan parse failed"
+          [ -n "${gates}" ] || run_all "plan parse produced no gates"
+          echo "${gates}" >> "$GITHUB_OUTPUT"
+          echo "${gates}"
 
   # ONE job, on ONE runner instance, against ONE target dir.
   #
@@ -347,7 +335,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: ${NIX_DEV} just ci-versions
       - name: Manifests + lockfile
-        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
         run: ${NIX_DEV} just ci-manifests
       # Ungated: resolves dependency graphs and scans sources, compiles
       # nothing of Task's. Layer table + ratcheted baselines in
@@ -366,14 +354,43 @@ jobs:
       # threads (see `ci-tests` in the Justfile), and test scratch on the
       # unit's tmpfs `RuntimeDirectory` (`.config/nextest.toml`,
       # `ci-test-tmpdir`). STA-369.
+      # Full runs first record rail evidence for this commit: the recorder
+      # wraps rustc for one `cargo test --no-run` (units already fresh keep
+      # their dep-info, so this compiles nothing nextest wouldn't), and the
+      # nextest run after it finds every unit fresh. Best effort: a failure
+      # only means later plans against this commit widen.
       - name: Tests
-        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        if: ${{ !cancelled() && needs.plan.outputs.tests == 'true' }}
         env:
           TASK_CI_TEST_THREADS: ${{ startsWith(runner.name, 'macpro-') && '8' || '16' }}
           TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
-        run: ${NIX_DEV} ${SWEEP_RUN} checks-tests -- just ci-tests
+          TASK_CI_TEST_FILTER: ${{ needs.plan.outputs.test_filter }}
+          RECORD: ${{ needs.plan.outputs.record }}
+          EVIDENCE_DIR: ${{ runner.temp }}/rail-evidence
+        run: |
+          ${NIX_DEV} ${SWEEP_RUN} checks-tests -- bash -c '
+            if [ "${RECORD}" = "true" ]; then
+              mkdir -p "${EVIDENCE_DIR}"
+              cargo rail plan evidence --work cargo.test \
+                --output "${EVIDENCE_DIR}/cargo.test.json" \
+                -- test --workspace --locked --no-run \
+                || echo "::warning::rail evidence not recorded; later plans against this commit widen"
+            fi
+            just ci-tests'
+      - name: Evidence key
+        id: evidence
+        if: ${{ always() && needs.plan.outputs.record == 'true' }}
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          [ -f "${RUNNER_TEMP}/rail-evidence/cargo.test.json" ] && echo "have=true" >> "$GITHUB_OUTPUT" || true
+      - name: Save rail evidence
+        if: ${{ always() && steps.evidence.outputs.have == 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/rail-evidence
+          key: rail-evidence-${{ runner.os }}-${{ runner.arch }}-cargo.test-${{ steps.evidence.outputs.sha }}
       - name: Test log
-        if: ${{ always() && needs.plan.outputs.workspace == 'true' }}
+        if: ${{ always() && needs.plan.outputs.tests == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: nextest-ci
@@ -381,7 +398,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Clippy
-        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
         run: ${NIX_DEV} ${SWEEP_RUN} checks-clippy -- just ci-clippy
 
       # wasm32 target + ring's clang env come from the flake CI shell.
@@ -397,11 +414,10 @@ jobs:
         if: ${{ !cancelled() && needs.plan.outputs.wasm == 'true' }}
         run: ${NIX_DEV} ${SWEEP_RUN} checks-wasm -- just ci-wasm
 
-      # Release PRs only. It was gated on `github.ref == refs/heads/main`,
-      # which no run has had since pushes to main stopped triggering this
-      # workflow — so rustdoc -D warnings had silently not run at all.
+      # PRs into main and every full run (push to main, nightly). rustdoc
+      # -D warnings isn't change-scoped: it documents the whole workspace.
       - name: Docs
-        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.base_ref == 'main' }}
+        if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' && (github.base_ref == 'main' || needs.plan.outputs.full == 'true') }}
         run: ${NIX_DEV} ${SWEEP_RUN} checks-docs -- just ci-docs
 
       # Cargo never collects stale artifacts: every rebuild leaves the old
