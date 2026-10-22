@@ -1,0 +1,35 @@
+filters:
+  and:
+    - 'type == "setlist-use"'
+    - file.hasLink("Gigs/example-album-release")
+formulas:
+  chart: 'note.song.hasProperty("chart")'
+  session: "note.song.session.exists()"
+  reference: 'note.song.hasProperty("reference")'
+  patch_set: 'file.hasProperty("patch")'
+  ready: "formula.chart && formula.session && formula.reference && formula.patch_set"
+views:
+  - type: table
+    name: Readiness
+    order:
+      - position
+      - song
+      - formula.chart
+      - formula.session
+      - formula.reference
+      - formula.patch_set
+      - formula.ready
+    sort:
+      - property: position
+        direction: ASC
+  - type: table
+    name: Not ready
+    filters:
+      and:
+        - "!formula.ready"
+    order:
+      - position
+      - song
+    sort:
+      - property: position
+        direction: ASC

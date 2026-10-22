@@ -85,6 +85,8 @@ mod mcp_account_e2e;
 mod mcp_calendar_e2e;
 mod mcp_chart_e2e;
 mod mcp_e2e;
+#[cfg(feature = "plugin-scheduling")]
+mod mcp_gig_recipe_e2e;
 mod mcp_properties_e2e;
 mod mcp_query_base_e2e;
 mod mcp_refusals_e2e;

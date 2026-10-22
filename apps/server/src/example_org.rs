@@ -3201,6 +3201,184 @@ mod declared_tests {
                 .is_err()
         );
         assert!(STUDIO.get_file("acme-audio/Vault/Sessions.base").is_some());
+        // The gig recipe's playback sessions are held to the same kind.
+        for path in [
+            "Records/sessions/night-drive-playback.md",
+            "Records/sessions/paper-moon-playback.md",
+        ] {
+            for (key, value) in fm(path) {
+                registry
+                    .validate(Some("session"), &key, value)
+                    .unwrap_or_else(|v| panic!("{path} breaks the session schema: {v}"));
+            }
+        }
+    }
+
+    /// Every committed note of `slug`'s vault as `(vault path, text)`.
+    fn committed_vault_notes(slug: &str) -> Vec<(String, String)> {
+        fn walk(dir: &'static Dir<'static>, prefix: &str, out: &mut Vec<(String, String)>) {
+            for f in dir.files() {
+                let path = f.path().to_string_lossy().replace('\\', "/");
+                if let (Some(rel), Some(text)) = (path.strip_prefix(prefix), f.contents_utf8()) {
+                    out.push((rel.to_owned(), text.to_owned()));
+                }
+            }
+            for d in dir.dirs() {
+                walk(d, prefix, out);
+            }
+        }
+        let root = format!("{slug}/Vault");
+        let dir = STUDIO
+            .get_dir(&root)
+            .unwrap_or_else(|| panic!("{root} is not committed"));
+        let mut out = Vec::new();
+        walk(dir, &format!("{root}/"), &mut out);
+        out.sort();
+        out
+    }
+
+    /// The gig recipe (`docs/recipes/gigs.md`) is data, so the seed is
+    /// its contract: the release show's three `.base` files, run over
+    /// the committed vault exactly as `query_base` runs them, give the
+    /// set in position order with effective keys (`+4`, an absolute
+    /// key, none), flag the one use whose session is missing, and list
+    /// the rehearsal and the show that link to the gig.
+    #[test]
+    fn the_gig_recipe_seed_runs_as_bases() {
+        const GIG: &str = "Gigs/example-album-release";
+        let notes = committed_vault_notes("acme-audio");
+        let rows = vault::obsidian::rows_from_markdown(
+            notes.iter().map(|(p, t)| (p.as_str(), t.as_str())),
+        );
+        fn note_text<'n>(notes: &'n [(String, String)], path: &str) -> &'n str {
+            notes
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, t)| t.as_str())
+                .unwrap_or_else(|| panic!("{path} is not committed"))
+        }
+        let text = |path: &str| note_text(&notes, path);
+        let run = |base: &str, view: &str| -> Vec<(String, serde_json::Value)> {
+            let path = format!("{GIG}/{base}.base");
+            let parsed = vault::bases::parse(text(&path))
+                .unwrap_or_else(|e| panic!("{path} doesn't parse: {e}"));
+            let tables = vault::obsidian::run_base(&parsed, &rows, Some(view))
+                .unwrap_or_else(|e| panic!("{path}: {e}"));
+            tables[0]
+                .groups
+                .iter()
+                .flat_map(|g| &g.rows)
+                .map(|r| {
+                    let mut all = serde_json::Map::new();
+                    for (k, v) in &r.values {
+                        all.insert(k.clone(), v.clone());
+                    }
+                    for (k, v) in &r.formulas {
+                        all.insert(format!("formula.{k}"), v.clone());
+                    }
+                    (r.name.clone(), serde_json::Value::Object(all))
+                })
+                .collect()
+        };
+
+        // The gig note links its project.
+        let gig = text(&format!("{GIG}.md"));
+        assert!(gig.contains("type: gig"), "{gig}");
+        assert!(gig.contains("project: project:example-album"), "{gig}");
+        assert!(
+            declared_of("acme-audio").any(|p| project_rel(p.dir) == "example-album"),
+            "the gig's project is one the seed declares"
+        );
+
+        // Setlist: position order, not file-name order; effective keys.
+        let set = run("Setlist", "Setlist");
+        let got: Vec<(&str, &serde_json::Value, &serde_json::Value)> = set
+            .iter()
+            .map(|(name, v)| (name.as_str(), &v["position"], &v["formula.effective_key"]))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "Night Drive (release show)",
+                    &serde_json::json!(1),
+                    &serde_json::json!("B")
+                ),
+                (
+                    "Paper Moon (release show)",
+                    &serde_json::json!(2),
+                    &serde_json::json!("E")
+                ),
+                (
+                    "Last Call (release show)",
+                    &serde_json::json!(3),
+                    &serde_json::json!("A")
+                ),
+            ],
+            "{set:?}"
+        );
+        assert_eq!(set[0].1["formula.song_key"], "G", "{set:?}");
+        assert_eq!(set[1].1["formula.song_key"], "D", "{set:?}");
+
+        // Readiness: Last Call's session note doesn't exist.
+        let ready = run("Readiness", "Readiness");
+        let flags: Vec<(&str, &serde_json::Value, &serde_json::Value)> = ready
+            .iter()
+            .map(|(name, v)| (name.as_str(), &v["formula.session"], &v["formula.ready"]))
+            .collect();
+        let (t, f) = (serde_json::json!(true), serde_json::json!(false));
+        assert_eq!(
+            flags,
+            [
+                ("Night Drive (release show)", &t, &t),
+                ("Paper Moon (release show)", &t, &t),
+                ("Last Call (release show)", &f, &f),
+            ],
+            "{ready:?}"
+        );
+        for (name, v) in &ready {
+            for check in ["formula.chart", "formula.reference", "formula.patch_set"] {
+                assert_eq!(v[check], true, "{name}: {check}");
+            }
+        }
+        let missing: Vec<String> = run("Readiness", "Not ready")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(missing, ["Last Call (release show)"]);
+
+        // Calendar: the rehearsal, then the show, both linked to the gig.
+        let cal = run("Calendar", "Calendar");
+        let got: Vec<(&str, &serde_json::Value)> = cal
+            .iter()
+            .map(|(name, v)| (name.as_str(), &v["formula.role"]))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "example-album-release-rehearsal",
+                    &serde_json::json!("rehearsal")
+                ),
+                ("example-album-release-show", &serde_json::json!("show")),
+            ],
+            "{cal:?}"
+        );
+        // …and each is an event the scheduler reads, linking the gig.
+        #[cfg(feature = "plugin-scheduling")]
+        for (name, _) in &cal {
+            let path = format!("Records/events/{name}.md");
+            let raw = text(&path);
+            let yaml = raw
+                .strip_prefix("---\n")
+                .and_then(|r| r.split_once("\n---\n"))
+                .map(|(fm, _)| fm)
+                .unwrap_or_else(|| panic!("{path} has no frontmatter"));
+            let event = scheduling::parse::parse_cal_event(&path, yaml)
+                .unwrap_or_else(|e| panic!("{path}: {e:?}"));
+            assert_eq!(&event.id, name);
+            assert!(event.links_to(GIG), "{path}: {:?}", event.links);
+        }
     }
 
     // t[verify process.due]
