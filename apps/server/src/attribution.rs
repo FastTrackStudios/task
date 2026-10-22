@@ -29,7 +29,7 @@
 //!   comes from the key the server issued, never from what a caller
 //!   sends, and is write-once with the creator.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -152,6 +152,9 @@ pub struct Creators {
 #[derive(Default)]
 struct Cache {
     by_id: HashMap<String, Creator>,
+    /// The people among the org's own accounts (its auth store, bots
+    /// left out): members by being there.
+    own_people: HashSet<String>,
     loaded: Option<Instant>,
 }
 
@@ -200,15 +203,42 @@ impl Creators {
             .unwrap_or_else(|| Creator::user(user_id, None))
     }
 
+    /// Whether `user_id` is a person among the org's own accounts — in
+    /// its auth store, not only the home org's. A bot never is: bots
+    /// belong to an org by a membership row, as they do at the gate. A
+    /// miss always reloads, so an account made a moment ago counts.
+    pub async fn is_own_person(&self, user_id: &str) -> bool {
+        let hit = self
+            .cache
+            .read()
+            .expect("creators lock")
+            .own_people
+            .contains(user_id);
+        if hit {
+            return true;
+        }
+        self.reload().await;
+        self.cache
+            .read()
+            .expect("creators lock")
+            .own_people
+            .contains(user_id)
+    }
+
     async fn reload(&self) {
         let mut by_id: HashMap<String, Creator> = HashMap::new();
-        for store in std::iter::once(&self.org).chain(self.home.as_ref()) {
+        let mut own_people: HashSet<String> = HashSet::new();
+        let stores =
+            std::iter::once((true, &self.org)).chain(self.home.as_ref().map(|h| (false, h)));
+        for (own, store) in stores {
             match store.auth.list_users_local_trusted().await {
                 Ok(users) => {
                     for u in &users {
-                        by_id
-                            .entry(u.id.to_string())
-                            .or_insert_with(|| Creator::of_account(u));
+                        let account = Creator::of_account(u);
+                        if own && !creator::is_bot(&account.r#ref) {
+                            own_people.insert(u.id.to_string());
+                        }
+                        by_id.entry(u.id.to_string()).or_insert(account);
                     }
                 }
                 Err(e) => tracing::warn!(error = ?e, "attribution: list accounts failed"),
@@ -237,8 +267,47 @@ impl Creators {
         }
         let mut c = self.cache.write().expect("creators lock");
         c.by_id = by_id;
+        c.own_people = own_people;
         c.loaded = Some(Instant::now());
     }
+}
+
+// t[impl attribution.assignee.member]
+/// Check that the account named as a person assignee (`human:<id>`)
+/// is in `org`: one of the org's own people, or an account — a person
+/// from the home org or central auth, or a bot — with a membership row
+/// for it in the home org. The same two places the permissions gate
+/// admits a caller from, so work can only go to someone who can open
+/// it.
+///
+/// # Errors
+///
+/// When `user_id` isn't a UUID, or names no account in the org; the
+/// message says what to pass instead.
+pub async fn check_assignee(org: &crate::OrgAppState, user_id: &str) -> Result<(), String> {
+    let Ok(id) = user_id.trim().parse::<uuid::Uuid>() else {
+        return Err(format!(
+            "`human:{user_id}` is not an account id (expected a UUID) — assign a member \
+             of this org by account id, or a named agent ('agent:NAME')"
+        ));
+    };
+    if let Some(home) = &org.sharing.home
+        && home
+            .memberships
+            .role_for(id, &org.slug)
+            .await
+            .is_ok_and(|m| m.is_some())
+    {
+        return Ok(());
+    }
+    if org.creators.is_own_person(&id.to_string()).await {
+        return Ok(());
+    }
+    Err(format!(
+        "no member `{id}` in org `{}`: the account doesn't exist or isn't in this org — \
+         assign a member by account id, or a named agent ('agent:NAME')",
+        org.slug
+    ))
 }
 
 #[cfg(test)]
