@@ -155,7 +155,11 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
       # libssl.a instead of libssl.so.3 / Homebrew's dylib: the binary must
-      # not depend on a library a fresh host may not have.
+      # not depend on a library a fresh host may not have. On Linux this is
+      # only honoured together with OPENSSL_LIB_DIR / OPENSSL_INCLUDE_DIR
+      # (set below): with `OPENSSL_STATIC=1` alone openssl-sys goes through
+      # pkg-config, emits a dynamic `link-lib=ssl` and v0.2.4's binaries
+      # needed libssl.so.3 (probed on ubuntu-22.04 and -arm, STA-161).
       OPENSSL_STATIC: "1"
     steps:
       - uses: actions/checkout@v4
@@ -167,6 +171,13 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q pkg-config libssl-dev cmake clang
+          # Point openssl-sys at the static archives (/usr/lib/<multiarch>/libssl.a,
+          # libcrypto.a ship in libssl-dev) so it links them statically.
+          m="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+          test -f "/usr/lib/$m/libssl.a" -a -f "/usr/lib/$m/libcrypto.a" \
+            || { echo "::error::no static OpenSSL archives in /usr/lib/$m"; exit 1; }
+          echo "OPENSSL_LIB_DIR=/usr/lib/$m" >> "$GITHUB_ENV"
+          echo "OPENSSL_INCLUDE_DIR=/usr/include" >> "$GITHUB_ENV"
 
       - name: Native build dependencies (macOS)
         if: ${{ runner.os == 'macOS' }}
