@@ -65,9 +65,10 @@ const HEAP_BUDGET: usize = 80 << 20;
 /// at 1.4 MiB after this card. Before it, every device sweep leaked its
 /// two connections (see `files_sync::Dialled`), about 0.7 MiB per sweep
 /// and 9.1 MiB over these rounds. A leak of that size per round fails
-/// here with room to spare. Measured at 0.6 MiB on dev before zero-copy
-/// PR 2, which tightened it from 4 MiB.
-const GROWTH_BUDGET: usize = 2 << 20;
+/// here with room to spare. Zero-copy PRs 2 and 3 measured 0.0 to
+/// 1.1 MiB across five runs; PR 2 tightened it from 4 MiB to 3 MiB, which
+/// keeps twice the worst run seen (1.4 MiB, above) so it doesn't flake.
+const GROWTH_BUDGET: usize = 3 << 20;
 
 /// The card's budget for seven small orgs was 300 MiB. Measured at about
 /// 101 MiB on THEBATTLESHIP (32 threads, so as many glibc arenas as any

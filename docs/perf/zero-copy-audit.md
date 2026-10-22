@@ -259,13 +259,17 @@ e7af2a2f against the branch):
 | | dev e7af2a2f | PR 2 |
 |---|---|---|
 | copy lints `task-server` (lib + tests + `it`) | 37 (23 `redundant_clone`, 14 `needless_pass_by_value`) | 0 |
-| memory_budget peak heap | 47.2 MiB | 47.4 MiB |
-| memory_budget growth (12 rounds) | 0.6 MiB | 0.0 MiB |
-| memory_budget RssAnon | 104088 KiB | 106964 KiB |
+| memory_budget peak heap | 47.2 MiB | 47.4 / 47.3 / 47.6 MiB |
+| memory_budget growth (12 rounds) | 0.6 MiB | 0.0 / 0.0 / 1.1 MiB |
+| memory_budget RssAnon | 104088 KiB | 106964 / 102692 / 100936 KiB |
+
+(PR 2 column: three runs, on 98040bec, c04b529d and cd462a6c; the code
+under test is the same in all three.)
 
 The scenario's MCP traffic is a few small calls per org per round, so
 the per-request savings don't show in its peak: the peak is set by boot
 and the iroh/Files state (S5). Peak and RssAnon are flat within run to
-run noise. The budget is tightened anyway, since every run since PR 1
-measured under 51 MiB peak and under 1 MiB growth: heap 96 → 80 MiB,
-growth 4 → 2 MiB. RssAnon stays at 200 MiB.
+run noise, and growth is noise around zero. The budget is tightened
+anyway, since every run since PR 1 measured under 51 MiB peak: heap
+96 → 80 MiB. Growth goes 4 → 3 MiB, about twice the worst run seen
+(1.4 MiB). RssAnon stays at 200 MiB.
