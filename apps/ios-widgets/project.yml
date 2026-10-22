@@ -27,8 +27,13 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.fasttrackstudio.task.widgets
         PRODUCT_NAME: TaskWidgets
+        # Placeholders: every build passes the app's own versions
+        # (MARKETING_VERSION=<release version> CURRENT_PROJECT_VERSION=<build
+        # number>, apps/mobile/ios/deploy-testflight.sh), and App Store
+        # Connect rejects an embedded bundle whose versions differ from the
+        # app's. Never put a real version here.
         CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 0.0.3
+        MARKETING_VERSION: 0.0.0
         SWIFT_VERSION: "5.0"
         DEVELOPMENT_TEAM: 28C2G63DA7
         CODE_SIGN_STYLE: Automatic
@@ -40,5 +45,7 @@ targets:
       path: TaskWidgets/Info.plist
       properties:
         CFBundleDisplayName: Task
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

@@ -18,11 +18,11 @@
 # Env knobs (all optional):
 #   MARKETING_VER  CFBundleShortVersionString (default: the release version) — keep in step
 #                  with the iOS build's; both platforms share the app record.
-#   BUILD_NO       CFBundleVersion (default: unix time). App Store Connect
-#                  tracks build numbers PER PLATFORM, so the macOS train
-#                  can't collide with the iOS one; unix time keeps it
-#                  monotonic and doubles as the upload timestamp — the exact
-#                  scheme the iOS flow uses.
+#   BUILD_NO       CFBundleVersion (default: scripts/apple-release.sh
+#                  build-number). ONE scheme for every Task Apple upload,
+#                  iPhone and Mac: unix seconds, global and ever-increasing,
+#                  and above every build App Store Connect already holds
+#                  (scripts/apple-release.sh has the reasoning).
 #   SKIP_BUILD=1   reuse the existing .app (iterate on sign/pkg/upload).
 #   DRY_RUN=1      stop after producing + verifying the signed .pkg —
 #                  everything except the App Store Connect upload.
@@ -142,10 +142,11 @@ cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon
 echo "agent: $APP/Contents/MacOS/fts-files-daemon"
 
 # ── Info.plist: identity, versions, category, SDK metadata ───────────────────
-BUILD_NO="${BUILD_NO:-$(date +%s)}"
+BUILD_NO="${BUILD_NO:-$(bash "$ROOT/scripts/apple-release.sh" build-number)}"
+bash "$ROOT/scripts/apple-release.sh" check-build "$BUILD_NO"
 # Default: the release version (`[workspace.package]` in Cargo.toml), the
 # one every artifact of a release reports (scripts/check-versions.sh).
-MARKETING_VER="${MARKETING_VER:-$(cd "$ROOT" && bash scripts/release.sh version)}"
+MARKETING_VER="${MARKETING_VER:-$(bash "$ROOT/scripts/apple-release.sh" version)}"
 pb() { /usr/libexec/PlistBuddy -c "Set :$1 $2" "$PLIST" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PLIST"; }
 pb CFBundleIdentifier "$DX_BUNDLE_ID"

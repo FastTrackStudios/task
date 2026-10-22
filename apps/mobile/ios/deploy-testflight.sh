@@ -10,8 +10,10 @@
 #     KEYCHAIN=fts-build.keychain KEYCHAIN_PW=fts-build ./ios/deploy-testflight.sh
 #   (a dedicated keychain lets codesign work over SSH with no one logged in).
 #
-# Each upload needs a higher build number than the last; we stamp it from
-# the current unix time (passed in, since dx/nix can't read the clock).
+# Versions (scripts/apple-release.sh has the why): MARKETING_VER is the
+# release's version, BUILD_NO the shared Apple build number (unix seconds),
+# both handed in by task-ios.yml. The app, the watch companion and the
+# widget extension all carry exactly those two.
 set -euo pipefail
 
 # Derive paths from the script's own location, not git — a build box may hold
@@ -163,12 +165,13 @@ echo "=== app bundle: $APP ==="
 BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
 
 # Info.plist: usage strings + file sharing + versions. The App Store
-# requires CFBundleShortVersionString to be 1-3 period-separated integers
-# (the crate's "0.0.1-alpha" is rejected); CFBundleVersion just has to climb.
-BUILD_NO="${BUILD_NO:-$(date +%s)}"
+# requires CFBundleShortVersionString to be period-separated integers, and
+# CFBundleVersion to climb (scripts/apple-release.sh).
+BUILD_NO="${BUILD_NO:-$(bash "$ROOT/scripts/apple-release.sh" build-number)}"
+bash "$ROOT/scripts/apple-release.sh" check-build "$BUILD_NO"
 # Default: the release version (`[workspace.package]` in Cargo.toml), the
 # one every artifact of a release reports (scripts/check-versions.sh).
-MARKETING_VER="${MARKETING_VER:-$(cd "$ROOT" && bash scripts/release.sh version)}"
+MARKETING_VER="${MARKETING_VER:-$(bash "$ROOT/scripts/apple-release.sh" version)}"
 # Everything that changes how the app RUNS — the scene manifest iOS 27
 # requires, launch screen, orientations, URL scheme, display name, usage
 # strings — is shared with the simulator build (build-ios.sh), so a dev
@@ -304,6 +307,7 @@ if [ -n "$WATCH_APP" ]; then
         -configuration Release -destination 'generic/platform=watchOS' \
         -derivedDataPath "$WATCH_DD" \
         CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+        MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO" \
         build > /tmp/fts-watch-build.log 2>&1 \
         || { echo "ERROR: watch build failed"; tail -30 /tmp/fts-watch-build.log; exit 1; }
     WATCH_BUILT="$WATCH_DD/Build/Products/Release-watchos/$WATCH_PRODUCT.app"
@@ -359,6 +363,7 @@ if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
         -configuration Release -destination 'generic/platform=iOS' \
         -derivedDataPath "$WIDGETS_DD" \
         CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+        MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO" \
         build > /tmp/fts-widgets-build.log 2>&1 \
         || { echo "ERROR: widgets build failed"; tail -30 /tmp/fts-widgets-build.log; exit 1; }
     WIDGETS_BUILT="$WIDGETS_DD/Build/Products/Release-iphoneos/TaskWidgets.appex"
@@ -391,6 +396,19 @@ elif [ "$DX_PACKAGE" = task-app-mobile ]; then
     echo "error: no Metadata.appintents from apps/mobile/build.rs" >&2
     exit 1
 fi
+
+# Every embedded bundle must carry the app's own versions, or App Store
+# Connect rejects the upload (the watch app and the extensions are matched
+# against the app they ship in). The plists above are stamped; check them.
+for inner in "$APP"/Watch/*.app/Info.plist "$APP"/PlugIns/*.appex/Info.plist; do
+    [ -f "$inner" ] || continue
+    iv="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$inner")"
+    ib="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$inner")"
+    if [ "$iv" != "$MARKETING_VER" ] || [ "$ib" != "$BUILD_NO" ]; then
+        echo "ERROR: $inner is $iv ($ib); the app is $MARKETING_VER ($BUILD_NO)" >&2
+        exit 1
+    fi
+done
 
 echo "=== signing (distribution) ==="
 cp "$PROFILE" "$APP/embedded.mobileprovision"

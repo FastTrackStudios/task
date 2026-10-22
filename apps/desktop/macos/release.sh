@@ -33,10 +33,9 @@
 set -euo pipefail
 
 VERSION="${1:?usage: release.sh <version, e.g. 26.10.1>}"
-case "$VERSION" in
-    [0-9]*.[0-9]*.[0-9]*) ;;
-    *) echo "version must be three numbers, e.g. 26.10.1" >&2; exit 2 ;;
-esac
+# The release's CalVer version: three numbers, no zero padding.
+[[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+    || { echo "version must be three numbers without leading zeros, e.g. 26.10.1" >&2; exit 2; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"

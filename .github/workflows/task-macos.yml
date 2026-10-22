@@ -19,10 +19,12 @@
 # below also attaches the Developer-ID app (DMG, and the zip + manifest the
 # in-app updater follows) to the release `v<ver>` itself, beside the node
 # binaries, the web bundle and the Linux AppImage. No `paths:` filter (tag
-# pushes ignore them). workflow_dispatch forces a build (select the tag as
-# the ref), or backfills the macOS app onto an existing release
+# pushes ignore them). workflow_dispatch rebuilds a release: select the TAG
+# as the ref (a branch fails the TestFlight job's tag guard), or backfills
+# the macOS app onto an existing release
 # (`-f desktop_release=publish -f tag=v26.10.0 -f testflight=false`, run
-# from main).
+# from main). dry_run validates and stops before the build. Versions and
+# build numbers: the same scheme as task-ios.yml (scripts/apple-release.sh).
 
 name: macOS
 
@@ -31,10 +33,10 @@ on:
     tags: ["v[0-9]*.[0-9]*.[0-9]*"]
   workflow_dispatch:
     inputs:
-      marketing_version:
-        description: "CFBundleShortVersionString. Empty = the workspace version in Cargo.toml (the release's)."
-        required: false
-        default: ""
+      dry_run:
+        description: "Validate the tag (guard, versions, build number) and stop before any build."
+        type: boolean
+        default: false
       testflight:
         description: "Build and upload to TestFlight."
         type: boolean
@@ -70,17 +72,18 @@ concurrency:
   #
   # Keeping the group per-workflow preserves the useful half — a newer
   # run of the SAME workflow supersedes an older queued one.
-  group: ios-testflight-${{ github.workflow }}
+  #
+  # A dry run gets its own group, so it can never supersede a queued upload.
+  group: ios-testflight-${{ github.workflow }}${{ inputs.dry_run && '-dry' || '' }}
   cancel-in-progress: false
 
 jobs:
   testflight:
     if: ${{ github.event_name == 'push' || inputs.testflight }}
     runs-on: [self-hosted, macos, task-release-mac]
-    # The tag guard reads the tagged commit's `CI passed`.
     permissions:
-      contents: read
-      checks: read
+      contents: write   # the build line in the tag's GitHub Release
+      checks: read      # the tag guard reads the tagged commit's `CI passed`
     # Fail loudly when the airlock Mac isn't there. Without this a job
     # with no available runner just QUEUES, and is eventually cancelled —
     # which reads as "cancelled", not "failed", so nothing alerts and
@@ -117,30 +120,33 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: bash scripts/release.sh stamp "$GITHUB_REF_NAME"
 
-      # A pushed tag must be vX.Y.Z on a commit of main or a release/v*
-      # hotfix line, with `CI passed` green on it. Without this a stray v*
-      # tag on a branch would build TestFlight. A manual dispatch is exempt.
+      # The ref must be a release tag (see the same step in task-ios.yml).
+      # Push AND dispatch: TestFlight is uploaded only from a release tag.
       - name: Tag guard
-        if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release.sh tag-guard
 
-      # One version for every shipped thing — see the same step in
-      # task-ios.yml.
-      - name: Version
-        env:
-          INPUT_VERSION: ${{ inputs.marketing_version }}
+      # One version for every shipped thing, one build-number scheme for
+      # every Apple upload — see the same step in task-ios.yml.
+      - name: Version and build number
         run: |
-          v="${INPUT_VERSION:-$(bash scripts/release.sh version)}"
+          v="$(bash scripts/apple-release.sh version)"
+          n="$(bash scripts/apple-release.sh build-number)"
           echo "MARKETING_VER=$v" >> "$GITHUB_ENV"
-          echo "marketing version: $v"
+          echo "BUILD_NO=$n" >> "$GITHUB_ENV"
+          echo "marketing version: $v, build number: $n"
+
+      - name: Dry run — stop before the build
+        if: ${{ inputs.dry_run }}
+        run: echo "dry run, $GITHUB_REF validated ($MARKETING_VER, build $BUILD_NO); nothing built or uploaded."
 
       - name: Build, sign, and upload Task (macOS) to TestFlight
+        if: ${{ !inputs.dry_run }}
         env:
           KEYCHAIN: fts-build.keychain
           KEYCHAIN_PW: fts-build
-          # MARKETING_VER comes from the Version step.
+          # MARKETING_VER and BUILD_NO come from the Version step.
           # Sentry DSN baked in at compile time (option_env! in
           # architect-telemetry). Sourced from the repo secret — never committed
           # (public repo). Empty when the secret is unset → telemetry no-op.
@@ -170,11 +176,20 @@ jobs:
             bash apps/desktop/macos/deploy-testflight-macos.sh
           fi
 
+      # One line in the tag's GitHub Release: version, build, this run.
+      - name: Record the build in the GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          bash scripts/apple-release.sh note "macOS (TestFlight)" "$MARKETING_VER" "$BUILD_NO"
+
       # target/ persists (clean: false) and is shared with task-ios. Keep
       # the latest build of each kind (macos, ios, desktop-release); the
       # 2 h protection covers a build of another kind still in flight.
       - name: Bound the target dir
-        if: always()
+        if: ${{ always() && !inputs.dry_run }}
         run: |
           command -v python3 >/dev/null || exit 0
           python3 scripts/target-sweep.py sweep --protect-hours 2 || true
@@ -185,7 +200,7 @@ jobs:
         if: always()
         run: |
           echo "### Task macOS TestFlight" >> "$GITHUB_STEP_SUMMARY"
-          echo "commit \`$(git rev-parse --short HEAD)\` → Task desktop app uploaded (see log for build number)." >> "$GITHUB_STEP_SUMMARY"
+          echo "commit \`$(git rev-parse --short HEAD)\`, version \`${MARKETING_VER:-?}\`, build \`${BUILD_NO:-?}\`${{ inputs.dry_run && ' (dry run: nothing built)' || '' }}" >> "$GITHUB_STEP_SUMMARY"
 
   # The Developer-ID app (DMG + the zip/manifest the in-app updater
   # installs), attached to the release `v<version>` — the same thing
@@ -216,11 +231,12 @@ jobs:
   #     a fix branch).
   #   - dispatch, desktop_release=publish + tag: build that tag, attach to
   #     it (a backfill; run from main so this job is the current one).
+  #   - dispatch, dry_run: nothing.
   # Skips itself when the release already carries latest-macos.json.
   desktop-release:
     name: Developer-ID desktop app → release
     needs: testflight
-    if: ${{ !cancelled() && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.desktop_release == 'build' || inputs.desktop_release == 'publish') }}
+    if: ${{ !cancelled() && !inputs.dry_run && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.desktop_release == 'build' || inputs.desktop_release == 'publish') }}
     runs-on: [self-hosted, macos, task-release-mac]
     timeout-minutes: 240
     permissions:
@@ -317,6 +333,8 @@ jobs:
           export PATH="/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:$PATH"
           export NIX=/nix/var/nix/profiles/default/bin/nix
           export OUT_DIR="$PWD/target/dmg"
+          # release.sh, not apple-release.sh: a backfill checks out an
+          # older tag, which may predate apple-release.sh.
           v="$(bash scripts/release.sh version)"
           echo "desktop version: $v"
           if command -v python3 >/dev/null && [ -f scripts/target-sweep.py ]; then

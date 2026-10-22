@@ -82,10 +82,15 @@ WIDGETS_DIR="$ROOT/apps/ios-widgets"
 WIDGETS_DD="${TMPDIR:-/tmp}/task-widgets-sim"
 if [ -d "$WIDGETS_DIR" ]; then
     ( cd "$WIDGETS_DIR" && nix run nixpkgs#xcodegen -- generate >/dev/null 2>&1 ) || true
+    # The extension carries the app's own versions (iOS refuses an
+    # extension whose versions differ from its app's).
+    APP_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")"
+    APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
     if env -u LD -u CC -u CXX -u SDKROOT -u DEVELOPER_DIR /usr/bin/xcodebuild \
         -project "$WIDGETS_DIR/TaskWidgets.xcodeproj" -scheme TaskWidgets \
         -configuration Debug -destination 'generic/platform=iOS Simulator' \
-        -derivedDataPath "$WIDGETS_DD" CODE_SIGNING_ALLOWED=NO build \
+        -derivedDataPath "$WIDGETS_DD" CODE_SIGNING_ALLOWED=NO \
+        MARKETING_VERSION="$APP_VER" CURRENT_PROJECT_VERSION="$APP_BUILD" build \
         > "${TMPDIR:-/tmp}/task-widgets-sim.log" 2>&1; then
         mkdir -p "$APP/PlugIns"
         rm -rf "$APP/PlugIns/TaskWidgets.appex"
