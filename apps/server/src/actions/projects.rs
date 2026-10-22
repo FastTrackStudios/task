@@ -22,7 +22,7 @@ pub(super) fn register(list: &ActionList, ctx: Option<&Arc<Ctx>>) -> Result<(), 
     register_blocking(list, &LIST, Effect::ReadOnly, ctx, list_projects)
 }
 
-#[derive(Facet, Debug)]
+#[derive(Facet, Debug, Clone, Copy)]
 pub struct ListProjects {
     /// Max rows (default 50, max 200).
     limit: Option<u64>,
