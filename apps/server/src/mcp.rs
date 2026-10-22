@@ -5112,6 +5112,34 @@ fn live_permit(
     }
 }
 
+/// Whether this caller may read Signal's `key` (`signal/<key>` in the
+/// org's permission engine; `signal/index` for the index). No principal
+/// is the static MCP token, which may.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn signal_permit(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    key: &str,
+) -> Result<(), ToolFailure> {
+    use architect_permissions::{Action, Decision, Principal, Resource};
+    let Some(user_id) = principal else {
+        return Ok(());
+    };
+    let who = Principal::User {
+        user_id: user_id.to_owned(),
+    };
+    match org.permissions.engine().check(
+        &who,
+        &Resource::new(format!("signal/{key}")),
+        &Action::new("read"),
+    ) {
+        Decision::Allow => Ok(()),
+        Decision::Deny { reason } => Err(ToolFailure::Message(format!(
+            "not allowed to read Signal's `{key}`: {reason}"
+        ))),
+    }
+}
+
 /// One live-set tool call, onto the org's live host — the same served
 /// docs every peer's `DocSync` reaches, so an apply is live the moment
 /// it returns. The rules are [`crate::live_docs`]'s; this is argument
@@ -5142,12 +5170,23 @@ fn live_tool(
         }
         "doc_read" => {
             let doc_ref = required_str(args, "doc_ref")?;
+            // t[impl mcp.signal.read]
+            // Signal's library (spec §7 S5): its own host, read-only.
+            if crate::signal_docs::is_ref(&doc_ref) {
+                let key = crate::signal_docs::key_of(&doc_ref)?;
+                signal_permit(org, caller.principal, &key)?;
+                return Ok(crate::signal_docs::read(&org.signal, &doc_ref)?);
+            }
             let setlist = live_docs::setlist_of(host, &doc_ref)?;
             live_permit(org, caller.principal, &setlist, "read")?;
             Ok(live_docs::read(host, &doc_ref)?)
         }
         "doc_apply" => {
             let doc_ref = required_str(args, "doc_ref")?;
+            // t[impl mcp.signal.one-writer]
+            if crate::signal_docs::is_ref(&doc_ref) {
+                return Err(ToolFailure::Message(crate::signal_docs::ONE_WRITER.to_owned()));
+            }
             let setlist = live_docs::setlist_of(host, &doc_ref)?;
             live_permit(org, caller.principal, &setlist, "write")?;
             let propose = match arg_str(args, "mode").as_deref() {
