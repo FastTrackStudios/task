@@ -28,6 +28,7 @@
 )]
 
 pub mod account_devices;
+pub mod actions;
 pub mod activity;
 pub mod admin_cli;
 #[cfg(feature = "plugin-agent")]

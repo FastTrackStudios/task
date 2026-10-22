@@ -240,77 +240,6 @@ pub fn tool_catalog() -> &'static [ToolDef] {
 fn build_tool_catalog() -> Vec<ToolDef> {
     let mut v = vec![
         ToolDef {
-            name: "task_context",
-            plugin: "core",
-            description: "Orient yourself: today's date and time, the org you're working in, \
-                          and a count of what's open (tasks due, events today, inbox items). \
-                          Call this first when the user's request depends on 'now' or 'what's \
-                          on my plate'.",
-            schema: || obj(json!({}), &[]),
-        },
-        ToolDef {
-            name: "list_tasks",
-            plugin: "core",
-            description: "List tasks. Defaults to open tasks only. Filter by status, or by \
-                          'due_on_or_before' (ISO YYYY-MM-DD) to answer 'what's due today/this \
-                          week'. Returns ids you must pass to update_task.",
-            schema: || {
-                obj(
-                    json!({
-                        "status": s_("Exact status to match, e.g. 'open', 'in-progress', 'done'. Omit for all open tasks."),
-                        "due_on_or_before": s_("ISO date (YYYY-MM-DD). Keeps tasks due or scheduled on/before it."),
-                        "project": s_("Project UUID (from list_projects) — keeps tasks belonging to that project."),
-                        "query": s_("Case-insensitive substring match on the title."),
-                        "created_by": s_("Keep tasks made by this account — a created_by ref from a listed task ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, 'me', or 'none' for tasks with no recorded creator."),
-                        "on_behalf_of": s_("Keep tasks a personal assistant bot made on behalf of this person — 'me', a 'user:<uuid>' ref, a bare uuid, or 'none'."),
-                        "assignee": s_("Keep tasks assigned to this principal — 'me', 'user:<uuid>' (a person or a bot account), 'agent:NAME', or 'none' for unassigned tasks."),
-                        "limit": i_("Max rows (default 50, max 200)."),
-                    }),
-                    &[],
-                )
-            },
-        },
-        ToolDef {
-            name: "create_task",
-            plugin: "core",
-            description: "Create a task from natural language. The text is parsed the same way \
-                          the app's quick-add is: '#tag', '@context', '[[Project]]', '!high', and \
-                          dates like 'tomorrow', 'next monday', '2026-08-01' are extracted, and \
-                          the remainder becomes the title. Explicit fields override what the text \
-                          implies.",
-            schema: || {
-                obj(
-                    json!({
-                        "text": s_("The task in natural language, e.g. 'Email Dana about the invoice tomorrow !high @work'."),
-                        "due": s_("Override the due date (ISO YYYY-MM-DD)."),
-                        "scheduled": s_("When you plan to work on it (ISO YYYY-MM-DD)."),
-                        "priority": s_("'none' | 'low' | 'normal' | 'high' | 'critical'."),
-                    }),
-                    &["text"],
-                )
-            },
-        },
-        ToolDef {
-            name: "update_task",
-            plugin: "core",
-            description: "Change a task by id: mark it done, reschedule it, re-prioritize, or \
-                          retitle. Only the fields you pass change. Get ids from list_tasks.",
-            schema: || {
-                obj(
-                    json!({
-                        "id": s_("Task UUID from list_tasks."),
-                        "status": s_("New status, e.g. 'open', 'in-progress', 'done'."),
-                        "title": s_("New title."),
-                        "due": s_("New due date (ISO YYYY-MM-DD); pass an empty string to clear."),
-                        "scheduled": s_("New scheduled date (ISO YYYY-MM-DD); empty string clears."),
-                        "priority": s_("'none' | 'low' | 'normal' | 'high' | 'critical'."),
-                        "assignees": a_("Replace who owns the task: 'agent:NAME' or 'human:USER_ID' entries (bare names mean agent:); a human must be an account in this org. Empty array unclaims. Prefer claim_task to take a task for yourself."),
-                    }),
-                    &["id"],
-                )
-            },
-        },
-        ToolDef {
             name: "list_untriaged_tasks",
             plugin: "core",
             description: "List open tasks that belong to nothing — no project, no parent task, \
@@ -456,55 +385,6 @@ fn build_tool_catalog() -> Vec<ToolDef> {
         },
     ]);
     v.extend([
-        ToolDef {
-            name: "capture_inbox",
-            plugin: "core",
-            description: "Capture a thought, reminder, or follow-up into the inbox — the right \
-                          home for anything not yet shaped into a task. Captures land as \
-                          'suggested' for the user to accept with one tap, so capture freely; \
-                          pass accepted: true only when the user explicitly asked for it.",
-            schema: || {
-                obj(
-                    json!({
-                        "body": s_("The note, verbatim. Markdown."),
-                        "accepted": b_("Skip the suggestion queue and file it as an open item."),
-                        "resurface_on": s_("ISO date to bring it back up (a reminder)."),
-                    }),
-                    &["body"],
-                )
-            },
-        },
-        ToolDef {
-            name: "list_inbox",
-            plugin: "core",
-            description: "What's waiting in the inbox for review today — the user's unprocessed \
-                          captures. Useful for 'what did I say I'd look at'. Pass status \
-                          'suggested' to see captures (including your own) still awaiting the \
-                          user's accept.",
-            schema: || {
-                obj(
-                    json!({
-                        "status": s_("Show every item with this status instead of today's review queue, e.g. 'suggested', 'open'."),
-                        "created_by": s_("Keep items captured by this account — a created_by ref from a listed item ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, 'me', or 'none'. Searches every item, not only today's queue, unless status narrows it."),
-                        "on_behalf_of": s_("Keep items a personal assistant bot captured on behalf of this person — 'me', a 'user:<uuid>' ref, a bare uuid, or 'none'. Searches every item, like created_by."),
-                        "limit": i_("Max rows (default 50, max 200)."),
-                    }),
-                    &[],
-                )
-            },
-        },
-        ToolDef {
-            name: "list_projects",
-            plugin: "core",
-            description: "The user's projects. Use it to attach work to the right project, or to \
-                          answer 'what am I working on'.",
-            schema: || {
-                obj(
-                    json!({ "limit": i_("Max rows (default 50, max 200).") }),
-                    &[],
-                )
-            },
-        },
         ToolDef {
             name: "list_goals",
             plugin: "core",
@@ -789,23 +669,6 @@ fn build_tool_catalog() -> Vec<ToolDef> {
             },
         },
         // ── Inbox processing ─────────────────────────────────────
-        ToolDef {
-            name: "process_inbox_item",
-            plugin: "core",
-            description: "Move an inbox item through its lifecycle: 'open' accepts a suggestion \
-                          into the trusted queue, 'processed' marks it handled (e.g. after you \
-                          turned it into a task), 'archived' dismisses it. Get ids from \
-                          list_inbox.",
-            schema: || {
-                obj(
-                    json!({
-                        "id": s_("Inbox item id from list_inbox."),
-                        "status": s_("'open' | 'processed' | 'archived'."),
-                    }),
-                    &["id", "status"],
-                )
-            },
-        },
         // ── Day plans / bookings (scheduling plugin) ─────────────
         ToolDef {
             name: "get_day_plan",
@@ -1901,8 +1764,20 @@ fn wiki_tool_catalog() -> Vec<ToolDef> {
 /// The catalog as MCP's `tools/list` payload, filtered to the org's
 /// enabled plugins — a disabled plugin's tools are *absent*, exactly
 /// as its vox services are unmounted from the org router.
+///
+/// The tools on the Action List ([`crate::actions`]) come first, as
+/// architect-mcp names them; the hand-written catalogue follows.
 fn tools_list_payload(plugins: &task_plugin::PluginSet) -> Value {
-    let tools: Vec<Value> = tool_catalog()
+    let listed = crate::actions::tool_entries()
+        .iter()
+        .filter(|t| {
+            t["name"]
+                .as_str()
+                .and_then(crate::actions::find)
+                .is_some_and(|a| plugins.contains(a.plugin))
+        })
+        .cloned();
+    let catalog = tool_catalog()
         .iter()
         .filter(|t| plugins.contains(t.plugin))
         .map(|t| {
@@ -1911,8 +1786,8 @@ fn tools_list_payload(plugins: &task_plugin::PluginSet) -> Value {
                 "description": t.description,
                 "inputSchema": (t.schema)(),
             })
-        })
-        .collect();
+        });
+    let tools: Vec<Value> = listed.chain(catalog).collect();
     json!({ "tools": tools })
 }
 
@@ -1922,18 +1797,28 @@ fn tools_list_payload(plugins: &task_plugin::PluginSet) -> Value {
 ///   model reads — the tool exists in the build, this org turned it off);
 /// - enabled → `Ok(())`.
 fn plugin_gate(name: &str, plugins: &task_plugin::PluginSet) -> Result<(), Option<String>> {
-    let Some(def) = tool_catalog().iter().find(|t| t.name == name) else {
+    let Some(plugin) = tool_plugin(name) else {
         return Err(None);
     };
-    if plugins.contains(def.plugin) {
+    if plugins.contains(plugin) {
         return Ok(());
     }
-    let plugin_name = task_plugin::find(def.plugin).map_or(def.plugin, |p| p.name);
+    let plugin_name = task_plugin::find(plugin).map_or(plugin, |p| p.name);
     Err(Some(format!(
-        "`{name}` is unavailable: the {plugin_name} plugin (`{}`) is disabled for this org. \
+        "`{name}` is unavailable: the {plugin_name} plugin (`{plugin}`) is disabled for this org. \
          Call `tools/list` for what this org serves.",
-        def.plugin,
     )))
+}
+
+/// The plugin that owns tool `name`, wherever it is served from: the
+/// Action List or the hand-written catalogue.
+fn tool_plugin(name: &str) -> Option<&'static str> {
+    crate::actions::find(name).map(|a| a.plugin).or_else(|| {
+        tool_catalog()
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| t.plugin)
+    })
 }
 
 /// The system-prompt text MCP clients inject on connect. This is
@@ -2310,6 +2195,20 @@ async fn mcp_dispatch(
                 Some(id) => Some(org.creators.resolve(id).await),
                 None => None,
             };
+            // A tool on the Action List runs there, after the same lane,
+            // bearer, bot-scope and plugin checks as every other tool.
+            if crate::actions::find(&name).is_some() {
+                let ctx = std::sync::Arc::new(crate::actions::Ctx {
+                    org,
+                    principal,
+                    creator,
+                });
+                return Json(match call_action(&ctx, &name, args).await {
+                    Ok(payload) => rpc_result(id, payload),
+                    Err(message) => rpc_error(id, code::METHOD_NOT_FOUND, message),
+                })
+                .into_response();
+            }
             let tools = bot_tools(&state, &headers).await;
             let called = name.clone();
             // Email links live in the person's own org, never in the org
@@ -2367,6 +2266,22 @@ async fn mcp_dispatch(
         ))
         .into_response(),
     }
+}
+
+/// Run one tool on the Action List for `ctx`, with the call's
+/// arguments less the account lane's `org` (which picked `ctx.org` and
+/// is no argument of the action's). `Ok` is the tool result, a failure
+/// inside it for the model; `Err` is the list's protocol refusal.
+async fn call_action(
+    ctx: &std::sync::Arc<crate::actions::Ctx>,
+    name: &str,
+    mut args: Value,
+) -> Result<Value, String> {
+    if let Some(fields) = args.as_object_mut() {
+        fields.remove("org");
+    }
+    let list = crate::actions::list(ctx).map_err(|e| format!("{e:?}"))?;
+    crate::actions::call(&crate::actions::server(list), name, args).await
 }
 
 /// The org a call lands in when it doesn't name one: the pinned slug
@@ -2952,9 +2867,14 @@ fn arg_bool(args: &Value, key: &str) -> bool {
 
 /// A list tool's row cap: caller's value, clamped, defaulted.
 fn arg_limit(args: &Value) -> usize {
-    args.get("limit")
-        .and_then(Value::as_u64)
-        .map_or(DEFAULT_LIMIT, |n| (n as usize).clamp(1, MAX_LIMIT))
+    clamp_limit(args.get("limit").and_then(Value::as_u64))
+}
+
+/// A row cap: the caller's, clamped to `1..=MAX_LIMIT`, else the default.
+pub(crate) fn clamp_limit(limit: Option<u64>) -> usize {
+    limit.map_or(DEFAULT_LIMIT, |n| {
+        usize::try_from(n).unwrap_or(MAX_LIMIT).clamp(1, MAX_LIMIT)
+    })
 }
 
 /// Distinguish "field absent, leave it alone" from "field present and
@@ -3031,6 +2951,17 @@ fn parse_assignee(
     Ok(agent)
 }
 
+/// [`parse_assignee`] for the Action List's handlers.
+pub(crate) fn parse_assignee_text(
+    org: &crate::OrgAppState,
+    s: &str,
+) -> Result<task::workflows_proto::AgentRef, String> {
+    parse_assignee(org, s).map_err(|failure| match failure {
+        ToolFailure::Message(m) => m,
+        ToolFailure::Unknown => format!("`{s}` is not an assignee"),
+    })
+}
+
 /// `"HH:MM"` (24h) → minutes-since-midnight.
 fn parse_hhmm(s: &str, key: &str) -> Result<scheduling_proto::TimeOfDay, ToolFailure> {
     let bad = || ToolFailure::Message(format!("`{key}` must be 'HH:MM' (24h), got `{s}`"));
@@ -3101,8 +3032,13 @@ fn arg_str_list(args: &Value, key: &str) -> Result<Option<Vec<String>>, ToolFail
 /// to do next. Naming the operation and the subject turns a dead end
 /// into a next step.
 fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailure {
+    ToolFailure::Message(backend_err_text(what, subject, e))
+}
+
+/// [`backend_err`]'s text, for the Action List's handlers.
+pub(crate) fn backend_err_text(what: &str, subject: &str, e: &impl std::fmt::Debug) -> String {
     let raw = format!("{e:?}");
-    let msg = if raw.starts_with("NotFound") {
+    if raw.starts_with("NotFound") {
         format!(
             "no {what} matching `{subject}`. Call the matching list/search tool first and use a value from its result."
         )
@@ -3110,8 +3046,7 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
         format!("a {what} already exists at `{subject}`.")
     } else {
         format!("couldn't {what} `{subject}`: {raw}")
-    };
-    ToolFailure::Message(msg)
+    }
 }
 
 // ── Notes: revisions, frontmatter and the property schema ───────
@@ -3262,15 +3197,6 @@ fn call_tool(
     // (`activity.actor`) — an assignment above all: the router lane
     // notes its gate caller, and this is the same note for MCP.
     note_task_writer(org, principal, name, args);
-    // A filter's `me`: the caller's own ref.
-    let who = |key: &str| -> Option<String> {
-        let raw = arg_str(args, key)?;
-        if raw.trim().eq_ignore_ascii_case("me") {
-            Some(creator.map_or_else(|| "none".to_owned(), |c| c.r#ref.clone()))
-        } else {
-            Some(raw)
-        }
-    };
     // Only the wiki lane is caller-sensitive today; a build without it
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
@@ -3278,7 +3204,6 @@ fn call_tool(
     use contacts_proto::Contacts as _;
     use email_proto::{EmailLinks as _, EmailSync as _};
     use goal::GoalService as _;
-    use inbox_proto::Inbox as _;
     use milestone::MilestoneService as _;
     use project::ProjectService as _;
     #[cfg(feature = "plugin-scheduling")]
@@ -3287,167 +3212,6 @@ fn call_tool(
     use vault_proto::VaultSync as _;
 
     match name {
-        "task_context" => {
-            let now = chrono::Local::now();
-            let today = now.format("%Y-%m-%d").to_string();
-            let open = org
-                .tasks
-                .query(task::TaskListFilter {
-                    open_only: true,
-                    ..Default::default()
-                })
-                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            let due_today = open
-                .iter()
-                .filter(|t| {
-                    t.due
-                        .as_deref()
-                        .is_some_and(|d| date_of(d) <= today.as_str())
-                        || t.scheduled
-                            .as_deref()
-                            .is_some_and(|d| date_of(d) <= today.as_str())
-                })
-                .count();
-            // Scheduling is a plugin twice over: compiled out under
-            // --no-default-features (cfg) and toggleable per org at
-            // runtime (PluginSet) — a core orientation call must not
-            // touch a backend that is off either way.
-            #[cfg(feature = "plugin-scheduling")]
-            let events_today = if org.plugins.contains("scheduling") {
-                org.scheduling
-                    .list_events()
-                    .map(|evs| {
-                        evs.iter()
-                            .filter(|e| e.tombstone.is_none() && date_of(&e.start) == today)
-                            .count()
-                    })
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-            #[cfg(not(feature = "plugin-scheduling"))]
-            let events_today = 0;
-            let inbox_open = org
-                .inbox
-                .review_queue(today.clone())
-                .map(|q| q.len())
-                .unwrap_or(0);
-            Ok(json!({
-                "org": org.slug,
-                "now": now.to_rfc3339(),
-                "today": today,
-                "weekday": now.format("%A").to_string(),
-                "open_tasks": open.len(),
-                "tasks_due_or_scheduled_today": due_today,
-                "events_today": events_today,
-                "inbox_awaiting_review": inbox_open,
-                // The caller's own creator ref — what `created_by`
-                // filters take to mean "what I made".
-                "you": creator.map(|c| json!({
-                    "created_by": c.r#ref,
-                    "name": c.name,
-                    // A personal assistant's person: what it makes is
-                    // stamped on behalf of them.
-                    "acting_for": c.on_behalf_of.as_ref().map(|p| json!({ "ref": p.r#ref, "name": p.name })),
-                })),
-            }))
-        }
-
-        "list_tasks" => {
-            let status = arg_str(args, "status");
-            let project = match arg_str(args, "project") {
-                Some(p) => Some(parse_uuid(&p, "project")?),
-                None => None,
-            };
-            let filter = task::TaskListFilter {
-                // An explicit status wins; without one we show what's
-                // actionable, which is what "my tasks" means.
-                open_only: status.is_none(),
-                status,
-                project,
-                due_on_or_before: arg_str(args, "due_on_or_before"),
-                created_by: who("created_by"),
-                on_behalf_of: who("on_behalf_of"),
-                assignee: who("assignee"),
-                ..Default::default()
-            };
-            let query = arg_str(args, "query").map(|q| q.to_lowercase());
-            let rows = org
-                .tasks
-                .query(filter)
-                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            let out: Vec<Value> = rows
-                .iter()
-                .filter(|t| {
-                    query
-                        .as_ref()
-                        .is_none_or(|q| t.title.to_lowercase().contains(q))
-                })
-                .take(arg_limit(args))
-                .map(task_json)
-                .collect();
-            Ok(json!({ "count": out.len(), "tasks": out }))
-        }
-
-        "create_task" => {
-            let text = required_str(args, "text")?;
-            let mut draft = task::capture(&text);
-            if let Some(due) = arg_str(args, "due") {
-                draft.due = Some(due);
-            }
-            if let Some(scheduled) = arg_str(args, "scheduled") {
-                draft.scheduled = Some(scheduled);
-            }
-            if let Some(priority) = arg_str(args, "priority") {
-                draft.priority = priority;
-            }
-            crate::attribution::attribute_task(&mut draft, creator);
-            let created = org
-                .tasks
-                .create(draft)
-                .map_err(|e| backend_err("task", &text, &e))?;
-            Ok(task_json(&created))
-        }
-
-        "update_task" => {
-            let id = required_str(args, "id")?;
-            let uuid = id
-                .parse::<uuid::Uuid>()
-                .map_err(|_| ToolFailure::Message(format!("`{id}` is not a task id")))?;
-            let mut current = org
-                .tasks
-                .get(uuid)
-                .map_err(|e| backend_err("task", &id, &e))?;
-            if let Some(status) = arg_str(args, "status") {
-                current.status = status;
-            }
-            if let Some(title) = arg_str(args, "title") {
-                current.title = title;
-            }
-            if let Some(priority) = arg_str(args, "priority") {
-                current.priority = priority;
-            }
-            if let Some(due) = optional_field(args, "due") {
-                current.due = due;
-            }
-            if let Some(scheduled) = optional_field(args, "scheduled") {
-                current.scheduled = scheduled;
-            }
-            if let Some(refs) = arg_str_list(args, "assignees")? {
-                let parsed: Result<Vec<_>, ToolFailure> =
-                    refs.iter().map(|r| parse_assignee(org, r)).collect();
-                current
-                    .workflow
-                    .get_or_insert_with(Default::default)
-                    .assignees = task::model::AgentRefList(parsed?);
-            }
-            let saved = org
-                .tasks
-                .update(current)
-                .map_err(|e| backend_err("task", &id, &e))?;
-            Ok(task_json(&saved))
-        }
-
         "list_untriaged_tasks" => {
             let rows = org
                 .tasks
@@ -3764,114 +3528,6 @@ fn call_tool(
                 .delete_event(&id)
                 .map_err(|e| backend_err("event", &id, &e))?;
             Ok(json!({ "cancelled": id }))
-        }
-
-        "capture_inbox" => {
-            let body = required_str(args, "body")?;
-            let now = chrono::Utc::now().to_rfc3339();
-            let mut item = inbox_proto::InboxItem::capture(
-                uuid::Uuid::new_v4().to_string(),
-                body,
-                // The surface; who captured it is `created_by`.
-                "mcp",
-                now,
-            );
-            if !arg_bool(args, "accepted") {
-                item.status = inbox_proto::InboxItem::STATUS_SUGGESTED.to_string();
-            }
-            item.resurface_on = arg_str(args, "resurface_on");
-            crate::attribution::attribute_inbox(&mut item, creator);
-            org.inbox
-                .upsert_inbox_item(&item)
-                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            Ok(json!({
-                "id": item.id,
-                "status": item.status,
-                "resurface_on": item.resurface_on,
-                "note": if item.status == inbox_proto::InboxItem::STATUS_SUGGESTED {
-                    "captured as a suggestion — the user accepts or dismisses it in their inbox"
-                } else {
-                    "filed as an open inbox item"
-                },
-            }))
-        }
-
-        "list_inbox" => {
-            // The review queue is "what surfaces today", which by
-            // design excludes suggestions — so an agent couldn't see
-            // its own captures. `status` opens the full list, and so
-            // does `created_by` (whose captures, whatever their state).
-            let created_by = who("created_by");
-            let on_behalf_of = who("on_behalf_of");
-            let narrowed = created_by.is_some() || on_behalf_of.is_some();
-            let rows: Vec<inbox_proto::InboxItem> = match (arg_str(args, "status"), narrowed) {
-                (Some(status), _) => {
-                    let all = org
-                        .inbox
-                        .list_inbox()
-                        .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-                    all.into_iter()
-                        .filter(|i| i.status.eq_ignore_ascii_case(&status))
-                        .collect()
-                }
-                (None, true) => org
-                    .inbox
-                    .list_inbox()
-                    .map_err(|e| ToolFailure::Message(format!("{e:?}")))?,
-                (None, false) => {
-                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    org.inbox
-                        .review_queue(today)
-                        .map_err(|e| ToolFailure::Message(format!("{e:?}")))?
-                }
-            };
-            let out: Vec<Value> = rows
-                .iter()
-                .filter(|i| {
-                    created_by
-                        .as_deref()
-                        .is_none_or(|who| i.created_by_matches(who))
-                        && on_behalf_of
-                            .as_deref()
-                            .is_none_or(|who| i.on_behalf_of_matches(who))
-                })
-                .take(arg_limit(args))
-                .map(|i| {
-                    json!({
-                        "id": i.id,
-                        "body": i.body,
-                        "kind": i.kind,
-                        "status": i.status,
-                        "created": i.created,
-                        "source": i.source,
-                        "created_by": i.created_by,
-                        "created_by_name": i.created_by_name,
-                        "on_behalf_of": i.on_behalf_of,
-                        "on_behalf_of_name": i.on_behalf_of_name,
-                    })
-                })
-                .collect();
-            Ok(json!({ "count": out.len(), "items": out }))
-        }
-
-        "list_projects" => {
-            let rows = org
-                .projects
-                .list()
-                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            let out: Vec<Value> = rows
-                .iter()
-                .take(arg_limit(args))
-                .map(|p| {
-                    json!({
-                        "id": p.id.to_string(),
-                        "title": p.title,
-                        "status": p.status,
-                        "path": p.path,
-                    })
-                })
-                .collect();
-            Ok(json!({ "count": out.len(), "projects": out }))
         }
 
         "list_goals" => {
@@ -4429,31 +4085,6 @@ fn call_tool(
         }
 
         // ── Inbox processing ─────────────────────────────────────
-        "process_inbox_item" => {
-            let id = required_str(args, "id")?;
-            let status = required_str(args, "status")?.to_lowercase();
-            let allowed = [
-                inbox_proto::InboxItem::STATUS_OPEN,
-                inbox_proto::InboxItem::STATUS_PROCESSED,
-                inbox_proto::InboxItem::STATUS_ARCHIVED,
-            ];
-            if !allowed.contains(&status.as_str()) {
-                return Err(ToolFailure::Message(format!(
-                    "`status` must be one of open, processed, archived — got `{status}`"
-                )));
-            }
-            let mut item = org
-                .inbox
-                .get_inbox_item(&id)
-                .map_err(|e| backend_err("inbox item", &id, &e))?;
-            let was = item.status.clone();
-            item.status = status;
-            org.inbox
-                .upsert_inbox_item(&item)
-                .map_err(|e| backend_err("inbox item", &id, &e))?;
-            Ok(json!({ "id": item.id, "status": item.status, "was": was }))
-        }
-
         // ── Day plans / bookings ─────────────────────────────────
         "get_day_plan" => {
             let date = required_str(args, "date")?;
@@ -6261,37 +5892,13 @@ fn email_err(e: &email_proto::EmailSyncError) -> ToolFailure {
 /// A task, trimmed to the fields an agent reasons over. The full row
 /// carries time entries, recurrence anchors, and relation graphs that
 /// would only burn context.
+/// A task as the remaining task tools answer with it: the Action
+/// List's [`crate::actions::TaskView`], so both lanes give one shape.
 fn task_json(t: &task::TaskInfo) -> Value {
-    let workflow = t.workflow.as_ref();
-    json!({
-        "id": t.id.to_string(),
-        "title": t.title,
-        "status": t.status,
-        "priority": t.priority,
-        "due": t.due,
-        "scheduled": t.scheduled,
-        "tags": t.tags.0,
-        "contexts": t.contexts.0,
-        "projects": t.projects.0,
-        // Filing, spelled out: without these an agent can't tell a
-        // task that belongs somewhere from one that doesn't, and
-        // "which of my tasks need sorting" is unanswerable.
-        "project_id": t.project_id.map(|id| id.to_string()),
-        "parent": workflow.and_then(|w| w.parent).map(|id| id.to_string()),
-        "workstream": workflow.and_then(|w| w.workstream).map(|id| id.to_string()),
-        "milestone_id": t.milestone_id.map(|id| id.to_string()),
-        "filed": task::is_filed(t),
-        "assignees": workflow.map(|w| {
-            w.assignees.0.iter().map(|a| a.short_label()).collect::<Vec<_>>()
-        }),
-        "path": t.path,
-        // Who made it (`user:<uuid>` / `bot:<uuid>`), and their name.
-        "created_by": t.created_by,
-        "created_by_name": t.created_by_name,
-        // Whom a personal assistant made it for (`user:<uuid>`), if one did.
-        "on_behalf_of": t.on_behalf_of,
-        "on_behalf_of_name": t.on_behalf_of_name,
-    })
+    facet_json::to_vec(&crate::actions::TaskView::from(t))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// Note the caller of a task-writing tool in the org's actor ledger,
@@ -6302,11 +5909,11 @@ fn task_json(t: &task::TaskInfo) -> Value {
 fn note_task_writer(org: &crate::OrgAppState, principal: Option<&str>, tool: &str, args: &Value) {
     let Some(user) = principal else { return };
     let key = match tool {
-        "update_task" | "file_task" | "claim_task" => match arg_str(args, "id") {
+        "file_task" | "claim_task" => match arg_str(args, "id") {
             Some(id) => format!("task:{}", id.trim()),
             None => return,
         },
-        "create_task" | "email_to_task" | "process_inbox_item" => "task:new".to_owned(),
+        "email_to_task" => "task:new".to_owned(),
         _ => return,
     };
     org.actors.note(key, Some(user.to_owned()));
@@ -6655,9 +6262,136 @@ mod tests {
         let all = task_plugin::PluginSet::resolve(None);
         let payload = tools_list_payload(&all);
         let tools = payload["tools"].as_array().expect("tools array");
-        assert_eq!(tools.len(), tool_catalog().len());
+        assert_eq!(
+            tools.len(),
+            crate::actions::TOOLS.len() + tool_catalog().len()
+        );
         assert!(tools.iter().all(|t| t["inputSchema"].is_object()));
         assert!(tools.iter().any(|t| t["name"] == "create_task"));
+        assert!(tools.iter().any(|t| t["name"] == "claim_task"));
+    }
+
+    /// The remaining task tools answer in the list's shape, with every
+    /// field present: an absent date is `null`, not a missing key.
+    #[test]
+    fn task_json_is_the_lists_task_view_with_nulls_kept() {
+        let mut t = task::capture("Email Dana");
+        t.due = None;
+        let v = task_json(&t);
+        assert_eq!(v["title"], "Email Dana");
+        assert!(v.get("due").is_some_and(Value::is_null), "{v}");
+        assert!(v["filed"].is_boolean(), "{v}");
+        assert!(v["tags"].is_array(), "{v}");
+    }
+
+    /// The eight tools that moved onto the Action List (#258), as
+    /// `tools/list` offers them: the same names, in the same order, each
+    /// taking the same arguments and requiring the same ones as the
+    /// hand-written `ToolDef` it replaced. A snapshot of the old catalog,
+    /// written out, so a field renamed or made required on the list side
+    /// fails here rather than in an agent.
+    #[test]
+    fn the_action_list_tools_keep_their_names_and_arguments() {
+        const BEFORE: &[(&str, &[&str], &[&str])] = &[
+            ("task_context", &[], &[]),
+            (
+                "list_tasks",
+                &[
+                    "status",
+                    "due_on_or_before",
+                    "project",
+                    "query",
+                    "created_by",
+                    "on_behalf_of",
+                    "assignee",
+                    "limit",
+                ],
+                &[],
+            ),
+            (
+                "create_task",
+                &["text", "due", "scheduled", "priority"],
+                &["text"],
+            ),
+            (
+                "update_task",
+                &[
+                    "id",
+                    "status",
+                    "title",
+                    "due",
+                    "scheduled",
+                    "priority",
+                    "assignees",
+                ],
+                &["id"],
+            ),
+            ("list_projects", &["limit"], &[]),
+            (
+                "capture_inbox",
+                &["body", "accepted", "resurface_on"],
+                &["body"],
+            ),
+            (
+                "list_inbox",
+                &["status", "created_by", "on_behalf_of", "limit"],
+                &[],
+            ),
+            ("process_inbox_item", &["id", "status"], &["id", "status"]),
+        ];
+        let payload = tools_list_payload(&task_plugin::PluginSet::resolve(None));
+        let tools = payload["tools"].as_array().expect("tools array");
+        let listed: Vec<&str> = tools[..BEFORE.len()]
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        let names: Vec<&str> = BEFORE.iter().map(|(n, _, _)| *n).collect();
+        assert_eq!(listed, names, "the list's tools lead tools/list, in order");
+        for (tool, (name, properties, required)) in tools.iter().zip(BEFORE) {
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["type"], "object", "`{name}`");
+            let mut got: Vec<&str> = schema["properties"]
+                .as_object()
+                .map(|p| p.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            let mut want = properties.to_vec();
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want, "`{name}` properties");
+            let mut got: Vec<&str> = schema["required"]
+                .as_array()
+                .map(|r| r.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let mut want = required.to_vec();
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want, "`{name}` required");
+            assert!(
+                tool["description"].as_str().is_some_and(|d| d.len() > 40),
+                "`{name}` keeps a description the model can select on"
+            );
+        }
+        // Readers say so: a model runs them without asking.
+        let read_only = |name: &str| {
+            tools.iter().find(|t| t["name"] == name).expect(name)["annotations"]["readOnlyHint"]
+                == true
+        };
+        for name in ["task_context", "list_tasks", "list_projects", "list_inbox"] {
+            assert!(read_only(name), "`{name}` is read-only");
+        }
+        for name in [
+            "create_task",
+            "update_task",
+            "capture_inbox",
+            "process_inbox_item",
+        ] {
+            assert!(!read_only(name), "`{name}` writes");
+        }
+        // And none is still in the hand-written catalogue.
+        assert!(
+            tool_catalog().iter().all(|t| !names.contains(&t.name)),
+            "a moved tool is listed twice"
+        );
     }
 
     /// The plugin toggle on both MCP surfaces: a disabled plugin's
@@ -6692,7 +6426,10 @@ mod tests {
             .filter(|t| t.plugin == "email")
             .count();
         assert!(dropped > 0, "the email plugin owns tools");
-        assert_eq!(names.len(), tool_catalog().len() - dropped);
+        assert_eq!(
+            names.len(),
+            crate::actions::TOOLS.len() + tool_catalog().len() - dropped
+        );
 
         // Call gate mirrors the listing.
         assert!(plugin_gate("create_task", &no_email).is_ok());

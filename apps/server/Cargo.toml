@@ -151,6 +151,9 @@ org-snapshot = { workspace = true }
 # `GatedRouter`'s `vox::Handler` impl names `facet::Shape` in a
 # method signature.
 facet = { workspace = true }
+# The Action List's result types, as JSON for the hand-written tools that
+# answer with the same shapes (`mcp::task_json`).
+facet-json = { workspace = true }
 timer-proto = { workspace = true, features = ["server", "vox"] }
 timer = { workspace = true }
 threads = { workspace = true, features = ["server", "vox"] }
@@ -223,7 +226,10 @@ vault-collab = { workspace = true }
 # The doc ⇄ markdown codec (the device replica, the records' documents).
 vault-doc = { workspace = true }
 chrono.workspace = true
-architect = { workspace = true, features = ["server", "local"] }
+architect = { workspace = true, features = ["server", "local", "action-list"] }
+# The MCP tools that moved onto the Action List (`src/actions/`) are
+# listed and run by architect-mcp's named-tool mode.
+architect-mcp.workspace = true
 architect-auth = { workspace = true, features = ["full"] }
 architect-permissions.workspace = true
 architect-permissions-proto.workspace = true

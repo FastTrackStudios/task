@@ -2,7 +2,7 @@
 
 Task exposes itself to agents over MCP at `POST /org/{slug}/mcp`
 (JSON-RPC 2.0, Streamable HTTP — every method answers inline, no SSE
-upgrade). The server side lives in `apps/task/server/src/mcp.rs`; this
+upgrade). The server side lives in `apps/server/src/mcp.rs`; this
 page is for **agent authors** wiring a client (Hermes gateway, Claude
 Code, Codex, anything that speaks MCP).
 
@@ -42,13 +42,47 @@ mounts services by. For an org whose `org.toml` disables a plugin:
 This mirrors the wire exactly: a disabled plugin's vox services are
 never mounted on the org router, so neither surface can reach them.
 
+## Where a tool lives: the Action List or `mcp.rs`
+
+Task is moving its tools onto architect's Action List (STA-262, #258).
+Eight are there now, in `apps/server/src/actions/`:
+
+| tool | action id | effect |
+|---|---|---|
+| `task_context` | `TASK_CONTEXT` | read-only |
+| `list_tasks` | `TASK_LIST` | read-only |
+| `create_task` | `TASK_CREATE` | mutating |
+| `update_task` | `TASK_UPDATE` | mutating |
+| `list_projects` | `PROJECT_LIST` | read-only |
+| `capture_inbox` | `INBOX_CAPTURE` | mutating |
+| `list_inbox` | `INBOX_LIST` | read-only |
+| `process_inbox_item` | `INBOX_PROCESS` | mutating |
+
+The rest are still hand-written `ToolDef`s in `apps/server/src/mcp.rs`.
+To a client the two look the same: same names, same arguments, same
+lanes. The differences:
+
+- **Schemas are generated** from each action's facet argument type
+  (`architect::schema`), so an optional field is
+  `anyOf: [<type>, null]` and a field's doc comment is its description.
+  The list's tools come first in `tools/list` and carry MCP
+  `annotations` (`readOnlyHint` from the effect).
+- **Failures are JSON.** A failing list tool answers `isError: true`
+  with `{"error": "…"}` as its text. Arguments that don't decode (a
+  missing required field, a wrong type) add `takes`: the tool's input
+  schema, so the model can correct itself.
+- Everything before the call is unchanged: `mcp.rs` still owns the org
+  and account lanes, the bearer, bot key scopes and the plugin gate,
+  and runs them before handing the call to the list. On the account
+  lane the `org` argument picks the org and is not passed to the action.
+
 ## The catalog
 
 Descriptions in `tools/list` are written for the model (when to reach
 for the tool, not just what it does) — this table is the human index.
 Each write tool calls the same backend the equivalent vox method does,
 so its effective permit posture is the wire method's permit
-(`apps/task/server/src/permits.rs`); the right-hand column names it.
+(`apps/server/src/permits.rs`); the right-hand column names it.
 
 ### Orientation & discovery (core)
 
@@ -257,7 +291,20 @@ needed to describe it.
 
 ## Adding a tool
 
-1. Add a `ToolDef` to `tool_catalog()` in `apps/task/server/src/mcp.rs`
+New tools go on the Action List:
+
+1. In `apps/server/src/actions/<area>.rs`, declare an `ActionMeta`
+   (id `AREA_VERB`, **model-facing** description), facet types for its
+   arguments (doc comment per field) and result, and register it with
+   `register_blocking` and an honest `Effect`.
+2. Add it to `TOOLS` in `actions/mod.rs` with its MCP name and owning
+   `plugin` id.
+3. Tests: `actions::tests` validates the list and probes it with
+   hostile arguments; extend `tests/it/mcp_e2e.rs` for a round-trip.
+
+The hand-written path, for a tool not yet moved:
+
+1. Add a `ToolDef` to `tool_catalog()` in `apps/server/src/mcp.rs`
    — name, **model-facing** description, JSON schema, owning `plugin`
    id (must be a `task_plugin::CATALOG` id; unit tests enforce it).
 2. Add its match arm to `call_tool` — call the org backend directly
