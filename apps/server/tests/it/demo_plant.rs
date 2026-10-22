@@ -562,7 +562,7 @@ async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Resul
     );
     let today = chrono::Utc::now().date_naive().to_string();
     let queue = inbox
-        .review_queue(today.clone())
+        .review_queue(today)
         .map_err(|e| eyre::eyre!("{e:?}"))?;
     eyre::ensure!(
         items.iter().any(|i| i.status == "suggested"),
