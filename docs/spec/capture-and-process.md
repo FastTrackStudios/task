@@ -514,6 +514,19 @@ assignee is a principal ref, a person or a bot account by account id
 (`AgentRef::Human`), or a named agent; it changes over time, and
 nothing about it touches `created_by` or `on_behalf_of`.
 
+### Work goes only to someone in the org
+
+t[attribution.assignee.member]
+A person assignee (`human:<uuid>`) must be an account in the org, the
+same two ways the permissions gate admits a caller: one of the org's own
+people (its auth store), or an account with a membership row for the
+org in the home org (a home-org or central-auth person, or a bot; bots
+belong to an org only that way). The MCP `update_task` assignees and
+`claim_task`'s claimer are checked before anything is stored; an id that
+isn't a UUID, an account no store knows, or one outside the org is
+refused with what to pass instead. A named agent (`agent:<name>`) is not
+an account and is not looked up.
+
 ### Assigning is logged with who did it
 
 t[attribution.assignee.logged]
@@ -567,6 +580,7 @@ Alice and Alice handed on.
 | `attribution.on-behalf-of.shown` | `workflows-proto::creator::tests::a_personal_bot_says_whom_it_acted_for` |
 | `attribution.on-behalf-of.filter` | `attribution_e2e.rs` (`on_behalf_of: me` over MCP `list_tasks` / `list_inbox`, and `TaskListFilter::on_behalf_of` over RPC); `ui::pages::tasks::tests::the_filter_sheet_offers_assignee_creator_and_on_behalf_of_me` |
 | `attribution.assignee.separate`, `.logged`, `.filter` | `attribution_e2e.rs::an_employee_gets_the_work_an_assistant_made_and_the_handoff_is_logged` (Atlas makes it, Cody assigns it to Priya over MCP, the creator stays Atlas, the feed's `Assigned` entry names Cody, Priya's `assignee: me` and RPC `assignee` filter find it); `workflows-proto::creator::tests::the_assignee_rule`; `task::backend::tests::on_behalf_of_is_write_once_and_both_filters_work` |
+| `attribution.assignee.member` | `attribution_e2e.rs::work_is_only_assigned_to_accounts_in_the_org` (`update_task` / `claim_task` refuse an unknown uuid, a bot with no membership and a non-uuid, storing nothing; a person made a moment ago, a bot in the org and a named agent are taken) |
 | `attribution.seed` | `example_org::declared_tests::the_seed_has_mixed_creators_from_its_own_org` (a personal and a team bot, a second employee holding assistant-made work); `demo_plant.rs::demo_plants_an_inbox_to_process_and_a_maintenance_hour` (a planted capture from Atlas for Alice, one from Alice, one unattributed, tasks from both, Atlas's task for Alice assigned to Priya, the Studio Desk's for nobody) |
 
 The seeded world shows the whole loop to Alice: twelve captures in
