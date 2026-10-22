@@ -133,6 +133,8 @@ const TEST_ENV: &[&str] = &[
     "TASK_AUTH_SECRET",
     "TASK_IROH_PEER_DIR",
     "TASK_DEVICE_SYNC_SECS",
+    "TASK_CONTACTS_SECRETS",
+    "TASK_CARDDAV_EXTRA_CA",
 ];
 
 /// Take the process environment ([`ENV_LOCK`]), cleared of every test's

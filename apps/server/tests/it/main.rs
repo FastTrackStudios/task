@@ -63,6 +63,8 @@ mod chart_collab_e2e;
 mod chart_library_e2e;
 mod collection_e2e;
 mod connection_identity;
+#[cfg(feature = "plugin-contacts")]
+mod contacts_node_e2e;
 mod cross_org_nodes_e2e;
 mod debug_profile_e2e;
 mod demo_plant;

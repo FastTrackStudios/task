@@ -1468,6 +1468,9 @@ pub(crate) async fn build_org_state(
         // under `Records/contacts/`. CardDAV passwords never do: they
         // go to the OS keyring or, where there is none, the envelope
         // keyed by this server's auth secret (`contacts.secret.out-of-vault`).
+        // t[impl contacts.node.every-node] — built here, in the per-org
+        // boot every node runs (server, `LocalNode::open`, `join`), and
+        // nowhere else: the org router mounts it behind the gate.
         #[cfg(feature = "plugin-contacts")]
         let contacts = contacts::VaultContacts::with_secrets(
             vault_root.clone(),
