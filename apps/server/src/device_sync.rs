@@ -196,7 +196,7 @@ pub async fn sweep(state: &AppState, slug: &str, endpoint: &iroh::Endpoint) {
 /// holding a root. Turned on, the answer is the org's own files
 /// directory, which is where a root created through the app lands too.
 fn adopts_offered_roots() -> bool {
-    std::env::var("TASK_DEVICE_SYNC_ADOPT").is_ok_and(|v| v == "1")
+    crate::config::ServerConfig::load().adopts_offered_roots()
 }
 
 /// Adopt a device's root into this org, if the operator allows it.
@@ -385,8 +385,8 @@ pub fn start_one(state: &AppState, slug: &str, endpoint: &iroh::Endpoint) {
 /// `TASK_DEVICE_SYNC_SECS`, or the default; `None` when `0` turns the
 /// sweep off.
 fn interval() -> Option<Duration> {
-    match std::env::var("TASK_DEVICE_SYNC_SECS")
-        .ok()
+    match crate::config::ServerConfig::load()
+        .device_sync_secs
         .and_then(|s| s.parse::<u64>().ok())
     {
         Some(0) => None,
@@ -402,20 +402,33 @@ fn sweep_every(state: &AppState, slug: &str, endpoint: &iroh::Endpoint, interval
         // beside it: drop the no-op operations earlier sweeps wrote.
         compact_op_logs(&state, &slug_owned).await;
         // A first pass immediately, so an operator who has just
-        // pasted an id does not wait a minute to see it take.
-        let mut timer = tokio::time::interval(interval);
-        while !endpoint.is_closed() {
-            timer.tick().await;
-            sweep(&state, &slug_owned, &endpoint).await;
-        }
+        // pasted an id does not wait a minute to see it take; then one
+        // every `interval` after the last finished, until the endpoint
+        // closes. `repeat` stops on the first `Err`, and the only one is
+        // the closed endpoint.
+        let (state, slug, endpoint) = (&state, slug_owned.as_str(), &endpoint);
+        let _closed: Result<(), EndpointClosed> = architect::repeat(
+            move || async move {
+                if endpoint.is_closed() {
+                    return Err(EndpointClosed);
+                }
+                sweep(state, slug, endpoint).await;
+                Ok(())
+            },
+            architect::Schedule::spaced(interval),
+        )
+        .await;
     });
     info!(%slug, secs = interval.as_secs(), "device sync: sweeping this org's devices");
 }
 
+/// Why a sweep loop ended: its org's endpoint closed.
+struct EndpointClosed;
+
 /// Whether to compact each root's op log when the sweep starts.
 /// On unless `TASK_FILES_COMPACT_OPS=0`.
 fn compacts_op_logs() -> bool {
-    !std::env::var("TASK_FILES_COMPACT_OPS").is_ok_and(|v| v == "0")
+    crate::config::ServerConfig::load().compacts_op_logs()
 }
 
 /// Drop the operations that recorded nothing from every root this org

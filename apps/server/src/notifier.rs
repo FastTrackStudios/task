@@ -61,6 +61,9 @@ use crate::{AppState, OrgAppState};
 /// (the two forge hubs) share one type.
 type SubCall = std::pin::Pin<Box<dyn Future<Output = bool> + Send>>;
 
+/// How often the feed's bylines (user id → name) are re-read.
+const PEOPLE_REFRESH: Duration = Duration::from_secs(60);
+
 /// Spawn one notifier per hosted org. Called once at boot from
 /// [`AppState::new`]; an org hot-added later (`create_org`) gets its
 /// notifier on the next boot — same lifecycle as the forge poll loop.
@@ -91,10 +94,17 @@ fn spawn_org(org: &Arc<OrgAppState>, scope: Arc<architect::Scope>) {
         let people = org.people.clone();
         let auth = org.auth.clone();
         tokio::spawn(async move {
-            loop {
-                people.refresh(&auth).await;
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }
+            let (people, auth) = (&people, &auth);
+            // Never ends: a refresh that finds nothing leaves the names
+            // it had, and the next pass tries again.
+            let _never: Result<(), std::convert::Infallible> = architect::repeat(
+                move || async move {
+                    people.refresh(auth).await;
+                    Ok(())
+                },
+                architect::Schedule::spaced(PEOPLE_REFRESH),
+            )
+            .await;
         });
     }
 
