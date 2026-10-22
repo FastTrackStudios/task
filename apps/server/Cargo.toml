@@ -332,6 +332,10 @@ vox-websocket = { workspace = true }
 # through the transport rather than against the registry in-process.
 crdt = { workspace = true, features = ["vox"] }
 uuid = { workspace = true }
+# `contacts_node_e2e`: a device node pulls CardDAV from the fake TLS
+# server `contacts::testing` provides (test-only feature, no deps of its
+# own; the server never enables it).
+contacts = { workspace = true, features = ["test-support"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = [
     "connect",
     "handshake",
