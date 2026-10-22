@@ -6451,6 +6451,116 @@ fn envelope_json(e: &email_proto::Envelope) -> Value {
 mod tests {
     use super::*;
 
+    /// The request's parts as the old dispatch read them (`get` +
+    /// `cloned` on the parsed value) — the reading `parse_request`
+    /// replaced. Pinned against it so moving the parts out decides
+    /// exactly as copying them did.
+    fn copied_reading(body: &str) -> Result<RpcRequest, Value> {
+        let request: Value = serde_json::from_str(body)
+            .map_err(|e| rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}")))?;
+        if request.is_array() {
+            return Err(rpc_error(
+                Value::Null,
+                code::INVALID_REQUEST,
+                "batched requests are not supported",
+            ));
+        }
+        Ok(RpcRequest {
+            id: request.get("id").cloned().unwrap_or(Value::Null),
+            method: request
+                .get("method")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            params: request.get("params").cloned().unwrap_or_else(|| json!({})),
+        })
+    }
+
+    #[test]
+    fn parse_request_moves_what_the_copying_reading_copied() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":"a-b","method":"tools/call","params":{"name":"list_tasks","arguments":{"status":"open"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":null,"method":"tools/list","params":[]}"#,
+            r#"{"jsonrpc":"2.0","id":7}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":42}"#,
+            r#"{"id":{"nested":[1,2]},"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+            r#"42"#,
+            r#""ping""#,
+            r#"null"#,
+            r#"{"id":1,"method":"ping""#,
+            "",
+        ] {
+            assert_eq!(
+                parse_request(body.as_bytes()),
+                copied_reading(body),
+                "body {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_that_is_not_utf8_is_a_parse_error() {
+        let refusal = parse_request(b"{\"id\":1,\"method\":\"\xff\"}").unwrap_err();
+        assert_eq!(refusal["error"]["code"], code::PARSE);
+        assert_eq!(refusal["id"], Value::Null);
+    }
+
+    #[test]
+    fn split_tool_call_matches_the_copying_reading() {
+        for params in [
+            json!({ "name": "list_tasks", "arguments": { "org": "alpha" } }),
+            json!({ "name": "list_tasks" }),
+            json!({ "arguments": { "org": "alpha" } }),
+            json!({ "name": 3, "arguments": [] }),
+            json!([]),
+            json!("list_tasks"),
+            json!({}),
+        ] {
+            let copied = (
+                params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            );
+            assert_eq!(split_tool_call(params.clone()), copied, "params {params}");
+        }
+    }
+
+    #[test]
+    fn account_tools_payload_adds_org_to_every_schema() {
+        let payload = json!({ "tools": [
+            { "name": "a", "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "b" },
+        ]});
+        let out = account_tools_payload(payload, "home");
+        let tools = out["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["name"], "list_orgs");
+        assert_eq!(tools[1]["name"], "a");
+        assert_eq!(
+            tools[1]["inputSchema"]["properties"]["org"]["type"],
+            "string"
+        );
+        assert_eq!(tools[2], json!({ "name": "b" }));
+        assert_eq!(
+            account_tools_payload(json!({}), "home")["tools"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_catalog_is_built_once() {
+        assert!(std::ptr::eq(tool_catalog(), tool_catalog()));
+    }
+
     #[test]
     fn catalog_entries_are_well_formed() {
         let catalog = tool_catalog();
@@ -6471,116 +6581,6 @@ mod tests {
                 "`{}` needs a description the model can select on",
                 tool.name
             );
-            /// The request's parts as the old dispatch read them (`get` +
-            /// `cloned` on the parsed value) — the reading `parse_request`
-            /// replaced. Pinned against it so moving the parts out decides
-            /// exactly as copying them did.
-            fn copied_reading(body: &str) -> Result<RpcRequest, Value> {
-                let request: Value = serde_json::from_str(body).map_err(|e| {
-                    rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}"))
-                })?;
-                if request.is_array() {
-                    return Err(rpc_error(
-                        Value::Null,
-                        code::INVALID_REQUEST,
-                        "batched requests are not supported",
-                    ));
-                }
-                Ok(RpcRequest {
-                    id: request.get("id").cloned().unwrap_or(Value::Null),
-                    method: request
-                        .get("method")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    params: request.get("params").cloned().unwrap_or_else(|| json!({})),
-                })
-            }
-
-            #[test]
-            fn parse_request_moves_what_the_copying_reading_copied() {
-                for body in [
-                    r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
-                    r#"{"jsonrpc":"2.0","id":"a-b","method":"tools/call","params":{"name":"list_tasks","arguments":{"status":"open"}}}"#,
-                    r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-                    r#"{"jsonrpc":"2.0","id":null,"method":"tools/list","params":[]}"#,
-                    r#"{"jsonrpc":"2.0","id":7}"#,
-                    r#"{"jsonrpc":"2.0","id":7,"method":42}"#,
-                    r#"{"id":{"nested":[1,2]},"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
-                    r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
-                    r#"42"#,
-                    r#""ping""#,
-                    r#"null"#,
-                    r#"{"id":1,"method":"ping""#,
-                    "",
-                ] {
-                    assert_eq!(
-                        parse_request(body.as_bytes()),
-                        copied_reading(body),
-                        "body {body:?}"
-                    );
-                }
-            }
-
-            #[test]
-            fn a_body_that_is_not_utf8_is_a_parse_error() {
-                let refusal = parse_request(b"{\"id\":1,\"method\":\"\xff\"}").unwrap_err();
-                assert_eq!(refusal["error"]["code"], code::PARSE);
-                assert_eq!(refusal["id"], Value::Null);
-            }
-
-            #[test]
-            fn split_tool_call_matches_the_copying_reading() {
-                for params in [
-                    json!({ "name": "list_tasks", "arguments": { "org": "alpha" } }),
-                    json!({ "name": "list_tasks" }),
-                    json!({ "arguments": { "org": "alpha" } }),
-                    json!({ "name": 3, "arguments": [] }),
-                    json!([]),
-                    json!("list_tasks"),
-                    json!({}),
-                ] {
-                    let copied = (
-                        params
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        params
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or_else(|| json!({})),
-                    );
-                    assert_eq!(split_tool_call(params.clone()), copied, "params {params}");
-                }
-            }
-
-            #[test]
-            fn account_tools_payload_adds_org_to_every_schema() {
-                let payload = json!({ "tools": [
-                    { "name": "a", "inputSchema": { "type": "object", "properties": {} } },
-                    { "name": "b" },
-                ]});
-                let out = account_tools_payload(payload, "home");
-                let tools = out["tools"].as_array().unwrap();
-                assert_eq!(tools[0]["name"], "list_orgs");
-                assert_eq!(tools[1]["name"], "a");
-                assert_eq!(
-                    tools[1]["inputSchema"]["properties"]["org"]["type"],
-                    "string"
-                );
-                assert_eq!(tools[2], json!({ "name": "b" }));
-                assert_eq!(
-                    account_tools_payload(json!({}), "home")["tools"]
-                        .as_array()
-                        .unwrap()
-                        .len(),
-                    1
-                );
-            }
-
-            #[test]
-            fn the_catalog_is_built_once() {
-                assert!(std::ptr::eq(tool_catalog(), tool_catalog()));
-            }
 
             let schema = (tool.schema)();
             assert_eq!(schema["type"], "object", "`{}` schema", tool.name);

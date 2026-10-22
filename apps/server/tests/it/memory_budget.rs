@@ -231,7 +231,8 @@ async fn seven_small_orgs_stay_inside_the_memory_budget() {
     let after_boot = alloc::live();
 
     // ── a File Root with a laptop syncing it, in the home org ────────
-    let mut org = state.org(support::ORG).expect("the example org");
+    let mut org =
+        task_server::OrgAppState::clone(&state.org(support::ORG).expect("the example org"));
     let book = files::AddressBook::new();
     let server_endpoint = bind(&book).await;
     task_server::attach_peering(
@@ -239,6 +240,7 @@ async fn seven_small_orgs_stay_inside_the_memory_budget() {
         server_endpoint.id().to_string(),
         files::IrohRemotes::port(server_endpoint.clone()),
     );
+    let org = std::sync::Arc::new(org);
     {
         let (org, gate, serving) = (
             org.clone(),

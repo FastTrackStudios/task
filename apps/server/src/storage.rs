@@ -647,7 +647,7 @@ mod tests {
         core.issue_grant(files_storage::GrantSpec {
             org: entry.org,
             location_id: location.id,
-            capabilities: location.capabilities.clone(),
+            capabilities: location.capabilities,
             quota_bytes: entry.quota_bytes,
             path_prefix: entry.path_prefix,
         })
