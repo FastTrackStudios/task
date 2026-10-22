@@ -189,6 +189,9 @@ impl Laptop {
     /// resident bytes on disk — and nothing its last process remembered.
     pub async fn reboot(&mut self) {
         self.endpoint.close().await;
+        // Everything holding the disk, as a process exit releases it, so
+        // the reopened backend can take the same stores.
+        self.backend.shutdown().await;
         let dir = self._dir.path().to_path_buf();
         self.backend = files::FilesBackend::new(&dir, dir.join("vault"))
             .expect("the laptop's backend, reopened over its own disk");

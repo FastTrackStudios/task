@@ -1034,6 +1034,9 @@ async fn a_selected_session_survives_a_restart() {
         .pin(root, vec![session.clone()], true)
         .await
         .expect("select");
+    // Closed the way a process exit closes it, so the next backend can
+    // open the same stores.
+    backend.shutdown().await;
     drop(backend);
 
     let on_disk = std::fs::read_to_string(tmp.path().join("sync.json")).expect("sync.json");
