@@ -1002,6 +1002,7 @@ pub(crate) async fn build_org_state(
             keypair.clone(),
             object_store,
             public_base_url,
+            org_root.slug(),
         ));
 
         // Vault file-replication. Org-scoped: each org's
@@ -2921,21 +2922,16 @@ pub fn router(state: AppState) -> Router {
     use attachments::routes::AttachmentRouteState;
     use axum::routing::any;
 
-    // Mount the /blobs/* HTTP routes against the FIRST org's
-    // attachment service. Multi-org blob routing
-    // (`/org/<slug>/blobs/...`) is a follow-up — the existing
-    // path stays for single-org back-compat. When no org is
-    // hosted (test boot path), fall back to a synthetic
-    // empty router so axum doesn't choke.
-    let blob_router = state
-        .orgs
-        .read()
-        .ok()
-        .and_then(|guard| guard.values().next().map(|org| org.attachments.clone()))
-        .map(|service| {
-            attachments::attachment_router().with_state(AttachmentRouteState { service })
-        })
-        .unwrap_or_default();
+    // Mount the /blobs/* HTTP routes for EVERY hosted org. A blob token
+    // is bound to the org that minted it, and the route serves it from
+    // that org's attachment service: looked up per request, so an org
+    // created at runtime is served too. (This used to mount only the
+    // first hosted org's service, so every other org's uploads and
+    // downloads were answered by the wrong org.)
+    let blob_router = attachments::attachment_router().with_state(AttachmentRouteState {
+        keypair: state.keypair.clone(),
+        orgs: Arc::new(state.clone()),
+    });
 
     // Per-org vox at `/org/{slug}/vox`. Also keep `/vox`
     // and `/health` at the top level for back-compat —

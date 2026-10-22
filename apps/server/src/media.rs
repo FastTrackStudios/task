@@ -166,6 +166,7 @@ mod tests {
             crate::capability::ServerKeypair::generate_ephemeral(),
             Arc::new(store),
             String::new(),
+            "test-org",
         ));
         let keypair = attachments.keypair.clone();
         (
