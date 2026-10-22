@@ -36,6 +36,8 @@ pub fn register(list: &ActionList) -> Result<(), ActionError> {
     super::register(list, &LIST, Effect::ReadOnly, list_projects)
 }
 
+// Every action handler takes its arguments by value (`super::Run`).
+#[allow(clippy::needless_pass_by_value)]
 fn list_projects(ctx: &CallContext, args: ListArgs) -> Result<Value, ToolFailure> {
     use project::ProjectService as _;
     let rows = ctx

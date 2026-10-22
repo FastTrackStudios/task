@@ -261,7 +261,7 @@ pub fn server() -> &'static architect_mcp::Server {
 
 /// One JSON-RPC exchange with [`server`], answered with its `result`
 /// (or its error, as `Err(message)`).
-fn exchange(method: &str, params: Value) -> Result<Value, String> {
+fn exchange(method: &str, params: &Value) -> Result<Value, String> {
     let request = json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
     let reply = server()
         .handle(&request.to_string())
@@ -285,7 +285,7 @@ fn exchange(method: &str, params: Value) -> Result<Value, String> {
 /// plugins `enabled` lets through.
 #[must_use]
 pub fn tool_entries(enabled: impl Fn(&str) -> bool) -> Vec<Value> {
-    let listed = match exchange("tools/list", json!({})) {
+    let listed = match exchange("tools/list", &json!({})) {
         Ok(mut result) => match result.get_mut("tools").map(Value::take) {
             Some(Value::Array(tools)) => tools,
             _ => Vec::new(),
@@ -315,7 +315,7 @@ pub fn call(ctx: CallContext, name: &str, mut args: Value) -> Value {
     }
     crate::mcp::note_task_writer(&ctx.org, ctx.principal.as_deref(), name, &args);
     let params = json!({ "name": name, "arguments": args });
-    match with_context(Arc::new(ctx), || exchange("tools/call", params)) {
+    match with_context(Arc::new(ctx), || exchange("tools/call", &params)) {
         Ok(result) => result,
         Err(message) => json!({
             "content": [{ "type": "text", "text": message }],
@@ -408,7 +408,7 @@ mod tests {
     fn a_tool_run_with_no_call_context_refuses() {
         let out = exchange(
             "tools/call",
-            json!({ "name": "list_projects", "arguments": {} }),
+            &json!({ "name": "list_projects", "arguments": {} }),
         )
         .expect("an answer");
         assert_eq!(out["isError"], true, "{out}");
