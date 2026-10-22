@@ -2435,7 +2435,11 @@ impl<'a> BaseEval<'a> {
             }
             Expr::Binary { op, left, right } => {
                 let cmp = |op: CmpOp| {
-                    V::Bool(cmp_values(&self.eval(left, row), op, &self.eval(right, row)))
+                    V::Bool(cmp_values(
+                        &self.eval(left, row),
+                        op,
+                        &self.eval(right, row),
+                    ))
                 };
                 let arith = |f: fn(f64, f64) -> f64| {
                     arith_vals(&self.eval(left, row), &self.eval(right, row), f)
@@ -2544,7 +2548,13 @@ impl<'a> BaseEval<'a> {
             "tags" => V::Array(row.tags.iter().map(|t| V::String(t.clone())).collect()),
             // Each outgoing link as a link value, so `file.links` can be
             // followed (`file.links.status`) or counted.
-            "links" => V::Array(row.links.iter().map(String::as_str).map(link_value).collect()),
+            "links" => V::Array(
+                row.links
+                    .iter()
+                    .map(String::as_str)
+                    .map(link_value)
+                    .collect(),
+            ),
             // FUTURE: file.size / file.mtime / file.ctime /
             // file.embeds — we don't carry that data on `BaseRow` yet.
             _ => V::Null,
@@ -2606,11 +2616,12 @@ impl<'a> BaseEval<'a> {
                         _ => V::Bool(false),
                     }
                 }
-                "endsWith" if arg_vals.len() == 1 => match (recv_v.as_str(), arg_vals[0].as_str())
-                {
-                    (Some(a), Some(b)) => V::Bool(a.ends_with(b)),
-                    _ => V::Bool(false),
-                },
+                "endsWith" if arg_vals.len() == 1 => {
+                    match (recv_v.as_str(), arg_vals[0].as_str()) {
+                        (Some(a), Some(b)) => V::Bool(a.ends_with(b)),
+                        _ => V::Bool(false),
+                    }
+                }
                 "isEmpty" => V::Bool(match &recv_v {
                     V::Null => true,
                     V::String(s) => s.is_empty(),
@@ -2643,12 +2654,9 @@ impl<'a> BaseEval<'a> {
                         return V::Bool(false);
                     };
                     match self.subject_of(recv, &recv_v, row) {
-                        Some(subject) => V::Bool(
-                            subject
-                                .links
-                                .iter()
-                                .any(|l| self.same_target(l, &needle)),
-                        ),
+                        Some(subject) => {
+                            V::Bool(subject.links.iter().any(|l| self.same_target(l, &needle)))
+                        }
                         None => V::Bool(false),
                     }
                 }
@@ -2759,7 +2767,10 @@ impl<'a> BaseEval<'a> {
 
     fn compare_rows(&self, a: &BaseRow, b: &BaseRow, sort: &[SortKey]) -> std::cmp::Ordering {
         for key in sort {
-            let ord = compare_values(&self.column(a, &key.property), &self.column(b, &key.property));
+            let ord = compare_values(
+                &self.column(a, &key.property),
+                &self.column(b, &key.property),
+            );
             let ord = match key.direction {
                 SortDir::Asc => ord,
                 SortDir::Desc => ord.reverse(),
@@ -3246,7 +3257,11 @@ mod executor_tests {
                 serde_json::json!({ "key": "D", "bpm": 90 }),
                 &[],
             ),
-            page("Venues/The Hall.md", serde_json::json!({ "city": "Austin" }), &[]),
+            page(
+                "Venues/The Hall.md",
+                serde_json::json!({ "city": "Austin" }),
+                &[],
+            ),
             page(
                 "Gigs/Friday.md",
                 serde_json::json!({ "song": "[[Song A]]", "fee": 400, "setlist": ["[[Song A]]", "[[Songs/Song B|B]]"] }),
@@ -3293,7 +3308,10 @@ mod executor_tests {
             eval_src(&cx, "file.links", friday),
             serde_json::json!(["[[Song A]]", "[[Songs/Song B]]", "[[The Hall]]"])
         );
-        assert_eq!(eval_src(&cx, "file.links.length", friday), serde_json::json!(3.0));
+        assert_eq!(
+            eval_src(&cx, "file.links.length", friday),
+            serde_json::json!(3.0)
+        );
         // Nested-list YAML links count as links too.
         assert_eq!(
             eval_src(&cx, "file.links", &rows[4]),
@@ -3312,7 +3330,11 @@ mod executor_tests {
         // Frontmatter link, by bare name, by link value, by full path.
         assert!(filter_src(&cx, r#"file.hasLink("Song A")"#, friday));
         assert!(filter_src(&cx, r#"file.hasLink(link("Song A"))"#, friday));
-        assert!(filter_src(&cx, r#"file.hasLink("Songs/Song A.md")"#, friday));
+        assert!(filter_src(
+            &cx,
+            r#"file.hasLink("Songs/Song A.md")"#,
+            friday
+        ));
         // Aliased + path-qualified link resolves to the same note as a
         // bare-name needle.
         assert!(filter_src(&cx, r#"file.hasLink("Song B")"#, friday));
@@ -3321,7 +3343,11 @@ mod executor_tests {
         assert!(!filter_src(&cx, r#"file.hasLink("Song A")"#, &rows[4]));
         assert!(!filter_src(&cx, r#"file.hasLink("Elsewhere")"#, friday));
         // Unresolved links still match by their text.
-        assert!(filter_src(&cx, r#"file.hasLink("Song Nobody Wrote")"#, &rows[5]));
+        assert!(filter_src(
+            &cx,
+            r#"file.hasLink("Song Nobody Wrote")"#,
+            &rows[5]
+        ));
         // `not` composes.
         assert!(filter_src(&cx, r#"!file.hasLink("Song B")"#, &rows[5]));
     }
@@ -3348,16 +3374,25 @@ mod executor_tests {
     fn link_follow_reads_the_linked_notes_property() {
         let rows = gig_vault();
         let cx = BaseEval::over(&rows);
-        assert_eq!(eval_src(&cx, "note.song.key", &rows[3]), serde_json::json!("G"));
+        assert_eq!(
+            eval_src(&cx, "note.song.key", &rows[3]),
+            serde_json::json!("G")
+        );
         assert_eq!(eval_src(&cx, "song.bpm", &rows[4]), serde_json::json!(90));
         // Broken link → null, never a panic.
-        assert_eq!(eval_src(&cx, "note.song.key", &rows[5]), serde_json::Value::Null);
+        assert_eq!(
+            eval_src(&cx, "note.song.key", &rows[5]),
+            serde_json::Value::Null
+        );
         // A list of links maps member access over each.
         assert_eq!(
             eval_src(&cx, "note.setlist.key", &rows[3]),
             serde_json::json!(["G", "D"])
         );
-        assert_eq!(eval_src(&cx, r#"link("Song B").key"#, &rows[0]), serde_json::json!("D"));
+        assert_eq!(
+            eval_src(&cx, r#"link("Song B").key"#, &rows[0]),
+            serde_json::json!("D")
+        );
         // …and in filters.
         assert!(filter_src(&cx, r#"note.song.key == "G""#, &rows[3]));
         assert!(!filter_src(&cx, r#"note.song.key == "G""#, &rows[4]));
@@ -3369,13 +3404,26 @@ mod executor_tests {
         // A path is finite, so a link cycle can only be walked as far as
         // the expression says — each hop is one more `.next`.
         let rows = vec![
-            page("A.md", serde_json::json!({ "next": "[[B]]", "name": "a" }), &[]),
-            page("B.md", serde_json::json!({ "next": "[[A]]", "name": "b" }), &[]),
+            page(
+                "A.md",
+                serde_json::json!({ "next": "[[B]]", "name": "a" }),
+                &[],
+            ),
+            page(
+                "B.md",
+                serde_json::json!({ "next": "[[A]]", "name": "b" }),
+                &[],
+            ),
         ];
         let cx = BaseEval::over(&rows);
         assert_eq!(eval_src(&cx, "next.name", &rows[0]), serde_json::json!("b"));
-        assert_eq!(eval_src(&cx, "next.next.name", &rows[0]), serde_json::json!("a"));
-        let deep = std::iter::repeat_n("next", 40).collect::<Vec<_>>().join(".");
+        assert_eq!(
+            eval_src(&cx, "next.next.name", &rows[0]),
+            serde_json::json!("a")
+        );
+        let deep = std::iter::repeat_n("next", 40)
+            .collect::<Vec<_>>()
+            .join(".");
         assert_eq!(eval_src(&cx, &deep, &rows[0]), serde_json::json!("[[A]]"));
     }
 
@@ -3421,7 +3469,10 @@ views:
         // it, one per formula per row.
         let mut yaml = String::from("formulas:\n");
         for i in 0..15 {
-            yaml.push_str(&format!("  f{i}: \"formula.f{n} + formula.f{n}\"\n", n = i + 1));
+            yaml.push_str(&format!(
+                "  f{i}: \"formula.f{n} + formula.f{n}\"\n",
+                n = i + 1
+            ));
         }
         yaml.push_str("  f15: \"1\"\nviews:\n  - type: table\n    name: All\n    order:\n      - formula.f0\n");
         let base = parse(&yaml).unwrap();
@@ -3465,7 +3516,10 @@ views:
         assert!(cx.resolve("[[Intro]]").is_none());
         // A path still picks one.
         assert_eq!(cx.resolve("Songs/Intro").unwrap().path, "Songs/Intro.md");
-        assert_eq!(cx.resolve("[[Drafts/Intro]]").unwrap().path, "Drafts/Intro.md");
+        assert_eq!(
+            cx.resolve("[[Drafts/Intro]]").unwrap().path,
+            "Drafts/Intro.md"
+        );
         // A unique basename resolves as before.
         assert_eq!(cx.resolve("Outro").unwrap().path, "Songs/Outro.md");
     }
@@ -3479,8 +3533,14 @@ views:
         assert_eq!(cx.formula("cut", friday), serde_json::json!(40.0));
         assert_eq!(cx.formula("net", friday), serde_json::json!(360.0));
         assert_eq!(cx.formula("song_key", friday), serde_json::json!("G"));
-        assert_eq!(cx.formula("label", friday), serde_json::json!("Friday in G"));
-        assert_eq!(cx.formula("label", &rows[5]), serde_json::json!("Sunday in ?"));
+        assert_eq!(
+            cx.formula("label", friday),
+            serde_json::json!("Friday in G")
+        );
+        assert_eq!(
+            cx.formula("label", &rows[5]),
+            serde_json::json!("Sunday in ?")
+        );
         // A cycle is null, not a stack overflow.
         assert_eq!(cx.formula("loop_a", friday), serde_json::Value::Null);
         assert_eq!(cx.formula("missing", friday), serde_json::Value::Null);
@@ -3493,11 +3553,19 @@ views:
         let rows = gig_vault();
 
         let in_g = execute_view(&base, &base.views[0], rows.clone());
-        let names: Vec<&str> = in_g.groups[0].1.iter().map(|r| r.basename.as_str()).collect();
+        let names: Vec<&str> = in_g.groups[0]
+            .1
+            .iter()
+            .map(|r| r.basename.as_str())
+            .collect();
         assert_eq!(names, ["Friday"]);
 
         let by_net = execute_view(&base, &base.views[1], rows.clone());
-        let names: Vec<&str> = by_net.groups[0].1.iter().map(|r| r.basename.as_str()).collect();
+        let names: Vec<&str> = by_net.groups[0]
+            .1
+            .iter()
+            .map(|r| r.basename.as_str())
+            .collect();
         // Ascending net — the reverse of the basename fallback order.
         assert_eq!(names, ["Sunday", "Saturday", "Friday"]);
 

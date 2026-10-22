@@ -233,7 +233,7 @@ async fn pull(
         debug_assert_eq!(doc_id, collab_doc_id(&entry.vault_id, &entry.path));
         report.exchanged += 1;
         let remote = PeerDoc {
-            client: &*peer,
+            client: &peer,
             vault_id: &entry.vault_id,
             path: &entry.path,
         };

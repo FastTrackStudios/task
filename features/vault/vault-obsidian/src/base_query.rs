@@ -282,7 +282,10 @@ mod tests {
                 "Gigs/Friday.md",
                 "---\nsong: \"[[Song A]]\"\nfee: 400\n---\nLoad-in at [[The Hall|the hall]]. #paid\n",
             ),
-            ("Gigs/Saturday.md", "---\nsong: \"[[Song B]]\"\nfee: 250\n---\n"),
+            (
+                "Gigs/Saturday.md",
+                "---\nsong: \"[[Song B]]\"\nfee: 250\n---\n",
+            ),
             ("Gigs.base", "views: []\n"),
         ];
         let rows = rows_from_markdown(files.iter().map(|(p, s)| (*p, *s)));
@@ -290,8 +293,16 @@ mod tests {
         let friday = rows.iter().find(|r| r.basename == "Friday").unwrap();
         assert_eq!(friday.folder, "Gigs");
         assert_eq!(friday.path, "Gigs/Friday.md");
-        assert!(friday.links.iter().any(|l| l == "Song A"), "{:?}", friday.links);
-        assert!(friday.links.iter().any(|l| l == "The Hall"), "{:?}", friday.links);
+        assert!(
+            friday.links.iter().any(|l| l == "Song A"),
+            "{:?}",
+            friday.links
+        );
+        assert!(
+            friday.links.iter().any(|l| l == "The Hall"),
+            "{:?}",
+            friday.links
+        );
         assert!(friday.tags.iter().any(|t| t == "paid"));
 
         let base = vault_live::bases::parse(

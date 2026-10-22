@@ -132,7 +132,10 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
         }),
     )
     .await;
-    assert!(is_err && msg.to_string().contains("lowercase slug"), "{msg}");
+    assert!(
+        is_err && msg.to_string().contains("lowercase slug"),
+        "{msg}"
+    );
 
     // ── re-sync: same ref, no duplicate ───────────────────────────
     let again = ok(
@@ -149,7 +152,11 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
     .await;
     assert_eq!(again["id"], json!(id));
     assert_eq!(again["existing"], json!(true));
-    assert_eq!(again["title"], json!("CAA 2026 — show"), "nothing rewritten");
+    assert_eq!(
+        again["title"],
+        json!("CAA 2026 — show"),
+        "nothing rewritten"
+    );
     let by_ref = ok(
         &client,
         &url,
@@ -158,7 +165,13 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
     )
     .await;
     assert_eq!(ids(&by_ref), vec![id.clone()]);
-    let other_ref = ok(&client, &url, "list_events", json!({ "external_ref": "pco:plan_time:999" })).await;
+    let other_ref = ok(
+        &client,
+        &url,
+        "list_events",
+        json!({ "external_ref": "pco:plan_time:999" }),
+    )
+    .await;
     assert!(ids(&other_ref).is_empty());
 
     // ── update keeps the times ────────────────────────────────────
@@ -182,7 +195,13 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
     assert_eq!(updated["start"], json!("2026-11-06T19:00:00-06:00"));
     assert_eq!(updated["end"], json!("2026-11-06T22:00:00-06:00"));
     assert_eq!(updated["links"].as_array().map(Vec::len), Some(2));
-    let listed = ok(&client, &url, "list_events", json!({ "from": "2026-11-06", "to": "2026-11-06" })).await;
+    let listed = ok(
+        &client,
+        &url,
+        "list_events",
+        json!({ "from": "2026-11-06", "to": "2026-11-06" }),
+    )
+    .await;
     let row = listed["events"]
         .as_array()
         .unwrap()
@@ -211,8 +230,9 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
     )
     .unwrap();
     let snapshot = vault::obsidian::vault::Vault::open(&vault).expect("open vault");
-    let views = vault::obsidian::base_query::query_all_views(&snapshot, "Gigs/caa-2026 events.base")
-        .expect("query base");
+    let views =
+        vault::obsidian::base_query::query_all_views(&snapshot, "Gigs/caa-2026 events.base")
+            .expect("query base");
     let names: Vec<&str> = views[0]
         .1
         .groups
@@ -221,17 +241,41 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
         .collect();
     assert_eq!(names, vec![id.as_str()], "the base finds the gig's events");
 
-    let linked = ok(&client, &url, "list_events", json!({ "linked_to": "Gigs/caa-2026" })).await;
+    let linked = ok(
+        &client,
+        &url,
+        "list_events",
+        json!({ "linked_to": "Gigs/caa-2026" }),
+    )
+    .await;
     assert_eq!(ids(&linked), vec![id.clone()]);
 
     // ── tombstone: hidden, kept, found by ref ─────────────────────
-    let gone = ok(&client, &url, "update_event", json!({ "id": id, "tombstone": true })).await;
+    let gone = ok(
+        &client,
+        &url,
+        "update_event",
+        json!({ "id": id, "tombstone": true }),
+    )
+    .await;
     assert!(gone["tombstone"].as_str().is_some(), "{gone}");
     let all = ok(&client, &url, "list_events", json!({})).await;
     assert!(!ids(&all).contains(&id), "a tombstoned event is not listed");
-    let with = ok(&client, &url, "list_events", json!({ "include_tombstoned": true })).await;
+    let with = ok(
+        &client,
+        &url,
+        "list_events",
+        json!({ "include_tombstoned": true }),
+    )
+    .await;
     assert!(ids(&with).contains(&id));
-    let by_ref = ok(&client, &url, "list_events", json!({ "external_ref": "pco:plan_time:123" })).await;
+    let by_ref = ok(
+        &client,
+        &url,
+        "list_events",
+        json!({ "external_ref": "pco:plan_time:123" }),
+    )
+    .await;
     assert_eq!(ids(&by_ref), vec![id.clone()], "a re-sync still finds it");
     assert!(file.is_file(), "a tombstone never deletes");
     let back = graph
@@ -239,7 +283,13 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
         .await
         .unwrap();
     assert!(back.contains(&event_rel), "links survive a tombstone");
-    let revived = ok(&client, &url, "update_event", json!({ "id": id, "tombstone": false })).await;
+    let revived = ok(
+        &client,
+        &url,
+        "update_event",
+        json!({ "id": id, "tombstone": false }),
+    )
+    .await;
     assert_eq!(revived["tombstone"], Value::Null);
 
     // ── a hand-made event file is rewritten in place ──────────────
@@ -258,13 +308,22 @@ async fn events_link_notes_resync_by_ref_update_in_place_and_tombstone() {
     )
     .await;
     let raw = std::fs::read_to_string(&hand).expect("same file");
-    assert!(raw.ends_with("\n# Set\n\n1. [[Rise and Shine]]\n"), "body kept: {raw}");
+    assert!(
+        raw.ends_with("\n# Set\n\n1. [[Rise and Shine]]\n"),
+        "body kept: {raw}"
+    );
     assert!(raw.contains("experience: setlist"), "{raw}");
     assert!(raw.contains("type: event"), "{raw}");
     assert!(
         !vault.join("Records/events/Sunday-Rehearsal.md").exists(),
         "no twin file"
     );
-    let linked = ok(&client, &url, "list_events", json!({ "linked_to": "caa-2026" })).await;
+    let linked = ok(
+        &client,
+        &url,
+        "list_events",
+        json!({ "linked_to": "caa-2026" }),
+    )
+    .await;
     assert_eq!(linked["count"], json!(2));
 }

@@ -58,6 +58,9 @@ pub use vault_proto::{
 pub use vault_obsidian::GraphBackend;
 
 // ── Live filesystem implementation ────────────────────────────────
+/// The `.base` parser and evaluator (`parse`, `BaseEval`, `view_table`).
+#[cfg(feature = "live")]
+pub use vault_live::bases;
 /// Typed frontmatter schemas: the built-in kinds, schema pages, and
 /// the validation a write goes through.
 #[cfg(feature = "live")]
@@ -68,9 +71,6 @@ pub use vault_live::property_schema;
 pub use vault_live::sync;
 #[cfg(feature = "live")]
 pub use vault_live::watcher;
-/// The `.base` parser and evaluator (`parse`, `BaseEval`, `view_table`).
-#[cfg(feature = "live")]
-pub use vault_live::bases;
 /// Who may write a file: the guard a host installs on the backend.
 #[cfg(feature = "live")]
 pub use vault_live::write_guard;

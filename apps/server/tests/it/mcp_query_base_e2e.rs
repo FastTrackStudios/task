@@ -80,7 +80,11 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
     // SAFETY: under the binary's env lock, for the boot only.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
-        for var in ["TASK_MCP_TOKEN", "TASK_SERVER_ORG", "TASK_SERVER_VAULT_ROOT"] {
+        for var in [
+            "TASK_MCP_TOKEN",
+            "TASK_SERVER_ORG",
+            "TASK_SERVER_VAULT_ROOT",
+        ] {
             std::env::remove_var(var);
         }
     }
@@ -204,7 +208,11 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
             )
         })
         .collect();
-    assert_eq!(fast, [("Night Drive", true), ("Paper Moon", false)], "{inline}");
+    assert_eq!(
+        fast,
+        [("Night Drive", true), ("Paper Moon", false)],
+        "{inline}"
+    );
     // The note read is reported: the whole (small) seeded vault, none
     // unreadable, not capped.
     let notes = &inline["notes"];
@@ -216,15 +224,25 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
     // ── a caller-written base that fans out answers ──
     // f0 = f1 + f1, …, f15 = 1: 2^16 evaluations per row without the
     // per-row formula memo, 16 with it.
-    let mut fan = String::from("filters:\n  and:\n    - file.inFolder(\"Gigs/Songs\")\nformulas:\n");
+    let mut fan =
+        String::from("filters:\n  and:\n    - file.inFolder(\"Gigs/Songs\")\nformulas:\n");
     for i in 0..15 {
-        fan.push_str(&format!("  f{i}: \"formula.f{n} + formula.f{n}\"\n", n = i + 1));
+        fan.push_str(&format!(
+            "  f{i}: \"formula.f{n} + formula.f{n}\"\n",
+            n = i + 1
+        ));
     }
     fan.push_str("  f15: \"1\"\nviews:\n  - type: table\n    name: Fan\n    order: [file.name, formula.f0]\n");
     // (The evaluation count is asserted in vault_live's
     // `fanned_out_formulas_run_once_per_row`; a wall-clock bound here
     // would flake on a loaded host.)
-    let (err, fanned) = call(&http, &url, &key, json!({ "org": "acme-audio", "yaml": fan })).await;
+    let (err, fanned) = call(
+        &http,
+        &url,
+        &key,
+        json!({ "org": "acme-audio", "yaml": fan }),
+    )
+    .await;
     assert!(!err, "fan-out base: {fanned}");
     let fan_rows = rows(&fanned, "Fan");
     assert_eq!(fan_rows.len(), 2, "{fanned}");
@@ -254,7 +272,10 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
     )
     .await;
     assert!(err, "an unknown view: {said}");
-    assert!(said.to_string().contains("Upcoming gigs"), "names the views: {said}");
+    assert!(
+        said.to_string().contains("Upcoming gigs"),
+        "names the views: {said}"
+    );
     let (err, said) = call(
         &http,
         &url,
