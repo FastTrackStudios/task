@@ -364,7 +364,16 @@ jobs:
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         env:
           TASK_CI_TEST_THREADS: ${{ startsWith(runner.name, 'macpro-') && '8' || '16' }}
+          TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
         run: ${NIX_DEV} ${SWEEP_RUN} checks-tests -- just ci-tests
+      - name: Test log
+        if: ${{ always() && needs.plan.outputs.workspace == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-ci
+          path: ${{ runner.temp }}/nextest-ci.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} ${SWEEP_RUN} checks-clippy -- just ci-clippy
