@@ -1,51 +1,54 @@
 # Task Checks — the PR gate, the full suite after every merge, and the
-# nightly, on THEBATTLESHIP (fleet flow v4: the `release-workflow` skill,
+# nightly (fleet flow v4: the `release-workflow` skill,
 # references/ci-gates.md).
 #
-# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB),
-# four instances so this workflow's parallel jobs do not queue behind
-# each other. Hosted `ubuntu-latest` is 4 vCPU with nothing warm, which
-# is what made a run take 35-40 minutes; see CACHE below.
+# WHERE EACH JOB RUNS: only the heavy job stays on the Mac Pro.
 #
-# Toolchain comes from the repo flake: every step runs under
-# `nix develop .#ci -c` (rust 1.94 pin, wasm target, clang env for ring,
-# native headers, tailwindcss, cargo-rail). `--accept-flake-config` picks
-# up the fasttrackstudio.cachix.org substituter from flake.nix nixConfig.
-# On this runner the store is already warm, so entering the shell is
-# instant and nothing installs nix per job.
+#   plan            ubuntu-latest  rustup + the released cargo-rail binary
+#   lint            ubuntu-latest  nix .#ci + rust-cache (checks-lint)
+#   wasm            ubuntu-latest  nix .#ci + rust-cache (checks-wasm)
+#   tests           [self-hosted, task-tests]  the Mac Pro VM: the full
+#                   nextest build (codegen of every unit, ~18 GB warm), which
+#                   a cold 4-vCPU hosted runner would take far longer to do
+#   checks-passed   ubuntu-latest  the required aggregator
+#   Queue timeout   ubuntu-latest  watches the self-hosted job(s) only
 #
-# CHANGE SELECTION: the `plan` job asks `cargo rail plan` (0.32, built in
-# nix/modules/cargo-rail.nix) which workspace packages a change affects,
-# through cargo's resolved reverse-dependency graph (~189 members), and
-# scripts/ci-rail-plan.py turns that into gates plus a nextest filterset.
-# Only which tests RUN narrows; the test BUILD stays --workspace so the
-# warm target dir keeps one artifact set. Full runs (push to main, the
-# nightly, a dispatch without `base`) record rail's observed-input
-# EVIDENCE for their commit (dep-info of every unit, no extra compiling)
-# into the Actions cache; a later plan against that commit restores it,
-# which is what lets a change to docs/fixtures/examples narrow instead of
-# widening to the whole workspace. Workflow, Justfile, nix, scripts or
-# nextest-config changes (.config/rail.toml [plan.work.*]), workspace
-# scope, or any rail failure FAIL OPEN to the full set.
+# The repo is public, so hosted standard runners cost nothing; the org has
+# ~20 concurrent Linux jobs. The hosted jobs only check (no codegen of
+# Task's crates), which a rust-cache of main's dependencies keeps short.
 #
-# CACHE: there is none, and that is the point. The old hosted setup ran
-# `Swatinem/rust-cache`, which tars a multi-GB target dir up to the
-# Actions cache at job end and untars it at job start. A repo gets 10 GB
-# of that cache, evicted global-LRU, and three jobs times every open PR
-# overflowed it within the hour — so most runs restored NOTHING and
-# recompiled 228 crates from cold. That was the entire 35-40 minute wall
-# clock. The workspace's 2655 tests execute in 3.3 seconds.
+# Toolchain comes from the repo flake: the hosted lint/wasm jobs enter
+# `.#ci` once (.github/actions/hosted-nix-rust: rust 1.98 pin, wasm target,
+# clang env for ring, native headers, tailwindcss, cargo-rail) and every
+# later step runs inside it. The self-hosted tests job runs each step under
+# `nix develop .#ci -c` (${NIX_DEV}); its store is already warm.
 #
-# A self-hosted runner needs no such round trip. Each instance keeps a
-# CARGO_TARGET_DIR under its own $HOME (a real directory on NVMe, set by
-# `workDir` in the fleet aspect — NOT the systemd RuntimeDirectory, which
-# is tmpfs and is deleted on restart). It survives jobs, restarts and
-# reboots, so an ordinary PR compiles only what it changed.
+# CHANGE SELECTION: the `plan` job asks `cargo rail plan` (the version
+# nix/modules/cargo-rail.nix pins, installed from its release) which
+# workspace packages a change affects, through cargo's resolved
+# reverse-dependency graph, and scripts/ci-rail-plan.py turns that into
+# gates plus a nextest filterset. Only which tests RUN narrows; the test
+# BUILD stays --workspace so the warm target dir keeps one artifact set.
+# Full runs (push to main, the nightly, a dispatch without `base`) record
+# rail's observed-input EVIDENCE for their commit into the Actions cache; a
+# later plan against that commit restores it, which is what lets a change
+# to docs/fixtures/examples narrow instead of widening to the whole
+# workspace. Workflow, Justfile, nix, scripts or nextest-config changes
+# (.config/rail.toml [plan.work.*]), workspace scope, or any rail failure
+# FAIL OPEN to the full set.
 #
-# It lives OUTSIDE $GITHUB_WORKSPACE on purpose: `actions/checkout`
-# defaults to `clean: true`, which runs `git clean -ffdx`, and /target is
-# gitignored — a target dir inside the checkout would be deleted at the
-# start of every run.
+# CACHE (hosted jobs): Swatinem/rust-cache, one `shared-key` per kind, and
+# SAVED ONLY ON MAIN. A repo gets 10 GB of Actions cache, evicted LRU
+# across all branches; when every PR saved its own multi-GB entry (the old
+# hosted setup) the budget overflowed within the hour and most runs
+# restored nothing. With main the only writer, PRs restore main's entry
+# and the budget holds one entry per kind (+ the tiny rail evidence,
+# architect xtask and cargo-rail entries).
+#
+# CACHE (tests, self-hosted): none. The instance keeps its CARGO_TARGET_DIR
+# in $CI_CACHE_DIR (durable, on the big disk, OUTSIDE $GITHUB_WORKSPACE:
+# `actions/checkout` runs `git clean -ffdx`), so an ordinary PR compiles
+# only what it changed; scripts/target-sweep.py bounds it.
 
 name: checks
 
@@ -114,18 +117,22 @@ env:
 
 jobs:
   # GitHub applies `timeout-minutes` to EXECUTION, not to time spent
-  # queued — with every real job on one host, a stopped runner service
-  # would leave a PR sitting "Queued" rather than failing.
+  # queued — a stopped runner service on the Mac Pro would leave a PR's
+  # `tests` sitting "Queued" rather than failing. Kept for that one job:
+  # every other job is hosted now, and a hosted queue (the org's ~20
+  # concurrent Linux jobs) is not an outage, so hosted jobs are not
+  # watched.
   #
-  # This watches THIS RUN's own jobs (the `actions: read` the default
-  # token already has — the org runners endpoint needs `admin:org`, which
-  # no workflow token carries) and fails once anything has sat queued past
-  # the grace period. It exits the moment the jobs are picked up, so a
-  # healthy run pays a few seconds on a hosted runner.
+  # This watches THIS RUN's own self-hosted jobs (the `actions: read` the
+  # default token already has — the org runners endpoint needs
+  # `admin:org`, which no workflow token carries) and fails once one has
+  # sat queued past the grace period. It exits once none is queued, so a
+  # healthy run pays a few seconds. `tests` is created only after `plan`
+  # finishes, so the watch first waits (bounded) for `plan`.
   queue-timeout:
     name: Queue timeout
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Fail if the self-hosted jobs never start
         env:
@@ -133,29 +140,45 @@ jobs:
           GRACE_SECONDS: "480"
         run: |
           set -euo pipefail
+          jobs() {
+            gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" -q "$1" || true
+          }
+          # The plan job is hosted and decides whether `tests` exists at all.
+          plan_deadline=$(( $(date +%s) + 900 ))
+          while [ "$(jobs '[.jobs[] | select(.name == "Plan affected crates") | .status] | first // ""')" != completed ]; do
+            [ "$(date +%s)" -ge "${plan_deadline}" ] && { echo "plan still running; not watching"; exit 0; }
+            sleep 15
+          done
+          sleep 10 # let the dependent jobs be created
           deadline=$(( $(date +%s) + GRACE_SECONDS ))
           while :; do
-            queued="$(gh api \
-              "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
-              -q '[.jobs[] | select(.name != "Queue timeout")
-                   | select(.status == "queued") | .name] | join(", ")' || true)"
+            queued="$(jobs '[.jobs[] | select(.name != "Queue timeout")
+                   | select(.labels | index("self-hosted"))
+                   | select(.status == "queued") | .name] | join(", ")')"
             if [ -z "${queued}" ]; then
-              echo "all jobs picked up"
+              echo "no self-hosted job queued"
               exit 0
             fi
             if [ "$(date +%s)" -ge "${deadline}" ]; then
               echo "::error::Still queued after ${GRACE_SECONDS}s: ${queued}"
-              echo "::error::No self-hosted \`task\` runner took the work."
-              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-task-*'"
+              echo "::error::No self-hosted \`task-tests\` runner took the work."
+              echo "::error::On the Mac Pro VM (toms-mac-pro-vm): systemctl status 'github-runner-*task*'"
               exit 1
             fi
             echo "queued: ${queued}"
             sleep 20
           done
 
+  # Hosted, and without nix: the plan only resolves cargo's graph and
+  # diffs two commits, so it needs cargo and cargo-rail, not the dev
+  # shell's ~3 GB closure. It gates every run, so it installs them only
+  # when it actually has to narrow (a PR, a dispatch with `base`): the
+  # pinned rustc with the minimal profile, and the RELEASED cargo-rail
+  # binary at exactly the version nix/modules/cargo-rail.nix builds
+  # (checksum-verified), so the plan and the shell's rail never drift.
   plan:
     name: Plan affected crates
-    runs-on: [self-hosted, task]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       full: ${{ steps.filter.outputs.full }}
@@ -191,11 +214,15 @@ jobs:
           esac
           echo "sha=${base}" >> "$GITHUB_OUTPUT"
           echo "base: ${base:-<none: full run>}"
+      # The path is a LITERAL `~/rail-evidence` in both this restore and the
+      # tests job's save: actions/cache versions an entry by its path
+      # strings (and compression), so `${{ runner.temp }}` — a different
+      # directory on every runner — never matched across runners.
       - name: Restore rail evidence for the base
         if: ${{ steps.base.outputs.sha != '' }}
         uses: actions/cache/restore@v4
         with:
-          path: ${{ runner.temp }}/rail-evidence
+          path: ~/rail-evidence
           key: rail-evidence-${{ runner.os }}-${{ runner.arch }}-cargo.test-${{ steps.base.outputs.sha }}
       - name: Plan affected crates
         id: filter
@@ -205,9 +232,10 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          EVIDENCE: ${{ runner.temp }}/rail-evidence/cargo.test.json
+          EVIDENCE: ~/rail-evidence/cargo.test.json
         run: |
           set -u
+          EVIDENCE="${EVIDENCE/#\~/$HOME}"
 
           # Fail open: if we cannot compute an honest plan, run everything.
           run_all() {
@@ -247,6 +275,25 @@ jobs:
           esac
           [ -n "${BASE}" ] || run_all "no comparison base"
 
+          # Narrowing: install the pinned toolchain (minimal) and cargo-rail.
+          channel="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          rail="$(sed -n 's/^ *version = "\([^"]*\)";.*/\1/p' nix/modules/cargo-rail.nix | head -1)"
+          [ -n "${channel}" ] && [ -n "${rail}" ] || run_all "cannot read the toolchain/cargo-rail pins"
+          rustup toolchain install "${channel}" --profile minimal --no-self-update \
+            || run_all "rustup ${channel} failed"
+          export RUSTUP_TOOLCHAIN="${channel}"
+          dl="${RUNNER_TEMP}/cargo-rail"
+          mkdir -p "${dl}"
+          url="https://github.com/loadingalias/cargo-rail/releases/download/v${rail}"
+          { curl -fsSL -o "${dl}/rail.zip" "${url}/cargo-rail-x86_64-unknown-linux-gnu.zip" \
+            && curl -fsSL -o "${dl}/SHA256SUMS" "${url}/SHA256SUMS" \
+            && (cd "${dl}" && grep ' cargo-rail-x86_64-unknown-linux-gnu.zip$' SHA256SUMS \
+                | sed 's/cargo-rail-x86_64-unknown-linux-gnu.zip$/rail.zip/' | sha256sum -c --quiet) \
+            && unzip -q -o "${dl}/rail.zip" -d "${dl}"; } \
+            || run_all "cargo-rail ${rail} download failed"
+          export PATH="${dl}/cargo-rail:${PATH}"
+          cargo rail --version || run_all "cargo-rail does not run"
+
           ev=()
           if [ -f "${EVIDENCE}" ]; then
             ev=(--evidence "${EVIDENCE}")
@@ -255,41 +302,34 @@ jobs:
             echo "plan: no rail evidence for ${BASE} (non-Rust changes will widen)"
           fi
           plan="${RUNNER_TEMP}/rail-plan.json"
-          ${NIX_DEV} cargo rail plan --from "${BASE}" --to HEAD "${ev[@]}" --json > "${plan}" \
+          cargo rail plan --from "${BASE}" --to HEAD "${ev[@]}" --json > "${plan}" \
             || run_all "cargo rail plan failed"
-          ${NIX_DEV} cargo rail plan --from "${BASE}" --to HEAD "${ev[@]}" --explain-work cargo.test || true
+          cargo rail plan --from "${BASE}" --to HEAD "${ev[@]}" --explain-work cargo.test || true
 
-          gates="$(${NIX_DEV} python3 scripts/ci-rail-plan.py "${plan}")" \
+          gates="$(python3 scripts/ci-rail-plan.py "${plan}")" \
             || run_all "plan parse failed"
           [ -n "${gates}" ] || run_all "plan parse produced no gates"
           echo "${gates}" >> "$GITHUB_OUTPUT"
           echo "${gates}"
 
-  # THREE jobs, one per BUILD KIND, each on runners of its own kind.
+  # THREE jobs, one per BUILD KIND.
   #
-  #   lint   [task-lint]   fmt, manifests, Boundaries, architect-ui, clippy,
+  #   lint   hosted        fmt, manifests, Boundaries, architect-ui, clippy,
   #                        docs: check/doc mode, no codegen.
   #   tests  [task-tests]  the nextest build (full codegen) + rail evidence.
-  #   wasm   [task-wasm]   the wasm32 check (another target triple).
+  #   wasm   hosted        the wasm32 check (another target triple).
   #
   # The three kinds share NO artifacts except build scripts and proc
   # macros: measured on a full run, clippy re-checked 250 crates straight
   # after the test build, because check-mode units are not the test
-  # build's units. So serialising them in one job (as this file did) only
-  # added their times together (~20 min on a full run).
-  #
-  # An earlier split failed because any job could land on any instance:
-  # every instance ended up holding every kind's artifacts, and one PR took
-  # three of four slots. The fleet now registers runners PER KIND
-  # (THEBATTLESHIP github-runners.nix: task-tests x2, task-lint, task-wasm),
-  # so an instance's target dir holds one kind and stays warm for it, and
-  # the three jobs of one PR run side by side.
+  # build's units. So they run side by side, and each hosted kind has its
+  # own rust-cache entry.
   #
   # `checks-passed` below keeps the old required-check name, so the main
   # ruleset needs no edit.
   lint:
     name: Lint (fmt + clippy + boundaries + docs)
-    runs-on: [self-hosted, task-lint]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' }}
@@ -302,18 +342,10 @@ jobs:
           # A PR's merge commit plus its parents: the change check diffs
           # against the first parent (the base it merges into).
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      - &target-dir
-        name: Persistent target dir
-        run: |
-          # Outside $GITHUB_WORKSPACE (actions/checkout runs `git clean
-          # -ffdx`, /target is gitignored). $CI_CACHE_DIR is this runner
-          # INSTANCE's durable cache dir on the big disk (the fleet's
-          # github-runner module), so instances never share a cargo lock and
-          # the dir outlives jobs, restarts and reboots.
-          dir="${CI_CACHE_DIR:-$HOME/cargo-target}/checks"
-          mkdir -p "$dir"
-          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
-          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+      # From here on every step runs inside `.#ci`; target dir ./target.
+      - uses: ./.github/actions/hosted-nix-rust
+        with:
+          kind: lint
 
       # Every step is a `just ci-*` recipe; the Justfile is the single
       # source of truth, and `just ci` runs the same set locally.
@@ -321,7 +353,7 @@ jobs:
       # fmt is ungated: it compiles nothing, so change selection would
       # save nothing.
       - name: fmt
-        run: ${NIX_DEV} just ci-fmt
+        run: just ci-fmt
       # PRs only (a release PR never gets here: the plan skips it): every
       # crate the PR changes needs a cargo-rail change file
       # (.changes/README). Compiles nothing. Against the merge commit's
@@ -330,58 +362,56 @@ jobs:
       # merge-base with main.
       - name: Change files
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        run: ${NIX_DEV} just ci-changes "$(git rev-parse HEAD^1)"
+        run: just ci-changes "$(git rev-parse HEAD^1)"
       # Ungated too: greps manifests and workflows, compiles nothing.
       - name: One version everywhere
         if: ${{ !cancelled() }}
-        run: ${NIX_DEV} just ci-versions
+        run: just ci-versions
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
-        run: ${NIX_DEV} just ci-manifests
+        run: just ci-manifests
+      # Boundaries' xtask is `cargo install`ed per architect tag into
+      # ~/.cache/architect-xtask (the recipe's default without
+      # $CI_CACHE_DIR). Cached per tag AND flake.lock: the binary links the
+      # shell's glibc, which a nixpkgs bump moves. A few MB; saved from any
+      # ref when missing.
+      - name: architect xtask pin
+        id: xtask
+        if: ${{ !cancelled() }}
+        run: echo "tag=$(sed -n 's/^architect_xtask_tag *:= *"\([^"]*\)".*/\1/p' Justfile)" >> "$GITHUB_OUTPUT"
+      - name: Restore architect xtask
+        if: ${{ !cancelled() && steps.xtask.outputs.tag != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/architect-xtask
+          key: architect-xtask-${{ steps.xtask.outputs.tag }}-${{ hashFiles('flake.lock') }}
       # Ungated: resolves dependency graphs and scans sources, compiles
       # nothing of Task's. Layer table + ratcheted baselines in
-      # boundaries.toml (architect ADR layout.md, STA-268). Its xtask is
-      # `cargo install`ed per architect tag into $CI_CACHE_DIR; only the
-      # task-lint instance runs it now, so a pin bump installs it once.
+      # boundaries.toml (architect ADR layout.md, STA-268).
       - name: Boundaries
         if: ${{ !cancelled() }}
-        run: ${NIX_DEV} just ci-boundaries
+        run: just ci-boundaries
       # Ungated: compiles the Tailwind sheet, nothing of Task's Rust. Task's
       # tokens come from architect-ui through apps/.architect-ui; fails on a
       # re-vendored copy or an import that bypasses the link (STA-392).
       - name: architect-ui sheet
         if: ${{ !cancelled() }}
-        run: ${NIX_DEV} just ci-architect-css
+        run: just ci-architect-css
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
-        run: ${NIX_DEV} ${SWEEP_RUN} checks-clippy -- just ci-clippy
+        run: just ci-clippy
       # PRs into main and every full run (push, nightly, PRs into
       # release/**). rustdoc
       # -D warnings isn't change-scoped: it documents the whole workspace.
       # Same check-mode dependency metadata as clippy, so it lives here.
       - name: Docs
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' && (github.base_ref == 'main' || needs.plan.outputs.full == 'true') }}
-        run: ${NIX_DEV} ${SWEEP_RUN} checks-docs -- just ci-docs
-      - &bound-target
-        # Cargo never collects stale artifacts, and a persistent dir grows
-        # without bound (167 GB in two runs once). Keep exactly the latest
-        # build of each kind this instance runs and nothing else
-        # (scripts/target-sweep.py; a size cap below the working set evicts
-        # the run's own dependencies). always(): a red run gives the disk
-        # back too.
-        name: Bound the target dir
+        run: just ci-docs
+      - name: Disk
         if: ${{ always() }}
         run: |
-          # The tmpfs test scratch is RAM: give it back even after a red
-          # run (tests killed by a timeout leave their worlds behind).
-          [ -n "${RUNTIME_DIRECTORY:-}" ] && rm -rf "${RUNTIME_DIRECTORY%%:*}/nextest-tmp" || true
-          # CARGO_INCREMENTAL=0 stops new incremental output but does not
-          # remove what earlier runs left.
-          rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
-          ${NIX_DEV} python3 scripts/target-sweep.py sweep --protect-hours 0 || true
-          ${NIX_DEV} python3 scripts/target-sweep.py status || true
-          du -sh "${CARGO_TARGET_DIR}" || true
-          df -h "${CARGO_TARGET_DIR}" | tail -1
+          du -sh target ~/.cargo /nix/store 2>/dev/null || true
+          df -h / | tail -1
 
   tests:
     name: Tests
@@ -393,7 +423,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
-      - *target-dir
+      - name: Persistent target dir
+        run: |
+          # Outside $GITHUB_WORKSPACE (actions/checkout runs `git clean
+          # -ffdx`, /target is gitignored). $CI_CACHE_DIR is this runner
+          # INSTANCE's durable cache dir on the big disk (the fleet's
+          # github-runner module), so instances never share a cargo lock and
+          # the dir outlives jobs, restarts and reboots.
+          dir="${CI_CACHE_DIR:-$HOME/cargo-target}/checks"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+
       # Full runs first record rail evidence for this commit: the recorder
       # wraps rustc for one `cargo test --no-run` (units already fresh keep
       # their dep-info, so this compiles nothing nextest wouldn't), and the
@@ -409,8 +450,12 @@ jobs:
           TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
           TASK_CI_TEST_FILTER: ${{ needs.plan.outputs.test_filter }}
           RECORD: ${{ needs.plan.outputs.record }}
-          EVIDENCE_DIR: ${{ runner.temp }}/rail-evidence
         run: |
+          # ~/rail-evidence: the literal path the hosted plan job restores
+          # (see its restore step). Emptied first, so a failed recording
+          # can never save the previous run's evidence under this commit.
+          export EVIDENCE_DIR="$HOME/rail-evidence"
+          rm -rf "${EVIDENCE_DIR}"
           ${NIX_DEV} ${SWEEP_RUN} checks-tests -- bash -c '
             if [ "${RECORD}" = "true" ]; then
               mkdir -p "${EVIDENCE_DIR}"
@@ -425,12 +470,22 @@ jobs:
         if: ${{ always() && needs.plan.outputs.record == 'true' }}
         run: |
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          [ -f "${RUNNER_TEMP}/rail-evidence/cargo.test.json" ] && echo "have=true" >> "$GITHUB_OUTPUT" || true
+          [ -f "$HOME/rail-evidence/cargo.test.json" ] && echo "have=true" >> "$GITHUB_OUTPUT" || true
+      # actions/cache also versions an entry by its compression: this VM has
+      # no zstd on PATH, so it saved gzip entries that a hosted runner (zstd)
+      # never matches. Put the pinned nixpkgs' zstd on PATH for the save.
+      - name: zstd for the evidence cache
+        if: ${{ always() && steps.evidence.outputs.have == 'true' }}
+        run: |
+          z="$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#zstd^bin' \
+               || nix build --no-link --print-out-paths 'nixpkgs#zstd^bin')"
+          echo "${z}/bin" >> "$GITHUB_PATH"
+          "${z}/bin/zstd" --version
       - name: Save rail evidence
         if: ${{ always() && steps.evidence.outputs.have == 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: ${{ runner.temp }}/rail-evidence
+          path: ~/rail-evidence
           key: rail-evidence-${{ runner.os }}-${{ runner.arch }}-cargo.test-${{ steps.evidence.outputs.sha }}
       - name: Test log
         if: ${{ always() }}
@@ -440,11 +495,29 @@ jobs:
           path: ${{ runner.temp }}/nextest-ci.log
           if-no-files-found: ignore
           retention-days: 7
-      - *bound-target
+      # Cargo never collects stale artifacts, and a persistent dir grows
+      # without bound (167 GB in two runs once). Keep exactly the latest
+      # build of each kind this instance runs and nothing else
+      # (scripts/target-sweep.py; a size cap below the working set evicts
+      # the run's own dependencies). always(): a red run gives the disk
+      # back too.
+      - name: Bound the target dir
+        if: ${{ always() }}
+        run: |
+          # The tmpfs test scratch is RAM: give it back even after a red
+          # run (tests killed by a timeout leave their worlds behind).
+          [ -n "${RUNTIME_DIRECTORY:-}" ] && rm -rf "${RUNTIME_DIRECTORY%%:*}/nextest-tmp" || true
+          # CARGO_INCREMENTAL=0 stops new incremental output but does not
+          # remove what earlier runs left.
+          rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
+          ${NIX_DEV} python3 scripts/target-sweep.py sweep --protect-hours 0 || true
+          ${NIX_DEV} python3 scripts/target-sweep.py status || true
+          du -sh "${CARGO_TARGET_DIR}" || true
+          df -h "${CARGO_TARGET_DIR}" | tail -1
 
   wasm:
     name: wasm check (task-app-web)
-    runs-on: [self-hosted, task-wasm]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.wasm == 'true' }}
@@ -452,8 +525,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
-      - *target-dir
-      # wasm32 target + ring's clang env come from the flake CI shell.
+      # wasm32 target + ring's clang env come from the flake CI shell,
+      # entered once for every later step; target dir ./target.
+      - uses: ./.github/actions/hosted-nix-rust
+        with:
+          kind: wasm
       #
       # Check via task-app-web, NOT `-p ui -p task-ui-core` directly.
       # getrandom on wasm needs BOTH halves: the `--cfg
@@ -463,8 +539,7 @@ jobs:
       # with "the wasm_js backend requires the wasm_js feature". The web app
       # pulls both leaves in anyway, so coverage is unchanged.
       - name: wasm check (task-app-web)
-        run: ${NIX_DEV} ${SWEEP_RUN} checks-wasm -- just ci-wasm
-      - *bound-target
+        run: just ci-wasm
 
   # The one REQUIRED check (its name is the main ruleset's required check,
   # unchanged from the single-job days). A required check that is skipped
