@@ -142,6 +142,7 @@ sane defaults (`TASK_DATA_ROOT=/data`, `TASK_SERVER_BIND=0.0.0.0:8080`).
 | `TASK_SERVER_BIND` | listen address |
 | `TASK_SERVER_ORG` | host only this org slug (unset = serve all under `orgs/`) |
 | `TASK_SERVER_PUBLIC_URL` | public base URL used to mint signed attachment URLs — set it behind any proxy (chart derives `https://<ingress.host>`) |
+| `TASK_BLOB_DOWNLOAD_TTL_SECONDS` | life of a signed attachment download URL (default and maximum 3600; it can only be shortened). The URL is bound to the org and caller that minted it, and redeeming it needs that caller's `Authorization: Bearer` |
 | `TASK_SERVER_SEALING_KEY` | hex key (`openssl rand -hex 32`) sealing at-rest webhook secrets / integration tokens; unset = dev fallback key + warning |
 | `TASK_FORGEJO_BASE_URL` / `TASK_FORGEJO_TOKEN` / `TASK_FORGEJO_BOT_TOKEN` / `TASK_FORGE_POLL_SECS` | forge sync (optional) |
 | `HERMES_BASE_URL` / `HERMES_SESSION_TOKEN` / `HERMES_DEFAULT_BOARD` / `HERMES_DEFAULT_PROFILE` / `HERMES_WEBHOOK_SECRET` | hermes agent-dispatch integration (optional) |

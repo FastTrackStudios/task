@@ -52,6 +52,7 @@ mod activity_e2e;
 mod anonymous_lane_stays_anonymous;
 mod asset_libraries_e2e;
 mod asset_migration_e2e;
+mod attachments_auth;
 mod attribution_e2e;
 mod auth;
 mod auth_live;

@@ -27,6 +27,24 @@ pub use routes::attachment_router;
 pub use service::{AttachmentServiceImpl, UploadSessionMap};
 pub use signed_url::{BlobToken, BlobTokenPurpose};
 
+/// The blob routes reach each hosted org through the live org map, so
+/// a token is always served by the org it was minted in, including an
+/// org created after the router was built.
+impl routes::BlobOrgs for crate::AppState {
+    fn attachments(&self, slug: &str) -> Option<std::sync::Arc<AttachmentServiceImpl>> {
+        self.org(slug)
+            .map(|org| std::sync::Arc::clone(&org.attachments))
+    }
+
+    fn identity(
+        &self,
+        slug: &str,
+    ) -> Option<std::sync::Arc<dyn architect_permissions::IdentityResolver>> {
+        self.org(slug)
+            .map(|org| org.permissions.identity_resolver())
+    }
+}
+
 /// Sniff an audio container mime from a blob's magic bytes — the catalog
 /// is in-memory only, so after a server restart uploaded blobs have no
 /// recorded mime; the media paths (vox `stat`, HTTP download) fall back to
