@@ -60,12 +60,21 @@ async fn sweep(node: &LocalNode, slug: &str) {
     .expect("the sweep did not finish");
 }
 
-async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
-    for _ in 0..300 {
-        if cond() {
-            return;
+/// Sweep `slug` on `node` until `cond` holds, the way the cadence would.
+///
+/// A sweep logs a peer it could not dial and moves on (a shut laptop is
+/// ordinary), so one slow dial on a loaded runner makes that pass a no-op.
+/// Sweeping once and then only waiting turned that into a 15 s timeout
+/// (#257); repeating the sweep is what a deployed node does anyway.
+async fn sweep_until(node: &LocalNode, slug: &str, what: &str, mut cond: impl FnMut() -> bool) {
+    for _ in 0..12 {
+        sweep(node, slug).await;
+        for _ in 0..100 {
+            if cond() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("timed out waiting for: {what}");
 }
@@ -219,14 +228,13 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
         )
         .await
         .expect("the phone writes a note");
-    sweep(&mac, &mac_slug).await;
     let on_mac = mac
         .state()
         .data_root
         .org(mac_slug.as_str())
         .vault_dir()
         .join(NOTE);
-    eventually("the note on the laptop", || {
+    sweep_until(&mac, &mac_slug, "the note on the laptop", || {
         std::fs::read_to_string(&on_mac).ok().as_deref() == Some(log)
     })
     .await;
@@ -249,12 +257,17 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
         .create(task::capture("Restring the Telecaster"))
         .await
         .expect("the laptop makes a task");
-    sweep(&phone, PERSONAL_SLUG).await;
     let on_phone = phone
         .state()
         .data_root
         .org(PERSONAL_SLUG)
         .vault_dir()
         .join(&made.path);
-    eventually("the laptop's task on the phone", || on_phone.is_file()).await;
+    sweep_until(
+        &phone,
+        PERSONAL_SLUG,
+        "the laptop's task on the phone",
+        || on_phone.is_file(),
+    )
+    .await;
 }
