@@ -65,12 +65,16 @@ pub const SIG_ASSET: &str = "SHA256SUMS.minisig";
 /// against this key, so a release whose assets were swapped by someone
 /// who can write releases, but does not hold the key, is refused.
 ///
-/// `None` until the key is provisioned: then nothing is installed, and
-/// `self-update` says why. Rotating it is a code change, released like
-/// any other; a node moves to the new key by installing a release signed
-/// with the old one. The release workflow reads this const to check the
-/// secret it signs with is this key's: keep it a `Some("<base64>")` literal.
-pub const RELEASE_SIGNING_KEY: Option<&str> = None;
+/// Provisioned by Keeper (STA-178); the secret half never leaves the
+/// `release-signing` environment and nix-secrets. A build whose const is
+/// `None` installs nothing, and `self-update` says why. Rotating it is a
+/// code change, released like any other; a node moves to the new key by
+/// installing a release signed with the old one. The release workflow
+/// reads this const to check the secret it signs with is this key's, and
+/// `scripts/install-node.sh` pins the same key (a test keeps them equal):
+/// keep it a `Some("<base64>")` literal.
+pub const RELEASE_SIGNING_KEY: Option<&str> =
+    Some("RWRh9Gk9qaStQMhku4THMidEYrQsmAEsm2dDprUkZxShEtqfIcroM8Od");
 
 /// The trusted comment the release workflow signs into `SHA256SUMS.minisig`
 /// (`minisign -t`). The signature covers it, so a valid signature lifted
@@ -660,10 +664,26 @@ TIeWoirwEQq6d9jQVGiSIWZwl0LKU3S9HmhRvL1iyUcoHPuiJx9ShisEh1e0TOKyROLeEZP6rotFyl3X
 
     #[test]
     fn the_pinned_release_key_decodes() {
-        if let Some(key) = RELEASE_SIGNING_KEY {
-            minisign_verify::PublicKey::from_base64(key).expect("RELEASE_SIGNING_KEY");
-        }
+        let key = RELEASE_SIGNING_KEY.expect("the release key is pinned (STA-446)");
+        minisign_verify::PublicKey::from_base64(key).expect("RELEASE_SIGNING_KEY");
         assert_eq!(trusted_comment("0.2.4"), "task-server v0.2.4 SHA256SUMS");
+    }
+
+    #[test]
+    fn the_install_script_pins_the_same_release_key() {
+        let script = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install-node.sh"),
+        )
+        .unwrap();
+        let key = RELEASE_SIGNING_KEY.expect("the release key is pinned (STA-446)");
+        assert!(
+            script.contains(&format!("RELEASE_KEY=\"{key}\"")),
+            "scripts/install-node.sh pins another release key than RELEASE_SIGNING_KEY"
+        );
+        assert!(
+            script.contains(r#"task-server $tag SHA256SUMS"#),
+            "scripts/install-node.sh checks another trusted comment than `trusted_comment`"
+        );
     }
 
     #[test]
@@ -683,6 +703,10 @@ TIeWoirwEQq6d9jQVGiSIWZwl0LKU3S9HmhRvL1iyUcoHPuiJx9ShisEh1e0TOKyROLeEZP6rotFyl3X
         assert!(
             wf.contains("RELEASE_SIGNING_KEY"),
             "the workflow checks its key against the pinned one"
+        );
+        assert!(
+            wf.contains("pins RELEASE_SIGNING_KEY but TASK_RELEASE_MINISIGN_KEY is not set"),
+            "a tag that pins a key must fail, not warn, when the signing secret is unset"
         );
     }
 
