@@ -1,0 +1,745 @@
+# `cargo xtask boundaries` (FastTrackStudios/architect xtask, STA-268): the
+# layer table for architect's docs/content/architecture/layout.md, applied to
+# Task. Run with `just ci-boundaries`.
+#
+# Each [[row]] is a package + feature set, resolved with `cargo tree -p`:
+#   L0  contract: resolved for wasm32; must not reach an engine/storage/host/UI
+#       package, a tokio runtime, or a transport-host/server architect feature.
+#   L4  ui: must not reach an engine/storage/host package or a server feature.
+#   L1  everything else in features/ (engine, storage, glue): recorded, not
+#       constrained, until each feature folds into one crate with flags.
+# Workspace rules: nothing outside apps/ enables a transport host by default;
+# every member has `[lints] workspace = true`; one architect source in
+# Cargo.lock; every feature crate has a row.
+#
+# Task still has *-proto / *-ui sibling crates. They keep explicit rows until
+# they fold in (one feature per PR, ADR "Migration").
+#
+# [baseline] is today's count per rule. Above it fails; below it fails until
+# you lower it here, so the numbers only go down.
+
+contract-target = "wasm32-unknown-unknown"
+host-dirs = ["apps"]
+unmapped-ok = ["features/email/examples", "features/email/email-integration-tests"]
+single-source = ["architect", "architect-*", "auth", "auth-*", "crdt", "crdt-*", "ui-snapshot"]
+
+[forbidden]
+engine = [
+    "sea-orm", "sea-orm-migration", "sqlx", "rusqlite", "libsql", "turso",
+    "axum", "tower-http", "iroh", "tokio-tungstenite",
+]
+ui = ["dioxus", "dioxus-core", "dioxus-web", "dioxus-desktop", "blitz-dom", "vello"]
+tokio-runtime = ["rt", "rt-multi-thread"]
+transport-host = ["host", "server", "server-axum", "http", "iroh", "dispatch-tokio"]
+architect-server = ["server-seaorm"]
+
+# A hand-written axum route describes a capability a second time; the trait
+# (#[architect::service] / #[architect::rpc], mounted by EngineHost) is the
+# one description.
+[[idiom]]
+name = "hand-routes"
+pattern = ".route("
+instead = "a #[architect::service] trait mounted by EngineHost"
+
+[baseline]
+# BASELINE-PLACEHOLDER
+
+# ── L0 contracts ──
+[[row]]
+package = "agent-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "attachments-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "collection-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "contacts-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "cookbook-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "email-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "files-daemon-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "files-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "files-storage-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "finance-contract"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "finance-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "fitness-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "git-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "goal-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "identity-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "inbox-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "inventory-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "label-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "links-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "live-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "locations-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "mealplan-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "media-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "milestone-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "mount-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "notify-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "org-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "pantry-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "prefs-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "project-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "recall-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "resources-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "scheduling-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "scripture-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "share-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "tag-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "task-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "threads-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "timer-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "vault-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "wiki-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "workflows-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+[[row]]
+package = "workstream-proto"
+layer = "L0"
+note = "sibling contract crate; fold into the feature crate"
+
+# ── L4 ui ──
+[[row]]
+package = "agent-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "bookings-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "email-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "files-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "finance-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "fitness-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "git-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "goal-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "inventory-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "links-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "locations-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "mealplan-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "recall-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "resources-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "scheduling-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "scripture-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "ssg"
+features = ["ui"]
+layer = "L4"
+
+[[row]]
+package = "ssg-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "task-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "threads"
+features = ["ui"]
+layer = "L4"
+
+[[row]]
+package = "threads-ui"
+layer = "L4"
+note = "sibling ui crate; fold in as a ui flag"
+
+[[row]]
+package = "view"
+layer = "L4"
+
+[[row]]
+package = "view-calendar"
+layer = "L4"
+
+[[row]]
+package = "view-gantt"
+layer = "L4"
+
+[[row]]
+package = "view-heatmap"
+layer = "L4"
+
+[[row]]
+package = "view-kanban"
+layer = "L4"
+
+[[row]]
+package = "view-knowledge-graph"
+layer = "L4"
+
+[[row]]
+package = "view-table"
+layer = "L4"
+
+# ── L1 engine / storage / glue (unconstrained until folded) ──
+[[row]]
+package = "agent-codex"
+layer = "L1"
+
+[[row]]
+package = "agent-dispatch"
+layer = "L1"
+
+[[row]]
+package = "agent-hermes"
+layer = "L1"
+
+[[row]]
+package = "agent-inbox"
+layer = "L1"
+
+[[row]]
+package = "agent-runners"
+layer = "L1"
+
+[[row]]
+package = "agent-tasks"
+layer = "L1"
+
+[[row]]
+package = "agent-wiki"
+layer = "L1"
+
+[[row]]
+package = "agent-worktree"
+layer = "L1"
+
+[[row]]
+package = "body"
+layer = "L1"
+
+[[row]]
+package = "collection"
+layer = "L1"
+
+[[row]]
+package = "contacts"
+layer = "L1"
+
+[[row]]
+package = "cookbook"
+layer = "L1"
+
+[[row]]
+package = "cycle"
+layer = "L1"
+
+[[row]]
+package = "email-autoconfig"
+layer = "L1"
+
+[[row]]
+package = "email-config"
+layer = "L1"
+
+[[row]]
+package = "email-imap"
+layer = "L1"
+
+[[row]]
+package = "email-jmap"
+layer = "L1"
+
+[[row]]
+package = "email-link"
+layer = "L1"
+
+[[row]]
+package = "email-maildir"
+layer = "L1"
+
+[[row]]
+package = "email-mux"
+layer = "L1"
+
+[[row]]
+package = "email-product"
+layer = "L1"
+
+[[row]]
+package = "email-secret"
+layer = "L1"
+
+[[row]]
+package = "email-smtp"
+layer = "L1"
+
+[[row]]
+package = "email-store"
+layer = "L1"
+
+[[row]]
+package = "email-sync"
+layer = "L1"
+
+[[row]]
+package = "exercises"
+layer = "L1"
+
+[[row]]
+package = "files"
+layer = "L1"
+
+[[row]]
+package = "files-client"
+layer = "L1"
+
+[[row]]
+package = "files-daemon"
+layer = "L1"
+
+[[row]]
+package = "files-domain"
+layer = "L1"
+
+[[row]]
+package = "files-fileprovider"
+layer = "L1"
+
+[[row]]
+package = "files-fuse"
+layer = "L1"
+
+[[row]]
+package = "files-storage"
+layer = "L1"
+
+[[row]]
+package = "files-store"
+layer = "L1"
+
+[[row]]
+package = "files-sync"
+layer = "L1"
+
+[[row]]
+package = "files-transcode"
+layer = "L1"
+
+[[row]]
+package = "files-webdav"
+layer = "L1"
+
+[[row]]
+package = "finance"
+layer = "L1"
+
+[[row]]
+package = "finance-db"
+layer = "L1"
+
+[[row]]
+package = "fitness"
+layer = "L1"
+
+[[row]]
+package = "git-config"
+layer = "L1"
+
+[[row]]
+package = "git-forgejo"
+layer = "L1"
+
+[[row]]
+package = "git-github"
+layer = "L1"
+
+[[row]]
+package = "goal"
+layer = "L1"
+
+[[row]]
+package = "identity"
+layer = "L1"
+
+[[row]]
+package = "inbox"
+layer = "L1"
+
+[[row]]
+package = "intake"
+layer = "L1"
+
+[[row]]
+package = "inventory"
+layer = "L1"
+
+[[row]]
+package = "links"
+layer = "L1"
+
+[[row]]
+package = "locations"
+layer = "L1"
+
+[[row]]
+package = "mealplan"
+layer = "L1"
+
+[[row]]
+package = "milestone"
+layer = "L1"
+
+[[row]]
+package = "mount"
+layer = "L1"
+
+[[row]]
+package = "notify"
+layer = "L1"
+
+[[row]]
+package = "org-snapshot"
+layer = "L1"
+
+[[row]]
+package = "pantry"
+layer = "L1"
+
+[[row]]
+package = "prefs"
+layer = "L1"
+
+[[row]]
+package = "project"
+layer = "L1"
+
+[[row]]
+package = "recall"
+layer = "L1"
+
+[[row]]
+package = "recipe-import"
+layer = "L1"
+
+[[row]]
+package = "resources"
+layer = "L1"
+
+[[row]]
+package = "scheduling"
+layer = "L1"
+
+[[row]]
+package = "scripture"
+layer = "L1"
+
+[[row]]
+package = "spaced-repetition"
+layer = "L1"
+
+[[row]]
+package = "ssg"
+layer = "L1"
+
+[[row]]
+package = "ssg-build"
+layer = "L1"
+
+[[row]]
+package = "ssg-vault"
+layer = "L1"
+
+[[row]]
+package = "tag"
+layer = "L1"
+
+[[row]]
+package = "task"
+layer = "L1"
+
+[[row]]
+package = "threads"
+layer = "L1"
+
+[[row]]
+package = "threads-db"
+layer = "L1"
+
+[[row]]
+package = "timer"
+layer = "L1"
+
+[[row]]
+package = "vault"
+layer = "L1"
+
+[[row]]
+package = "vault-collab"
+layer = "L1"
+
+[[row]]
+package = "vault-doc"
+layer = "L1"
+
+[[row]]
+package = "vault-entity"
+layer = "L1"
+
+[[row]]
+package = "vault-live"
+layer = "L1"
+
+[[row]]
+package = "vault-obsidian"
+layer = "L1"
+
+[[row]]
+package = "vault-sync-client"
+layer = "L1"
+
+[[row]]
+package = "wiki-archive"
+layer = "L1"
+
+[[row]]
+package = "wiki-extract"
+layer = "L1"
+
+[[row]]
+package = "wiki-graph"
+layer = "L1"
+
+[[row]]
+package = "wiki-live"
+layer = "L1"
+
+[[row]]
+package = "wiki-search"
+layer = "L1"
+
+[[row]]
+package = "workflows-orchestrator"
+layer = "L1"
+
+[[row]]
+package = "workouts"
+layer = "L1"
+
+[[row]]
+package = "workstream"
+layer = "L1"
+
