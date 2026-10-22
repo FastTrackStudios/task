@@ -271,6 +271,10 @@ means verified. The hotfix does not bump the version; the release commit does.
   (taken before the release deploy) and accept loss of writes since; or
   ship a forward fix as a hotfix. The release PR body and the GitHub
   Release both carry the migrations list.
+- The `production` branch is moved only by `deploy.yml` (after the images
+  are pushed); starcommand's Argo `task` Application follows it. Roll back
+  by dispatching `deploy` with the older tag (moves `production` back);
+  never push to it by hand.
 - Never delete or move a published `vX.Y.Z` tag. A bad release is
   superseded by the next one.
 - Reverting this model itself (deploys on every push to main again) is one

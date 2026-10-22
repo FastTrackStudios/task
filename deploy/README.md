@@ -18,12 +18,12 @@ image is a `dockerTools.streamLayeredImage` defined in the repo-root
 itself a Nix derivation (`task-webapp`'s `dx build`), so the images
 self-contain their content with no out-of-band bundle step.
 
-Prebuilt images (pushed by `.forgejo/workflows/images.yml` via skopeo to
-the in-cluster LAN registry):
+Prebuilt images (pushed by `.github/workflows/deploy.yml` on a release tag,
+via skopeo to the in-cluster LAN registry):
 
 | image | tags |
 |---|---|
-| `registry.starcommand.live:30050/task-server` | `latest` (main), `dev`, `sha-<short>` |
+| `registry.starcommand.live:30050/task-server` | `latest` (the last release), `dev`, `sha-<short>`, `v<version>` |
 | `registry.starcommand.live:30050/task-web`    | same |
 
 ## The one architectural rule: same origin
@@ -261,6 +261,8 @@ against the instance to surface stamp drift / migration needs. Roll back by
 pinning the previous `sha-<short>` image tag (data is forward-written —
 verify a backup exists before big jumps).
 
-Sequence for k8s: bump the image tag (or let ArgoCD follow `dev`/`main`),
+Sequence for k8s: a release tag pushes the images and moves the `production`
+branch (deploy.yml); starcommand's ArgoCD Application follows `production`
+(chart) and the image-updater follows the `latest` digest (images),
 the server pod recreates (`Recreate` strategy frees the PVC first), web pods
 roll whenever — they are stateless.
