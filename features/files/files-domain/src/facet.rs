@@ -549,11 +549,7 @@ impl FacetMap {
             .chain(self.project.values().cloned())
             // Every capability's tools write a session file, so a
             // project holding any of them can be subscribed by session.
-            .chain(
-                (!self.capabilities.is_empty())
-                    .then(|| Facet::new(SESSIONS))
-                    .into_iter(),
-            )
+            .chain((!self.capabilities.is_empty()).then(|| Facet::new(SESSIONS)))
             .collect();
         out.sort();
         out.dedup();
