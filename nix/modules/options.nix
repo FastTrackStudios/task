@@ -55,7 +55,7 @@
       };
       cargoRail = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
-        description = "cargo-rail release binary (null where upstream ships no asset).";
+        description = "cargo-rail built from its release tag (null disables it in the shells).";
       };
     };
   });
