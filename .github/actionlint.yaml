@@ -1,8 +1,12 @@
 # actionlint: the self-hosted runner labels this repo's workflows use.
-# `task` / `task-deploy` — Task's runner pools on THEBATTLESHIP;
+# `task` / `task-deploy` / `task-tests` / `task-lint` / `task-wasm` — Task's
+# runner pools on THEBATTLESHIP (one label per build kind for checks.yml);
 # `airlock` — the Mac that builds and signs the Apple apps.
 self-hosted-runner:
   labels:
     - task
     - task-deploy
+    - task-tests
+    - task-lint
+    - task-wasm
     - airlock
