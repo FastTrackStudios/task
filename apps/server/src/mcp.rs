@@ -3562,7 +3562,9 @@ fn call_tool(
                 let day = date_of(&e.start);
                 from.as_deref().is_none_or(|f| day >= f)
                     && to.as_deref().is_none_or(|t| day <= t)
-                    && external_ref.as_ref().is_none_or(|r| e.external_ref.as_ref() == Some(r))
+                    && external_ref
+                        .as_ref()
+                        .is_none_or(|r| e.external_ref.as_ref() == Some(r))
                     && linked_to.as_deref().is_none_or(|n| e.links_to(n))
                     && (include_tombstoned || e.tombstone.is_none())
             });
@@ -3877,8 +3879,9 @@ fn call_tool(
                     ));
                 }
             };
-            let base = vault::bases::parse(&text)
-                .map_err(|e| ToolFailure::Message(format!("`{source}` is not a valid base: {e}")))?;
+            let base = vault::bases::parse(&text).map_err(|e| {
+                ToolFailure::Message(format!("`{source}` is not a valid base: {e}"))
+            })?;
             // Every note in THIS org's vault is the row set (and the
             // link-resolution universe) — read through the same
             // VaultSync backend read_note uses, so nothing outside the
@@ -3912,7 +3915,10 @@ fn call_tool(
                 match org.vault_sync.get_file(VAULT_ID, &f.path) {
                     Ok(bytes) => {
                         bytes_read = bytes_read.saturating_add(bytes.0.len() as u64);
-                        notes.push((f.path.clone(), String::from_utf8_lossy(&bytes.0).into_owned()));
+                        notes.push((
+                            f.path.clone(),
+                            String::from_utf8_lossy(&bytes.0).into_owned(),
+                        ));
                     }
                     Err(e) => {
                         tracing::warn!(path = %f.path, error = ?e, "query_base: note unreadable, skipped");
@@ -3924,12 +3930,11 @@ fn call_tool(
                 notes.iter().map(|(p, s)| (p.as_str(), s.as_str())),
             );
             let view = arg_str(args, "view");
-            let tables =
-                vault::obsidian::run_base(&base, &rows, view.as_deref()).map_err(|e| {
-                    let names: Vec<String> =
-                        base.views.iter().map(|v| format!("`{}`", v.name)).collect();
-                    ToolFailure::Message(format!("{e}; the base's views are: {}", names.join(", ")))
-                })?;
+            let tables = vault::obsidian::run_base(&base, &rows, view.as_deref()).map_err(|e| {
+                let names: Vec<String> =
+                    base.views.iter().map(|v| format!("`{}`", v.name)).collect();
+                ToolFailure::Message(format!("{e}; the base's views are: {}", names.join(", ")))
+            })?;
             let limit = arg_limit(args);
             let views: Vec<Value> = tables
                 .into_iter()
@@ -6251,9 +6256,16 @@ fn arg_external_ref(args: &Value) -> Result<Option<scheduling_proto::ExternalRef
     match args.get("external_ref") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
-        Some(Value::String(s)) => scheduling_proto::ExternalRef::parse(s).map(Some).ok_or_else(bad),
+        Some(Value::String(s)) => scheduling_proto::ExternalRef::parse(s)
+            .map(Some)
+            .ok_or_else(bad),
         Some(Value::Object(o)) => {
-            let part = |k: &str| o.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("");
+            let part = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("")
+            };
             let (system, id) = (part("system"), part("id"));
             if system.is_empty() || id.is_empty() || system.contains(':') {
                 return Err(bad());
@@ -6274,13 +6286,21 @@ fn arg_event_links(args: &Value) -> Result<Option<scheduling_proto::EventLinks>,
     let Some(v) = args.get("links").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
-    let items = v
-        .as_array()
-        .ok_or_else(|| ToolFailure::Message("`links` must be an array of {relation, target}".into()))?;
+    let items = v.as_array().ok_or_else(|| {
+        ToolFailure::Message("`links` must be an array of {relation, target}".into())
+    })?;
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let relation = item.get("relation").and_then(Value::as_str).unwrap_or("").trim();
-        let target = item.get("target").and_then(Value::as_str).unwrap_or("").trim();
+        let relation = item
+            .get("relation")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let target = item
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
         if !scheduling_proto::EventLink::valid_relation(relation) {
             return Err(ToolFailure::Message(format!(
                 "link relation `{relation}` must be a lowercase slug (e.g. 'for') and not one of \

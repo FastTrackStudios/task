@@ -281,9 +281,18 @@ mod tests {
 
     #[test]
     fn link_targets_normalize_to_wikilinks() {
-        assert_eq!(EventLink::new("for", "Gigs/caa-2026").target, "[[Gigs/caa-2026]]");
-        assert_eq!(EventLink::new("for", "Gigs/caa-2026.md").target, "[[Gigs/caa-2026]]");
-        assert_eq!(EventLink::new("for", "[[Gigs/caa-2026]]").target, "[[Gigs/caa-2026]]");
+        assert_eq!(
+            EventLink::new("for", "Gigs/caa-2026").target,
+            "[[Gigs/caa-2026]]"
+        );
+        assert_eq!(
+            EventLink::new("for", "Gigs/caa-2026.md").target,
+            "[[Gigs/caa-2026]]"
+        );
+        assert_eq!(
+            EventLink::new("for", "[[Gigs/caa-2026]]").target,
+            "[[Gigs/caa-2026]]"
+        );
         let l = EventLink::new("for", "[[Gigs/caa-2026|CAA]]");
         assert_eq!(l.target_path(), "Gigs/caa-2026");
         assert!(l.points_at("Gigs/caa-2026.md"));

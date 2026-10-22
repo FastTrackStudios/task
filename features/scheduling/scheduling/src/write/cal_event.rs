@@ -78,8 +78,8 @@ pub fn merge_cal_event_page(e: &CalEvent, existing: Option<&str>) -> Result<Stri
         // Reserved, but Obsidian's rather than the event's: kept.
         let obsidian = matches!(key, "tags" | "aliases" | "cssclasses");
         let owned = CalEvent::RESERVED_KEYS.contains(&key) && !obsidian;
-        let is_link = EventLink::valid_relation(key)
-            && crate::parse::cal_event::wikilink_values(v).is_some();
+        let is_link =
+            EventLink::valid_relation(key) && crate::parse::cal_event::wikilink_values(v).is_some();
         if owned || is_link || map.contains_key(k) {
             continue;
         }
@@ -113,7 +113,10 @@ mod tests {
         .into();
         e.external_ref = ExternalRef::parse("pco:plan_time:123");
         let page = serialize_cal_event(&e).unwrap();
-        assert!(page.contains("[[Gigs/caa-2026]]") && page.contains("[[Projects/CAA]]"), "{page}");
+        assert!(
+            page.contains("[[Gigs/caa-2026]]") && page.contains("[[Projects/CAA]]"),
+            "{page}"
+        );
         let (fm, _) = crate::scan::frontmatter_split(&page).expect("frontmatter");
         let parsed = crate::parse::parse_cal_event("Records/events/evt-1.md", fm).expect("parse");
         // Grouped by relation on disk, so the order comes back grouped.
@@ -141,7 +144,10 @@ mod tests {
         assert_eq!(body, "\n# Sunday Service\n\n1. [[Rise and Shine]]\n");
         let map: serde_yaml::Mapping = serde_yaml::from_str(fm).unwrap();
         assert_eq!(map.get("type").and_then(|v| v.as_str()), Some("event"));
-        assert_eq!(map.get("experience").and_then(|v| v.as_str()), Some("setlist"));
+        assert_eq!(
+            map.get("experience").and_then(|v| v.as_str()),
+            Some("setlist")
+        );
         assert!(map.get("tags").is_some());
         let back = crate::parse::parse_cal_event("Records/events/Sunday Service.md", fm).unwrap();
         assert_eq!(back.start, "2026-08-16T10:00:00Z");

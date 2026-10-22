@@ -58,8 +58,7 @@ pub use wordcount::{WordCount, page_wordcount, vault_wordcount};
 
 pub mod base_query;
 pub use base_query::{
-    QueryError, find_base, query_all_views, query_view, rows_from_markdown, run_base,
-    vault_to_rows,
+    QueryError, find_base, query_all_views, query_view, rows_from_markdown, run_base, vault_to_rows,
 };
 
 pub mod mutate;
