@@ -220,8 +220,7 @@ crdt = { workspace = true, features = ["vox"] }
 # Mounted per org as the `DocSync` service (and the per-file half
 # of `DocPresence` — see `presence::PresenceRouter`).
 vault-collab = { workspace = true }
-# The doc ⇄ markdown codec + the replica lineage rule the DocSync guard
-# applies (`doc_guard`).
+# The doc ⇄ markdown codec (the device replica, the records' documents).
 vault-doc = { workspace = true }
 chrono.workspace = true
 architect = { workspace = true, features = ["server", "local"] }

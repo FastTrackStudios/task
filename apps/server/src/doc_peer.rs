@@ -1,44 +1,47 @@
-//! Documents between nodes (`offline.peers`), the node's two halves.
+//! Documents between nodes (`offline.peers`): the vault's half of
+//! `crdt::peer`.
 //!
 //! Every native install runs this crate's `AppState` (a server, a laptop,
 //! a phone), so every one of them is a node, and a host is only the node
-//! that stays up. The vault's documents move between any two of them by
-//! the same exchange — no node is the place documents come from.
+//! that stays up. The lane, the exchange and the lineage refusal are
+//! architect's (`crdt::peer`); what is left here is the vault's:
 //!
-//! - **Serving**: [`DocPeerHost`] is the `DocPeer` lane, mounted on the
-//!   org router. The router is served over the org's iroh endpoint with
-//!   the caller's proved endpoint id as its identity, the gate lets a
-//!   host reach `docs/replica` and nothing else of the vault
-//!   (`files::peer::HostEngine`), and this checks the rest: the caller is
-//!   an admitted host that keeps content — the org's own devices, never a
-//!   federated server holding structure.
-//! - **Pulling**: [`pull_peer`] runs inside the device sweep
-//!   (`device_sync::sweep`), once per admitted peer: list what the peer
-//!   holds, and exchange each document whose file differs from ours
-//!   (`vault_doc::peer::exchange`). The exchange goes through this node's
-//!   own registry as an ordinary client session, so what arrives is
-//!   persisted, relayed to anyone with the document open here, and
-//!   written to the file by the write-behind — which is also what tells
-//!   the task stream (`task_sync`) a task arrived.
+//! - **Admission** ([`host`]): the router is served over the org's iroh
+//!   endpoint with the caller's proved endpoint id as its identity, the
+//!   gate lets a host reach `docs/replica` and nothing else of the vault
+//!   (`files::peer::HostEngine`), and [`keeps_content`] checks the rest:
+//!   the caller is an admitted host that keeps content, the org's own
+//!   devices, never a federated server holding structure.
+//! - **Path mapping** ([`VaultDocs`]): a document is a vault file, named
+//!   `<vault_id>/<path>`, its id the one both nodes derive from the pair
+//!   (`vault_proto::collab_doc_id`), its digest the file's sha.
+//! - **Pulling** ([`pull_peer`]): once per admitted peer inside the
+//!   device sweep (`device_sync::sweep`): list what the peer holds and
+//!   exchange each document whose file differs from ours
+//!   (`crdt::peer::exchange`) through this node's own registry, so what
+//!   arrives is persisted, relayed to anyone with the document open here,
+//!   and written to the file by the write-behind, which is also what
+//!   tells the task stream (`task_sync`) a task arrived.
 //!
 //! One span per peer per sweep, `doc_peer/pull`, with the counts:
 //! `doc_peer.listed`, `doc_peer.exchanged`, `doc_peer.pulled`,
 //! `doc_peer.foreign`, `doc_peer.failed`, and `doc_peer.outcome`
-//! (`ok` | `unreachable` | `refused`). Never a path.
+//! (`ok` | `unreachable`). Never a path.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use architect::iroh_link::{self, iroh};
-use architect::{LayerRouter, LocalServer, Scope};
 use architect_permissions::Principal;
 use architect_telemetry::wide;
-use crdt::registry::DocRegistry;
-use crdt::sync::{DocSync, DocSyncClient, SyncDown, SyncError};
+use crdt::peer::{
+    DocAt, DocCatalog, DocPeerClient, Exchanged, HeldDoc, PeerLane, PullReport, SelfLane,
+    SessionEnd,
+};
+use crdt::sync::SyncError;
 use files_domain::{Content, HostId};
 use tracing::Instrument;
-use vault_doc::SessionEnd;
-use vault_doc::peer::{DocAt, DocEntry, DocPeer, DocPeerClient, Exchanged, PeerDoc};
+use uuid::Uuid;
 use vault_proto::collab_doc_id;
 
 use crate::OrgAppState;
@@ -47,75 +50,73 @@ use crate::OrgAppState;
 /// this pass.
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One document's exchange. Generous — a long history over a slow link —
+/// One document's exchange. Generous (a long history over a slow link)
 /// but bounded, so one stuck session cannot stall the sweep.
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The `DocPeer` lane over an org's vault documents.
+pub type DocPeerHost = crdt::peer::DocPeerHost<VaultDocs>;
+
+/// The org's `DocPeer` lane: its vault documents, to the hosts that keep
+/// its content.
+#[must_use]
+pub fn host(org: &OrgAppState) -> DocPeerHost {
+    let files = org.files.clone();
+    crdt::peer::DocPeerHost::new(
+        org.vault_collab.registry().clone(),
+        VaultDocs(org.vault_sync.clone()),
+        move |endpoint| keeps_content(&files, endpoint),
+    )
+}
+
+/// The peer at `endpoint` is admitted to this org and keeps content. The
+/// gate has already let a host through to `docs/replica`; this is the
+/// half it cannot see (the admission's hosting) and the half that holds
+/// when the gate only observes.
+fn keeps_content(files: &files::FilesBackend, endpoint: &str) -> bool {
+    files
+        .admits(&HostId(endpoint.to_owned()))
+        .is_some_and(|h| h.content != Content::None)
+}
+
+/// An org's vault files as `crdt::peer` documents.
 #[derive(Clone)]
-pub struct DocPeerHost {
-    pub registry: DocRegistry,
-    pub sync: vault::Backend,
-    pub files: files::FilesBackend,
-}
+pub struct VaultDocs(pub vault::Backend);
 
-impl DocPeerHost {
-    #[must_use]
-    pub fn of(org: &OrgAppState) -> Self {
-        Self {
-            registry: org.vault_collab.registry().clone(),
-            sync: org.vault_sync.clone(),
-            files: org.files.clone(),
-        }
-    }
-
-    /// The caller is an admitted peer that keeps content. The gate has
-    /// already let a host through to `docs/replica`; this is the half it
-    /// cannot see (the admission's hosting) and the half that holds when
-    /// the gate only observes.
-    fn admit(&self) -> Result<(), SyncError> {
-        let Some(Principal::Host { endpoint }) = architect::permissions_gate::caller() else {
-            return Err(SyncError::Internal(
-                "the document lane is for this org's nodes".into(),
-            ));
-        };
-        match self.files.admits(&HostId(endpoint)) {
-            Some(h) if h.content != Content::None => Ok(()),
-            _ => Err(SyncError::Internal(
-                "this peer keeps no content of this org".into(),
-            )),
-        }
-    }
-}
-
-impl DocPeer for DocPeerHost {
-    async fn list(&self) -> Result<Vec<DocEntry>, SyncError> {
-        self.admit()?;
-        let sync = self.sync.clone();
+impl DocCatalog for VaultDocs {
+    async fn held(&self) -> Result<Vec<HeldDoc>, SyncError> {
+        let sync = self.0.clone();
         tokio::task::spawn_blocking(move || held(&sync))
             .await
             .map_err(|e| SyncError::Internal(format!("list: {e}")))
     }
 
-    async fn sync(
-        &self,
-        at: DocAt,
-        from: Vec<u8>,
-        up: vox::Rx<Vec<u8>>,
-        down: vox::Tx<SyncDown>,
-    ) -> Result<(), SyncError> {
-        self.admit()?;
-        let doc_id = self
-            .sync
-            .register_collab(&at.vault_id, &at.path)
-            .map_err(|e| SyncError::Internal(e.to_string()))?;
-        crate::doc_guard::same_lineage(&self.registry, doc_id, &from).await?;
-        self.registry.sync(doc_id, from, up, down).await
+    /// Registered here if it was not (a document this node has never
+    /// been asked for, or one it does not hold yet: the session then
+    /// makes it).
+    async fn resolve(&self, at: &DocAt) -> Result<Uuid, SyncError> {
+        let (vault_id, path) = route(at).ok_or_else(|| {
+            SyncError::Internal(format!("`{}` is not a vault document of that id", at.name))
+        })?;
+        self.0
+            .register_collab(vault_id, path)
+            .map_err(|e| SyncError::Internal(e.to_string()))
     }
 }
 
+/// The `(vault_id, path)` `at` names: its name split at the `/` whose
+/// halves derive `at.doc_id`, so a vault id holding a `/` still routes,
+/// and a name that does not match its id routes nowhere.
+fn route(at: &DocAt) -> Option<(&str, &str)> {
+    at.name.match_indices('/').find_map(|(i, _)| {
+        let (vault_id, rest) = at.name.split_at(i);
+        let path = rest.strip_prefix('/')?;
+        (collab_doc_id(vault_id, path) == at.doc_id).then_some((vault_id, path))
+    })
+}
+
 /// Every markdown file in every vault `sync` serves, with its sha.
-fn held(sync: &vault::Backend) -> Vec<DocEntry> {
+fn held(sync: &vault::Backend) -> Vec<HeldDoc> {
     let mut out = Vec::new();
     for vault_id in sync.vault_ids() {
         // Markdown only, filtered before hashing: every other file in
@@ -124,32 +125,16 @@ fn held(sync: &vault::Backend) -> Vec<DocEntry> {
         let Ok(manifest) = sync.manifest_where(&vault_id, |p| p.ends_with(".md")) else {
             continue;
         };
-        out.extend(manifest.files.into_iter().map(|f| DocEntry {
-            vault_id: vault_id.clone(),
-            path: f.path,
-            sha256: f.sha256,
+        out.extend(manifest.files.into_iter().map(|f| HeldDoc {
+            doc_id: collab_doc_id(&vault_id, &f.path),
+            name: format!("{vault_id}/{}", f.path),
+            digest: f.sha256,
         }));
     }
     out
 }
 
-/// What one pull from one peer did.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct PullReport {
-    /// Documents the peer holds.
-    pub listed: usize,
-    /// Documents whose file differed here, so were exchanged.
-    pub exchanged: usize,
-    /// Of those, documents the peer had history of that this node lacked.
-    pub pulled: usize,
-    /// Two nodes that made two different documents of one file — left
-    /// as they are on both (see `vault_doc::peer::exchange`).
-    pub foreign: usize,
-    /// Refused, dropped or timed out — tried again next sweep.
-    pub failed: usize,
-}
-
-/// Pull `host`'s documents into `org` — and, in the same sessions, push
+/// Pull `host`'s documents into `org` and, in the same sessions, push
 /// ours to it. One span; see the module docs.
 pub async fn pull_peer(
     org: &OrgAppState,
@@ -184,6 +169,10 @@ pub async fn pull_peer(
     .await
 }
 
+/// `crdt::peer::pull`, with each document registered here before its
+/// exchange: this node's registry admits only a document its vault
+/// registered, and only the peer's listing names one this node has never
+/// opened.
 async fn pull(
     org: &OrgAppState,
     endpoint: &iroh::Endpoint,
@@ -195,51 +184,51 @@ async fn pull(
         .await
         .map_err(|e| format!("list on {}: {e:?}", host.0))?;
 
-    let sync = org.vault_sync.clone();
-    let ours: HashMap<(String, String), String> = tokio::task::spawn_blocking(move || {
-        held(&sync)
-            .into_iter()
-            .map(|e| ((e.vault_id, e.path), e.sha256))
-            .collect()
-    })
-    .await
-    .map_err(|e| format!("list here: {e}"))?;
+    let docs = VaultDocs(org.vault_sync.clone());
+    let ours: HashMap<Uuid, String> = docs
+        .held()
+        .await
+        .map_err(|e| format!("list here: {e}"))?
+        .into_iter()
+        .map(|d| (d.doc_id, d.digest))
+        .collect();
 
     // This node's registry, as a client of itself: the exchange is then
-    // an ordinary session on both sides.
-    let scope = Scope::new();
-    let router = LayerRouter::new().with(
-        crdt::sync::doc_sync_service_descriptor(),
-        crdt::sync::DocSyncDispatcher::new(org.vault_collab.registry().clone()),
-    );
-    let local: DocSyncClient = LocalServer::serve(router, scope.clone())
-        .establish()
-        .await
-        .map_err(|e| format!("local registry: {e}"))?;
+    // an ordinary session on both sides, and the registry's authorizer
+    // sees who is pulling.
+    let local = SelfLane::open(
+        org.vault_collab.registry().clone(),
+        Principal::Service {
+            name: "doc-peer".into(),
+        },
+    )
+    .await
+    .map_err(|e| format!("local registry: {e}"))?;
 
     let mut report = PullReport {
         listed: theirs.len(),
         ..PullReport::default()
     };
     for entry in &theirs {
-        let key = (entry.vault_id.clone(), entry.path.clone());
-        if ours.get(&key) == Some(&entry.sha256) {
+        if ours.get(&entry.doc_id) == Some(&entry.digest) {
             continue;
         }
-        let Ok(doc_id) = org.vault_sync.register_collab(&entry.vault_id, &entry.path) else {
+        let at = DocAt {
+            doc_id: entry.doc_id,
+            name: entry.name.clone(),
+        };
+        if docs.resolve(&at).await.is_err() {
             report.failed += 1;
             continue;
-        };
-        debug_assert_eq!(doc_id, collab_doc_id(&entry.vault_id, &entry.path));
+        }
         report.exchanged += 1;
-        let remote = PeerDoc {
+        let remote = PeerLane {
             client: &peer,
-            vault_id: &entry.vault_id,
-            path: &entry.path,
+            name: &entry.name,
         };
         let done = tokio::time::timeout(
             EXCHANGE_TIMEOUT,
-            vault_doc::peer::exchange(doc_id, &local, &remote),
+            crdt::peer::exchange(entry.doc_id, &local, &remote),
         )
         .await;
         match done {
@@ -249,7 +238,6 @@ async fn pull(
             Ok(Err(_)) | Err(_) => report.failed += 1,
         }
     }
-    scope.close().await;
     Ok(report)
 }
 
@@ -270,4 +258,37 @@ async fn dial(
     files_sync::Dialled::establish(link)
         .await
         .map_err(|e| format!("the document lane on {peer}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(vault_id: &str, path: &str) -> DocAt {
+        DocAt {
+            doc_id: collab_doc_id(vault_id, path),
+            name: format!("{vault_id}/{path}"),
+        }
+    }
+
+    #[test]
+    fn a_name_routes_back_to_its_file() {
+        let a = at("default", "Notes/today.md");
+        assert_eq!(route(&a), Some(("default", "Notes/today.md")));
+        // A vault id with a `/` in it: the id picks the split.
+        let b = at("assets/songs", "Charts/x.md");
+        assert_eq!(route(&b), Some(("assets/songs", "Charts/x.md")));
+    }
+
+    #[test]
+    fn a_name_that_is_not_its_id_routes_nowhere() {
+        let mut a = at("default", "Notes/today.md");
+        a.doc_id = collab_doc_id("default", "Notes/other.md");
+        assert_eq!(route(&a), None);
+        let bare = DocAt {
+            doc_id: collab_doc_id("default", ""),
+            name: "default".into(),
+        };
+        assert_eq!(route(&bare), None);
+    }
 }

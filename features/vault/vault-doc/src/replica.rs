@@ -86,10 +86,9 @@ impl Persistence for SharedStore {
 
 /// Something a replica can hold a sync session over: the `DocSync` call,
 /// whoever answers it. A device's replica dials the server's
-/// [`DocSyncClient`]; a node exchanging documents with a peer dials the
-/// peer's document lane (`crate::peer::PeerDoc`) and its own registry —
-/// one session shape, so every guarantee here (the outbox, durable
-/// imports, acknowledgement, the lineage refusal) holds on both.
+/// [`DocSyncClient`]. A node exchanging documents with a peer uses
+/// `crdt::peer` instead, whose lanes follow the same session shape and
+/// the same lineage refusal ([`FOREIGN_LINEAGE`] is the same prefix).
 pub trait SyncLane {
     fn sync(
         &self,

@@ -666,7 +666,7 @@ dialable and dials. A device joins an org held elsewhere with
 the peer's `enroll_device` (Settings → "Keep on this device", which runs
 both halves over the session held on the host). Verified (two nodes, no
 host) by `local_node_e2e`. **Documents move between nodes**: every node
-serves the `DocPeer` lane (`vault_doc::peer`, gated on `docs/replica`,
+serves the `DocPeer` lane (`crdt::peer`, via `doc_peer::host`, gated on `docs/replica`,
 which `HostEngine` grants an admitted host and the lane narrows to hosts
 that keep content), and every sweep (`device_sync::sweep`, now started for
 orgs joined after boot too) pulls each admitted peer's documents through
@@ -695,8 +695,8 @@ convention: `vault_doc::body::shown`). `offline.doc.create`/`materialise` for ta
 ## Offline — the text side ([`offline.md`](offline.md))
 
 The codec and the device replica are `features/vault/vault-doc`
-(wasm-clean, no Dioxus); the server half is `vault-collab` +
-`apps/server/src/doc_guard.rs`; the shell's driver is
+(wasm-clean, no Dioxus); the server half is `vault-collab` (its
+`DocSync` impl is the attach guard); the shell's driver is
 `crates/ui/src/doc_replica.rs`, used by the note editor
 (`collab.rs`, `pages/note_view.rs`) and available to `DocBody`.
 

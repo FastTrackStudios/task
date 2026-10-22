@@ -1194,11 +1194,7 @@ pub fn mounts() -> Vec<Mount> {
             SHARING,
         ),
         m("core", crdt::sync::doc_sync_service_descriptor(), DOC_SYNC),
-        m(
-            "core",
-            vault_doc::peer::doc_peer_service_descriptor(),
-            DOC_PEER,
-        ),
+        m("core", crdt::peer::doc_peer_service_descriptor(), DOC_PEER),
         m(
             "core",
             crdt::sync::doc_presence_service_descriptor(),
