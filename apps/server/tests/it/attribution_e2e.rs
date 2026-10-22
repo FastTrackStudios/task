@@ -61,6 +61,27 @@ async fn call(http: &reqwest::Client, url: &str, key: &str, name: &str, args: Va
     serde_json::from_str(text).unwrap_or_else(|_| json!(text))
 }
 
+/// The error text of one tool call that must fail as a tool error.
+async fn refused(http: &reqwest::Client, url: &str, key: &str, name: &str, args: Value) -> String {
+    let res = rpc(
+        http,
+        url,
+        key,
+        "tools/call",
+        json!({ "name": name, "arguments": args }),
+    )
+    .await;
+    let result = &res["result"];
+    assert!(
+        result["isError"].as_bool().unwrap_or(false),
+        "{name} should have been refused: {res}"
+    );
+    result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
 fn rows(v: &Value, key: &str) -> Vec<Value> {
     v.get(key)
         .and_then(Value::as_array)
@@ -550,4 +571,173 @@ async fn an_employee_gets_the_work_an_assistant_made_and_the_handoff_is_logged()
     };
     assert_eq!(entry.actor_id, me.to_string(), "{entry:?}");
     assert_eq!(entry.actor_name, "Cody", "{entry:?}");
+}
+
+// t[verify attribution.assignee.member]
+#[tokio::test(flavor = "multi_thread")]
+async fn work_is_only_assigned_to_accounts_in_the_org() {
+    let _env = crate::support::env_lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let node = LocalNode::open(NodeOptions {
+        owner_name: "Cody".into(),
+        peers: false,
+        ..NodeOptions::at(root.path())
+    })
+    .await
+    .expect("the node opens");
+    let base = node.serve_loopback().await.unwrap();
+    let url = format!("{}/mcp", base.replacen("ws://", "http://", 1));
+    let http = reqwest::Client::new();
+
+    let owner = node.owner().clone();
+    let anon = node.caller(&owner.org, None).await.unwrap();
+    let session = AuthServiceClient::from_vox_lane(anon, None)
+        .sign_in_email_password(SignInEmailPassword {
+            email: owner.email.clone(),
+            password: owner.password.clone(),
+            ip_address: None,
+            user_agent: Some("attribution-e2e".into()),
+        })
+        .await
+        .expect("the person signs in");
+    let me = session.user.id;
+    let token = session.token.clone();
+    node.admit_account(me, &[PERSONAL_SLUG.to_owned()], "admin")
+        .await
+        .unwrap();
+    let home = node
+        .state()
+        .home_identity
+        .clone()
+        .expect("a node has a home org");
+
+    // A member: Priya, made a moment ago, so the account directory
+    // has never seen her.
+    let priya = home
+        .auth
+        .auth
+        .create_email_password_user(architect_auth::CreateEmailPasswordUser {
+            email: "priya@acme.test".into(),
+            password: "correct-horse-battery-staple".into(),
+            name: Some("Priya".into()),
+            username: None,
+            image: None,
+            metadata_json: None,
+            ip_address: None,
+            user_agent: None,
+        })
+        .await
+        .expect("Priya signs up");
+    let priya_id = priya.user.id;
+    node.admit_account(priya_id, &[PERSONAL_SLUG.to_owned()], "member")
+        .await
+        .unwrap();
+    // A bot in the org, and one that was granted no org at all.
+    let atlas = bots::create(
+        &home.auth,
+        &home.memberships,
+        me,
+        "Atlas",
+        &OrgChoice::Some(vec![PERSONAL_SLUG.to_owned()]),
+        Tools::All,
+        Kind::Personal,
+    )
+    .await
+    .expect("Atlas is made");
+    let stray = bots::create(
+        &home.auth,
+        &home.memberships,
+        me,
+        "Stray",
+        &OrgChoice::None,
+        Tools::All,
+        Kind::Team,
+    )
+    .await
+    .expect("the stray bot is made");
+
+    let made = call(
+        &http,
+        &url,
+        &token,
+        "create_task",
+        json!({ "text": "Print the setlists", "org": PERSONAL_SLUG }),
+    )
+    .await;
+    let id = made["id"].as_str().expect("an id").to_owned();
+
+    // Nobody: a well-formed id no store knows, a bot outside the org,
+    // and something that isn't an account id at all.
+    let ghost = "00000000-0000-0000-0000-00000000beef";
+    for (who, says) in [
+        (format!("human:{ghost}"), "isn't in this org"),
+        (format!("human:{}", stray.bot.id), "isn't in this org"),
+        ("human:priya".to_owned(), "not an account id"),
+    ] {
+        let err = refused(
+            &http,
+            &url,
+            &token,
+            "update_task",
+            json!({ "id": id, "assignees": [who], "org": PERSONAL_SLUG }),
+        )
+        .await;
+        assert!(err.contains(says), "update_task to {who}: {err}");
+        let err = refused(
+            &http,
+            &url,
+            &token,
+            "claim_task",
+            json!({ "id": id, "agent": who, "org": PERSONAL_SLUG }),
+        )
+        .await;
+        assert!(err.contains(says), "claim_task as {who}: {err}");
+    }
+    // …and nothing was stored: the task's owners are as it was made.
+    let listed = call(
+        &http,
+        &url,
+        &token,
+        "list_tasks",
+        json!({ "org": PERSONAL_SLUG }),
+    )
+    .await;
+    let now = rows(&listed, "tasks")
+        .into_iter()
+        .find(|t| t["id"] == json!(id))
+        .expect("the task is listed");
+    assert_eq!(
+        now["assignees"], made["assignees"],
+        "a refused assignment stores nothing: {now}"
+    );
+
+    // Members: the person themselves claiming it…
+    let claimed = call(
+        &http,
+        &url,
+        &token,
+        "claim_task",
+        json!({ "id": id, "agent": format!("human:{me}"), "force": true, "org": PERSONAL_SLUG }),
+    )
+    .await;
+    assert_ne!(claimed["claim"], json!("lost"), "{claimed}");
+    // …then handing it to a person made a moment ago, a bot in the
+    // org, and a named agent (not an account, so not looked up).
+    let assigned = call(
+        &http,
+        &url,
+        &token,
+        "update_task",
+        json!({
+            "id": id,
+            "assignees": [format!("human:{priya_id}"), format!("human:{}", atlas.bot.id), "agent:scribe"],
+            "org": PERSONAL_SLUG,
+        }),
+    )
+    .await;
+    assert_eq!(
+        assigned["assignees"],
+        json!([priya_id.to_string(), atlas.bot.id.to_string(), "scribe"]),
+        "{assigned}"
+    );
 }

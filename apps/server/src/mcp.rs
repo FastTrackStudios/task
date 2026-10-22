@@ -304,7 +304,7 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                         "due": s_("New due date (ISO YYYY-MM-DD); pass an empty string to clear."),
                         "scheduled": s_("New scheduled date (ISO YYYY-MM-DD); empty string clears."),
                         "priority": s_("'none' | 'low' | 'normal' | 'high' | 'critical'."),
-                        "assignees": a_("Replace who owns the task: 'agent:NAME' or 'human:USER_ID' entries (bare names mean agent:). Empty array unclaims. Prefer claim_task to take a task for yourself."),
+                        "assignees": a_("Replace who owns the task: 'agent:NAME' or 'human:USER_ID' entries (bare names mean agent:); a human must be an account in this org. Empty array unclaims. Prefer claim_task to take a task for yourself."),
                     }),
                     &["id"],
                 )
@@ -654,7 +654,7 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                 obj(
                     json!({
                         "id": s_("Task UUID from list_tasks."),
-                        "agent": s_("Who is claiming: 'agent:NAME' or 'human:USER_ID' (a bare name means agent:)."),
+                        "agent": s_("Who is claiming: 'agent:NAME' or 'human:USER_ID' (a bare name means agent:; a human must be an account in this org)."),
                         "force": b_("Steal an existing claim. Only with the user's explicit say-so."),
                     }),
                     &["id", "agent"],
@@ -1295,6 +1295,10 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
                                        its other arrangements. Omitting it means no opinion: a \
                                        chart that is already the default stays it, and a \
                                        song's first chart becomes it regardless."),
+                        "revision": s_("The `revision` read_chart returned. Pass it when \
+                                        editing: if anyone saved the chart since, the write \
+                                        is refused as stale instead of overwriting their \
+                                        work. Omit only when creating a chart."),
                     }),
                     &["title", "source"],
                 )
@@ -3007,6 +3011,26 @@ fn parse_agent(s: &str) -> Result<task::workflows_proto::AgentRef, ToolFailure> 
     Ok(AgentRef::agent(name))
 }
 
+/// [`parse_agent`] for a ref that will be stored as someone's
+/// assignment (`update_task` assignees, `claim_task`'s claimer): a
+/// person must also be an account in `org`, not just a well-formed id
+/// (`crate::attribution::check_assignee`). A named agent is not an
+/// account and passes as parsed. Runs on the blocking pool, like every
+/// tool, so it waits on the async account lookup there.
+// t[impl attribution.assignee.member]
+fn parse_assignee(
+    org: &crate::OrgAppState,
+    s: &str,
+) -> Result<task::workflows_proto::AgentRef, ToolFailure> {
+    let agent = parse_agent(s)?;
+    if let task::workflows_proto::AgentRef::Human { user_id, .. } = &agent {
+        tokio::runtime::Handle::current()
+            .block_on(crate::attribution::check_assignee(org, user_id))
+            .map_err(ToolFailure::Message)?;
+    }
+    Ok(agent)
+}
+
 /// `"HH:MM"` (24h) → minutes-since-midnight.
 fn parse_hhmm(s: &str, key: &str) -> Result<scheduling_proto::TimeOfDay, ToolFailure> {
     let bad = || ToolFailure::Message(format!("`{key}` must be 'HH:MM' (24h), got `{s}`"));
@@ -3411,7 +3435,7 @@ fn call_tool(
             }
             if let Some(refs) = arg_str_list(args, "assignees")? {
                 let parsed: Result<Vec<_>, ToolFailure> =
-                    refs.iter().map(|r| parse_agent(r)).collect();
+                    refs.iter().map(|r| parse_assignee(org, r)).collect();
                 current
                     .workflow
                     .get_or_insert_with(Default::default)
@@ -3572,7 +3596,7 @@ fn call_tool(
         "claim_task" => {
             let id = required_str(args, "id")?;
             let uuid = parse_uuid(&id, "task")?;
-            let agent = parse_agent(&required_str(args, "agent")?)?;
+            let agent = parse_assignee(org, &required_str(args, "agent")?)?;
             let agent_json = serde_json::to_string(&agent)
                 .map_err(|e| ToolFailure::Message(format!("encode agent: {e}")))?;
             let outcome = org
@@ -5208,6 +5232,11 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
         resources_proto::ResourcesError::NotFound(s) => ToolFailure::Message(format!(
             "no chart matching `{s}`. Call list_charts and use a slug from its result."
         )),
+        resources_proto::ResourcesError::Stale(now) => ToolFailure::Message(format!(
+            "couldn't {what} `{subject}`: somebody saved it since you read it (it is now at \
+             revision `{now}`). Nothing was written. Call read_chart again, merge your \
+             change into the current source, and write with the new `revision`."
+        )),
         other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
     };
 
@@ -5263,6 +5292,7 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "arrangement": doc.arrangement,
                 "is_default": doc.is_default,
                 "updated_at": doc.updated_at,
+                "revision": doc.revision,
             }))
         }
 
@@ -5274,6 +5304,7 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 .ok_or_else(|| ToolFailure::Message("`source` is required".into()))?
                 .to_string();
             let doc = ChartDoc {
+                revision: arg_str(args, "revision").unwrap_or_default(),
                 slug: arg_str(args, "slug").unwrap_or_default(),
                 title,
                 source,
@@ -5307,6 +5338,7 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "song": song,
                 "is_default": is_default,
                 "node": format!("chart:{}", out.slug),
+                "revision": out.revision,
             }))
         }
 

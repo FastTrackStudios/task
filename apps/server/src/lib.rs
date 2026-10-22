@@ -40,6 +40,7 @@ pub mod bible_cli;
 pub mod bots;
 pub mod capability;
 pub mod central_auth;
+pub mod config;
 #[cfg(feature = "plugin-git")]
 pub mod connections;
 pub mod debug_profile;
@@ -67,7 +68,6 @@ pub mod task_sync;
 // link store keeps its `NoFederation` default, which is the honest
 // answer for a single-org server.
 pub mod device_enrollment;
-pub mod doc_guard;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live;
 #[cfg(feature = "plugin-fasttrackstudio")]
@@ -977,6 +977,8 @@ pub(crate) async fn build_org_state(
     blob_root: &std::path::Path,
 ) -> eyre::Result<OrgAppState> {
     {
+        // The environment, read once for this org's boot.
+        let config = crate::config::ServerConfig::load();
         // The org's effective plugin set, resolved once from the
         // manifest's deny-list. A missing/unreadable manifest resolves
         // to "everything on" — the safe default and the pre-plugin
@@ -994,11 +996,12 @@ pub(crate) async fn build_org_state(
         // path; the keypair signs upload/download URLs.
         let object_store: Arc<dyn attachments::ObjectStore> =
             Arc::new(attachments::LocalFsStore::new(blob_root.to_path_buf()));
-        let public_base_url = std::env::var("TASK_SERVER_PUBLIC_URL").unwrap_or_default();
+        let public_base_url = config.public_url.clone().unwrap_or_default();
         let attachment_service = Arc::new(attachments::AttachmentServiceImpl::new(
             keypair.clone(),
             object_store,
             public_base_url,
+            org_root.slug(),
         ));
 
         // Vault file-replication. Org-scoped: each org's
@@ -1006,8 +1009,10 @@ pub(crate) async fn build_org_state(
         // `TASK_SERVER_VAULT_ROOT` still wins as a hard
         // override (for tests / containers that want a
         // flat parent dir).
-        let vault_root = std::env::var("TASK_SERVER_VAULT_ROOT")
-            .map_or_else(|_| org_root.vault_dir(), PathBuf::from);
+        let vault_root = config
+            .vault_root
+            .as_deref()
+            .map_or_else(|| org_root.vault_dir(), PathBuf::from);
         // Every wiki this org holds, not one. `LLM/` scratch stays a
         // sibling subtree the wiki backend doesn't touch — agents
         // read/write it through plain filesystem ops.
@@ -1028,12 +1033,14 @@ pub(crate) async fn build_org_state(
         // it: each wiki root is also a vault root (`wiki:<slug>`), which
         // is what lets the vault editor open a wiki page.
         #[cfg(any(feature = "plugin-wiki", feature = "plugin-mealplan"))]
-        let wiki_root = std::env::var("TASK_SERVER_WIKI_ROOT")
-            .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from);
+        let wiki_root = config
+            .wiki_root
+            .as_deref()
+            .map_or_else(|| org_root.wiki_knowledge_dir(), PathBuf::from);
         #[cfg(feature = "plugin-wiki")]
         let wiki_roots: std::collections::HashMap<String, PathBuf> = {
             let mut roots = std::collections::HashMap::new();
-            if std::env::var_os("TASK_SERVER_WIKI_ROOT").is_some() {
+            if config.wiki_root.is_some() {
                 roots.insert(org_proto::DEFAULT_WIKI.to_string(), wiki_root.clone());
             } else {
                 roots.extend(org_root.named_wikis());
@@ -1109,8 +1116,10 @@ pub(crate) async fn build_org_state(
         let vault_sync_state = vault_sync_state.with_recipe_roots(
             [(
                 "default".to_string(),
-                std::env::var("TASK_SERVER_WIKI_ROOT")
-                    .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from),
+                config
+                    .wiki_root
+                    .as_deref()
+                    .map_or_else(|| org_root.wiki_knowledge_dir(), PathBuf::from),
             )]
             .into_iter()
             .collect(),
@@ -1122,8 +1131,10 @@ pub(crate) async fn build_org_state(
         // dirs ever move into a database. The inbound listener folds
         // every `VaultEvent::Put` (non-CRDT `put_file` callers AND
         // the watcher below) into whichever per-file docs are open.
-        let crdt_root = std::env::var("TASK_SERVER_CRDT_ROOT")
-            .map_or_else(|_| org_root.path().join("crdt"), PathBuf::from);
+        let crdt_root = config
+            .crdt_root
+            .as_deref()
+            .map_or_else(|| org_root.path().join("crdt"), PathBuf::from);
         let vault_collab = vault_collab::VaultCollab::new(vault_sync_state.clone(), crdt_root);
         // The registry that turns a shelf into a collaborative one. The
         // wiki backend joins it below, for the event bridge only; the
@@ -1264,10 +1275,7 @@ pub(crate) async fn build_org_state(
                 .parent()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| org_root.path().to_path_buf());
-            let domains = wiki_domains(
-                &orgs_dir,
-                std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
-            );
+            let domains = wiki_domains(&orgs_dir, config.wiki_domains.as_deref());
             let local = wiki_live::subscriptions_backend::LocalOrgs::new(
                 orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
                 domains,
@@ -1291,7 +1299,7 @@ pub(crate) async fn build_org_state(
         // dbs by hand for now. PR 4 promotes this to a
         // first-class resolver.
         #[cfg(feature = "plugin-agent")]
-        let agent_tasks_url = std::env::var("TASK_SERVER_AGENT_TASKS_URL").unwrap_or_else(|_| {
+        let agent_tasks_url = config.agent_tasks_url.clone().unwrap_or_else(|| {
             format!(
                 "sqlite://{}?mode=rwc",
                 org_root.path().join("agent-tasks.sqlite").display()
@@ -1311,13 +1319,12 @@ pub(crate) async fn build_org_state(
         // applies nothing. There is a regression test for that in
         // `agent-runners`; do not co-locate this with agent-tasks.
         #[cfg(feature = "plugin-agent")]
-        let agent_runners_url =
-            std::env::var("TASK_SERVER_AGENT_RUNNERS_URL").unwrap_or_else(|_| {
-                format!(
-                    "sqlite://{}?mode=rwc",
-                    org_root.path().join("agent-runners.sqlite").display()
-                )
-            });
+        let agent_runners_url = config.agent_runners_url.clone().unwrap_or_else(|| {
+            format!(
+                "sqlite://{}?mode=rwc",
+                org_root.path().join("agent-runners.sqlite").display()
+            )
+        });
         #[cfg(feature = "plugin-agent")]
         let agent_runners_conn =
             open_sqlite_pool(scope, agent_runners_url, "agent-runners", |db| {
@@ -1363,8 +1370,10 @@ pub(crate) async fn build_org_state(
         // rest of the server uses — the rate cascade calls
         // `VaultProjectDefaults::lookup` to read each
         // session's project markdown on close.
-        let timer_url = std::env::var("TASK_SERVER_TIMER_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.timer_db().display()));
+        let timer_url = config
+            .timer_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.timer_db().display()));
         let timer_conn = open_sqlite_pool(scope, timer_url, "timer", |db| {
             Box::pin(async move { timer::Migrator::up(&db, None).await.map(|()| db) })
         })
@@ -1379,8 +1388,10 @@ pub(crate) async fn build_org_state(
         // Threads — conversations/topics anchored to tasks/projects.
         // SeaORM-backed (DB swappable); migrations run on open. Override
         // via `TASK_SERVER_THREADS_URL`.
-        let threads_url = std::env::var("TASK_SERVER_THREADS_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.threads_db().display()));
+        let threads_url = config
+            .threads_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.threads_db().display()));
         let threads_conn = open_sqlite_pool(scope, threads_url, "threads", |db| {
             Box::pin(async move { threads::Migrator::up(&db, None).await.map(|()| db) })
         })
@@ -1391,7 +1402,7 @@ pub(crate) async fn build_org_state(
         // `<data_root>/orgs/<slug>/notify.sqlite` (override via
         // `TASK_SERVER_NOTIFY_URL`); migrations run on open. Fed by
         // the notifier (`crate::notifier`), served as `Notify`.
-        let notify_url = std::env::var("TASK_SERVER_NOTIFY_URL").unwrap_or_else(|_| {
+        let notify_url = config.notify_url.clone().unwrap_or_else(|| {
             format!(
                 "sqlite://{}?mode=rwc",
                 org_root.path().join("notify.sqlite").display()
@@ -1407,8 +1418,10 @@ pub(crate) async fn build_org_state(
         // Per-user preferences. SQLite at
         // `<data_root>/orgs/<slug>/prefs.sqlite` (override via
         // `TASK_SERVER_PREFS_URL`); migrations run on open.
-        let prefs_url = std::env::var("TASK_SERVER_PREFS_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.prefs_db().display()));
+        let prefs_url = config
+            .prefs_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.prefs_db().display()));
         let prefs_conn = open_sqlite_pool(scope, prefs_url, "prefs", |db| {
             Box::pin(async move { prefs::Migrator::up(&db, None).await.map(|()| db) })
         })
@@ -1456,6 +1469,9 @@ pub(crate) async fn build_org_state(
         // under `Records/contacts/`. CardDAV passwords never do: they
         // go to the OS keyring or, where there is none, the envelope
         // keyed by this server's auth secret (`contacts.secret.out-of-vault`).
+        // t[impl contacts.node.every-node] — built here, in the per-org
+        // boot every node runs (server, `LocalNode::open`, `join`), and
+        // nowhere else: the org router mounts it behind the gate.
         #[cfg(feature = "plugin-contacts")]
         let contacts = contacts::VaultContacts::with_secrets(
             vault_root.clone(),
@@ -1479,8 +1495,10 @@ pub(crate) async fn build_org_state(
         // task-cli `finance invoice` flow writes against it
         // when that feature lands.
         #[cfg(feature = "plugin-finance")]
-        let finance_url = std::env::var("TASK_SERVER_FINANCE_URL")
-            .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", org_root.finance_db().display()));
+        let finance_url = config
+            .finance_url
+            .clone()
+            .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", org_root.finance_db().display()));
         #[cfg(feature = "plugin-finance")]
         let finance_conn = open_sqlite_pool(scope, finance_url, "finance", |db| {
             Box::pin(async move { finance_db::Migrator::up(&db, None).await.map(|()| db) })
@@ -1540,8 +1558,8 @@ pub(crate) async fn build_org_state(
         // this does not strand anyone's existing accounts; the warning
         // says what to do about it.
         #[cfg(feature = "plugin-email")]
-        let mail_root = std::env::var("TASK_SERVER_MAIL_ROOT").map_or_else(
-            |_| {
+        let mail_root = config.mail_root.as_deref().map_or_else(
+            || {
                 let beside = org_root.path().join("mail");
                 let legacy = vault_root.join("Mail");
                 if !beside.exists() && legacy.exists() {
@@ -1672,13 +1690,9 @@ pub(crate) async fn build_org_state(
         // list. `from_token` only errors when called outside a tokio
         // runtime, which `build_org_state` always is.
         #[cfg(feature = "plugin-git")]
-        let forgejo_base = std::env::var("TASK_FORGEJO_BASE_URL").unwrap_or_default();
+        let forgejo_base = config.forgejo_base_url.clone().unwrap_or_default();
         #[cfg(feature = "plugin-git")]
-        let forgejo_token = std::env::var("TASK_FORGEJO_TOKEN")
-            .ok()
-            .filter(|t| !t.is_empty())
-            .or_else(|| std::env::var("FORGEJO_TOKEN").ok())
-            .unwrap_or_default();
+        let forgejo_token = config.forgejo_token().to_owned();
         #[cfg(feature = "plugin-git")]
         let forge = git_forgejo::Backend::from_token(forgejo_base.clone(), forgejo_token)
             .map_err(|e| eyre::eyre!("forge backend: {e}"))?;
@@ -1690,12 +1704,8 @@ pub(crate) async fn build_org_state(
         // agent-owned tasks still sync — just under the human
         // identity until the bot token is configured.
         #[cfg(feature = "plugin-git")]
-        let forge_agent = match std::env::var("TASK_FORGEJO_BOT_TOKEN")
-            .ok()
-            .or_else(|| std::env::var("FTS_CODEBERG_ACCESS_TOKEN").ok())
-            .filter(|t| !t.is_empty())
-        {
-            Some(bot_token) => git_forgejo::Backend::from_token(forgejo_base, bot_token)
+        let forge_agent = match config.forgejo_bot_token() {
+            Some(bot_token) => git_forgejo::Backend::from_token(forgejo_base, bot_token.to_owned())
                 .map_err(|e| eyre::eyre!("forge agent backend: {e}"))?,
             None => forge.clone(),
         };
@@ -1848,11 +1858,8 @@ pub(crate) async fn build_org_state(
                 wiki.clone(),
                 std::sync::Arc::new(crate::wiki_tracker::TaskTracker::new(tasks.clone())),
             );
-            if let Some(secs) = std::env::var("TASK_WIKI_CLAIM_TTL_SECS")
-                .ok()
-                .and_then(|v| v.trim().parse::<u64>().ok())
-            {
-                edits = edits.with_claim_ttl(std::time::Duration::from_secs(secs));
+            if let Some(ttl) = config.wiki_claim_ttl() {
+                edits = edits.with_claim_ttl(ttl);
             }
             // t[impl wiki.source.sync] — every wiki with a repository
             // behind it is fetched on a schedule, first pass at boot
@@ -1901,10 +1908,7 @@ pub(crate) async fn build_org_state(
             let root = orgs_dir.parent().unwrap_or(&orgs_dir).to_path_buf();
             links.with_homes(std::sync::Arc::new(node_homes::LocalHomes::new(
                 root,
-                wiki_domains(
-                    &orgs_dir,
-                    std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
-                ),
+                wiki_domains(&orgs_dir, config.wiki_domains.as_deref()),
                 org_root.slug(),
                 org_root.path().to_path_buf(),
             )))
@@ -1920,25 +1924,20 @@ pub(crate) async fn build_org_state(
         #[cfg(feature = "plugin-scripture")]
         let mut scripture_api = Vec::new();
         #[cfg(feature = "plugin-scripture")]
-        if let Ok(key) = std::env::var("TASK_ESV_API_KEY").or_else(|_| std::env::var("ESV_API_KEY"))
-        {
-            if !key.is_empty() {
-                scripture_api.push(scripture::ApiTranslation::esv(key));
-            }
+        if let Some(key) = config.esv_api_key() {
+            scripture_api.push(scripture::ApiTranslation::esv(key.to_owned()));
         }
         #[cfg(feature = "plugin-scripture")]
-        if let (Ok(key), Ok(bible_id)) = (
-            std::env::var("TASK_API_BIBLE_KEY").or_else(|_| std::env::var("API_BIBLE_KEY")),
-            std::env::var("TASK_API_BIBLE_NIV_ID"),
+        if let (Some(key), Some(bible_id)) = (
+            config.api_bible_key().map(str::to_owned),
+            config.api_bible_niv_id.clone(),
         ) {
-            if !key.is_empty() && !bible_id.is_empty() {
-                scripture_api.push(scripture::ApiTranslation::api_bible(
-                    "NIV",
-                    "New International Version",
-                    bible_id,
-                    key,
-                ));
-            }
+            scripture_api.push(scripture::ApiTranslation::api_bible(
+                "NIV",
+                "New International Version",
+                bible_id,
+                key,
+            ));
         }
         // Two places hold editions and the difference is who put them
         // there: this org installed the first, a subscription brought the
@@ -2495,9 +2494,9 @@ pub fn install_auth_secret(secret: String) -> bool {
 /// hardcoded [`DEFAULT_AUTH_SECRET`], a dev convenience that makes tokens
 /// forgeable (with a warning). A real deployment MUST set one.
 pub(crate) fn auth_secret() -> String {
-    match std::env::var("TASK_AUTH_SECRET") {
-        Ok(s) if !s.is_empty() => s,
-        _ => {
+    match crate::config::ServerConfig::load().auth_secret {
+        Some(s) => s,
+        None => {
             if let Some(installed) = INSTALLED_AUTH_SECRET.get() {
                 return installed.clone();
             }
@@ -2532,7 +2531,7 @@ fn pick_server_orgs(
 ) -> eyre::Result<Vec<org_proto::OrgRoot>> {
     let explicit = slug_filter
         .map(str::to_owned)
-        .or_else(|| std::env::var("TASK_SERVER_ORG").ok())
+        .or_else(|| crate::config::ServerConfig::load().org)
         .filter(|s| !s.is_empty());
     if let Some(slug) = explicit {
         let (org_root, _) = data_root
@@ -2550,43 +2549,6 @@ fn pick_server_orgs(
     // first org without anyone touching the server's
     // filesystem directly.
     Ok(scanned.into_iter().map(|(org, _)| org).collect())
-}
-
-/// Parse a single HTTP byte-range request (`bytes=start-end`, `bytes=start-`,
-/// or the suffix form `bytes=-N`) against a known total size, returning the
-/// inclusive `[start, end]` it resolves to. Multi-range and unsatisfiable
-/// requests return `None` (the caller then serves the full body).
-pub(crate) fn parse_byte_range(value: &str, total: u64) -> Option<(u64, u64)> {
-    if total == 0 {
-        return None;
-    }
-    let spec = value.trim().strip_prefix("bytes=")?;
-    // Only a single range is supported; a comma means multi-range → fall back.
-    if spec.contains(',') {
-        return None;
-    }
-    let (a, b) = spec.split_once('-')?;
-    let last = total - 1;
-    let (start, end) = if a.is_empty() {
-        // Suffix range: the final N bytes.
-        let n: u64 = b.trim().parse().ok()?;
-        if n == 0 {
-            return None;
-        }
-        (total.saturating_sub(n), last)
-    } else {
-        let start: u64 = a.trim().parse().ok()?;
-        let end = if b.trim().is_empty() {
-            last
-        } else {
-            b.trim().parse::<u64>().ok()?.min(last)
-        };
-        (start, end)
-    };
-    if start > end || start > last {
-        return None;
-    }
-    Some((start, end))
 }
 
 /// JSON listing of a media directory's immediate entries, sorted by name.
@@ -2638,7 +2600,7 @@ pub struct MediaQuery {
 /// [`enforce_permissions`].
 #[must_use]
 pub fn enforce_media_token() -> bool {
-    std::env::var("TASK_ENFORCE_MEDIA_TOKEN").is_ok_and(|v| v == "1")
+    crate::config::ServerConfig::load().enforces_media_token()
 }
 
 /// Decide whether a media read is allowed. `None` = proceed;
@@ -2759,8 +2721,7 @@ async fn per_org_media_handler(
     axum::extract::Query(q): axum::extract::Query<MediaQuery>,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
-    use axum::http::{StatusCode, header};
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    use axum::http::StatusCode;
     if rel.split('/').any(|s| s == ".." || s.is_empty()) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -2788,64 +2749,88 @@ async fn per_org_media_handler(
     if !meta.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let total = meta.len();
-    let ct = match file.extension().and_then(|x| x.to_str()) {
+    let ct = media_content_type(&file);
+
+    // A single byte range → 206, streamed from disk; no range → 200 whole
+    // body; an unsatisfiable one → 416. Every answer advertises
+    // `Accept-Ranges`.
+    match architect::http::ranged::serve_file(&headers, &file, ct).await {
+        Ok(resp) => resp,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// The `Content-Type` a media file is served with, by extension — one
+/// table for both media routes (`/org/{slug}/media/…` and the org-less
+/// `/media/…`), so the two can't drift on what a stem is.
+fn media_content_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|x| x.to_str()) {
         Some("json") => "application/json",
         Some("ogg") => "audio/ogg",
         Some("wav") => "audio/wav",
         Some("mp3") => "audio/mpeg",
         Some("webm") => "audio/webm",
-        Some("kf") | Some("txt") | Some("md") => "text/plain; charset=utf-8",
+        Some("kf" | "txt" | "md") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
-    };
-
-    // Honour a single byte-range request → 206 Partial Content.
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| parse_byte_range(s, total));
-    if let Some((start, end)) = range {
-        let len = end - start + 1;
-        let mut f = match tokio::fs::File::open(&file).await {
-            Ok(f) => f,
-            Err(_) => return StatusCode::NOT_FOUND.into_response(),
-        };
-        if f.seek(std::io::SeekFrom::Start(start)).await.is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        let mut buf = vec![0u8; len as usize];
-        if f.read_exact(&mut buf).await.is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        return (
-            StatusCode::PARTIAL_CONTENT,
-            [
-                (header::CONTENT_TYPE, ct.to_string()),
-                (header::ACCEPT_RANGES, "bytes".to_string()),
-                (
-                    header::CONTENT_RANGE,
-                    format!("bytes {start}-{end}/{total}"),
-                ),
-                (header::CONTENT_LENGTH, len.to_string()),
-            ],
-            buf,
-        )
-            .into_response();
     }
+}
 
-    // No (or unsatisfiable) range → full body, but still advertise range support.
-    match tokio::fs::read(&file).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, ct.to_string()),
-                (header::ACCEPT_RANGES, "bytes".to_string()),
-                (header::CONTENT_LENGTH, total.to_string()),
-            ],
-            bytes,
-        )
-            .into_response(),
+/// The org-less song media route, `GET /media/{*path}`, as a router
+/// [`router`] merges — so **every node** serves it: the hosted server, a
+/// `task-server peer`, and a desktop node's loopback
+/// ([`local_node::LocalNode::serve_loopback`]) alike (ADR 0006 node
+/// parity, audit C4). It used to be bolted onto the router in the
+/// server binary's `main`, so a desktop node answered `/media/…` with a
+/// 404 while the server it stood in for served the file.
+///
+/// Filesystem-first: `/media/songs/<slug>/manifest.json` (or a stem) is
+/// resolved against EVERY hosted org's `resources/` dir and the first
+/// org that has the file wins. No ingest, no content-addressing, no env
+/// var: drop a file into an org's `resources/` and it's served. These
+/// are the same org-less, same-origin `/media/…` URLs the UI builds.
+///
+/// Unauthenticated, exactly as it was in `main`: unlike
+/// `/org/{slug}/media/…` it does not consult `TASK_ENFORCE_MEDIA_TOKEN`
+/// (it has no slug until the file is found). Files only — no directory
+/// listing, no ranges; the per-org route is the one that streams.
+pub fn media_router<S: Clone + Send + Sync + 'static>(state: AppState) -> Router<S> {
+    Router::new()
+        .route("/media/{*path}", get(org_less_media_handler))
+        .with_state(state)
+}
+
+async fn org_less_media_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(rel): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    // Reject traversal; `rel` is already percent-decoded.
+    if rel.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(path) = org_less_media_file(&state.data_root.orgs_dir(), &rel).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, media_content_type(&path))], bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// The first `<orgs>/<org>/resources/<rel>` that is a file.
+async fn org_less_media_file(orgs: &std::path::Path, rel: &str) -> Option<PathBuf> {
+    let mut entries = tokio::fs::read_dir(orgs).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let candidate = entry.path().join("resources").join(rel);
+        if tokio::fs::metadata(&candidate)
+            .await
+            .is_ok_and(|m| m.is_file())
+        {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Rendition streaming (issue #270): `GET
@@ -2879,7 +2864,7 @@ async fn files_rendition_handler(
     axum::extract::Query(q): axum::extract::Query<MediaQuery>,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
-    use axum::http::{StatusCode, header};
+    use axum::http::StatusCode;
     let rel = format!("files/renditions/{root_id}/{kind}/{file_id}");
     if let Some(refusal) = authorize_media(&state, &slug, &rel, q.token.as_deref(), &headers).await
     {
@@ -2905,14 +2890,11 @@ async fn files_rendition_handler(
         }
     };
 
-    // Single byte range → 206; absent/malformed/unsatisfiable → full
-    // body 200, still advertising range support (same contract as the
-    // `/media` route — browser media elements need `Accept-Ranges` to
-    // consider the source seekable at all).
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| parse_byte_range(s, total));
+    // Single byte range → 206; absent/malformed → full body 200;
+    // unsatisfiable → 416; every answer advertises range support (same
+    // contract as the `/media` route — browser media elements need
+    // `Accept-Ranges` to consider the source seekable at all).
+    let range = architect::http::ranged::range_of(&headers, total);
     rendition_stream_response(&org, root_id, &file_id, kind.mime(), total, range)
 }
 
@@ -2933,7 +2915,7 @@ pub(crate) fn rendition_stream_response(
     file_id: &str,
     mime: &str,
     total: u64,
-    range: Option<(u64, u64)>,
+    range: architect::http::ranged::ByteRange,
 ) -> axum::response::Response {
     stream_response(
         org,
@@ -2964,13 +2946,12 @@ pub(crate) fn stream_response(
     from: StreamFrom,
     mime: &str,
     total: u64,
-    range: Option<(u64, u64)>,
+    range: architect::http::ranged::ByteRange,
 ) -> axum::response::Response {
-    use axum::http::{StatusCode, header};
-    use axum::response::IntoResponse;
-    let (start, len) = match range {
-        Some((start, end)) => (start, end - start + 1),
-        None => (0, total),
+    use architect::http::ranged::respond;
+    // A 416 has no body: nothing to read.
+    let Some((start, len)) = range.window(total) else {
+        return respond(range, total, mime, axum::body::Body::empty());
     };
     let (mut writer, reader) = tokio::io::duplex(64 * 1024);
     let files = org.files.clone();
@@ -3000,45 +2981,23 @@ pub(crate) fn stream_response(
         }
     });
     let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(reader));
-    let base_headers = [
-        (header::CONTENT_TYPE, mime.to_string()),
-        (header::ACCEPT_RANGES, "bytes".to_string()),
-        (header::CONTENT_LENGTH, len.to_string()),
-    ];
-    match range {
-        Some((start, end)) => (
-            StatusCode::PARTIAL_CONTENT,
-            base_headers,
-            [(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )],
-            body,
-        )
-            .into_response(),
-        None => (StatusCode::OK, base_headers, body).into_response(),
-    }
+    respond(range, total, mime, body)
 }
 
 pub fn router(state: AppState) -> Router {
     use attachments::routes::AttachmentRouteState;
     use axum::routing::any;
 
-    // Mount the /blobs/* HTTP routes against the FIRST org's
-    // attachment service. Multi-org blob routing
-    // (`/org/<slug>/blobs/...`) is a follow-up — the existing
-    // path stays for single-org back-compat. When no org is
-    // hosted (test boot path), fall back to a synthetic
-    // empty router so axum doesn't choke.
-    let blob_router = state
-        .orgs
-        .read()
-        .ok()
-        .and_then(|guard| guard.values().next().map(|org| org.attachments.clone()))
-        .map(|service| {
-            attachments::attachment_router().with_state(AttachmentRouteState { service })
-        })
-        .unwrap_or_default();
+    // Mount the /blobs/* HTTP routes for EVERY hosted org. A blob token
+    // is bound to the org that minted it, and the route serves it from
+    // that org's attachment service: looked up per request, so an org
+    // created at runtime is served too. (This used to mount only the
+    // first hosted org's service, so every other org's uploads and
+    // downloads were answered by the wrong org.)
+    let blob_router = attachments::attachment_router().with_state(AttachmentRouteState {
+        keypair: state.keypair.clone(),
+        orgs: Arc::new(state.clone()),
+    });
 
     // Per-org vox at `/org/{slug}/vox`. Also keep `/vox`
     // and `/health` at the top level for back-compat —
@@ -3172,6 +3131,9 @@ pub fn router(state: AppState) -> Router {
         .merge(per_org)
         .merge(server_mgmt)
         .merge(watch_bridge::watch_router())
+        // Org-less `/media/…`: here, not in the binary, so a desktop
+        // node's loopback serves what the server serves.
+        .merge(media_router(state.clone()))
         .merge(blob_router);
     // Authenticated OTLP ingest, only when an upstream collector is
     // configured — see `otlp`. Clients export through here rather than to
@@ -3228,7 +3190,9 @@ fn cors_layer() -> tower_http::cors::CorsLayer {
     use axum::http::HeaderValue;
     use tower_http::cors::{AllowOrigin, CorsLayer};
 
-    let raw = std::env::var("TASK_CORS_ALLOWED_ORIGINS").unwrap_or_default();
+    let raw = crate::config::ServerConfig::load()
+        .cors_allowed_origins
+        .unwrap_or_default();
     let raw = raw.trim();
     let permissive = |why: &str| {
         tracing::warn!(
@@ -3446,7 +3410,7 @@ pub async fn discovery_document(state: &AppState, bearer: Option<String>) -> ser
         // image env by the flake; "unknown" outside that path). CI's
         // verify-live step polls this until it matches the pushed sha —
         // a green run means the deployment is actually serving it.
-        "build": std::env::var("TASK_BUILD_REV").unwrap_or_else(|_| "unknown".to_owned()),
+        "build": crate::config::ServerConfig::load().build_rev,
         "orgs": orgs,
         // The account the bearer resolved to (`null` without one, or when
         // nothing here or at the issuer recognised it). `via` says which.
@@ -3692,7 +3656,7 @@ pub const DEFAULT_ORG_ROLE: &str = "member";
 /// exactly as before permit tables existed.
 #[must_use]
 pub fn enforce_permissions() -> bool {
-    std::env::var("TASK_ENFORCE_PERMISSIONS").is_ok_and(|v| v == "1")
+    crate::config::ServerConfig::load().enforces_permissions()
 }
 
 /// Server-wide tally of every (would-be) denial the gate produced. Read
@@ -4586,8 +4550,8 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // listed and exchanged by path, gated on `docs/replica` — the
         // only part of the vault an admitted peer reaches.
         .with(
-            vault_doc::peer::doc_peer_service_descriptor(),
-            vault_doc::peer::DocPeerDispatcher::new(doc_peer::DocPeerHost::of(org)),
+            crdt::peer::doc_peer_service_descriptor(),
+            crdt::peer::DocPeerDispatcher::new(doc_peer::host(org)),
         )
         // Presence — ONE mounted `DocPresence` service, routed by doc
         // id: the fixed `presence::PRESENCE_DOC_ID` reaches the
@@ -4620,23 +4584,17 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
 /// the bind address (a remote browser would dial 127.0.0.1); absent,
 /// the guest app falls back to same-origin, which is right in prod.
 pub(crate) fn share_public_base_explicit() -> Option<String> {
-    std::env::var("TASK_SHARE_PUBLIC_BASE")
-        .or_else(|_| std::env::var("TASK_SERVER_PUBLIC_URL"))
-        .ok()
-        .filter(|s| !s.is_empty())
+    crate::config::ServerConfig::load()
+        .share_public_base_explicit()
+        .map(str::to_owned)
 }
 
 /// Public base URL share links are composed against.
 pub(crate) fn share_public_base() -> String {
-    std::env::var("TASK_SHARE_PUBLIC_BASE")
-        .or_else(|_| std::env::var("TASK_SERVER_PUBLIC_URL"))
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            let bind =
-                std::env::var("TASK_SERVER_BIND").unwrap_or_else(|_| "127.0.0.1:3456".into());
-            format!("http://{bind}")
-        })
+    let config = crate::config::ServerConfig::load();
+    config
+        .share_public_base_explicit()
+        .map_or_else(|| format!("http://{}", config.share_bind()), str::to_owned)
 }
 
 // The share landing / browse / rendition / download handlers live in
@@ -4712,7 +4670,7 @@ fn org_doc_sync(org: &OrgAppState, live_access: &LiveAccess) -> live::DocSyncRou
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
-fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> doc_guard::GuardedVaultDocs {
+fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> vault_collab::VaultCollab {
     vault_docs(org)
 }
 
@@ -4741,12 +4699,9 @@ async fn ffprobe_on_path() -> bool {
 }
 
 /// The vault's docs over the collab lane, under the same write guard a
-/// save answers to.
-fn vault_docs(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
-    doc_guard::GuardedVaultDocs {
-        registry: org.vault_collab.registry().clone(),
-        sync: org.vault_sync.clone(),
-    }
+/// save answers to (`impl DocSync for VaultCollab`).
+fn vault_docs(org: &OrgAppState) -> vault_collab::VaultCollab {
+    org.vault_collab.clone()
 }
 
 pub fn org_router_guarded(
@@ -4955,42 +4910,58 @@ mod upgrade_bearer_tests {
     }
 }
 
+/// The `/media`, rendition and share routes resolve `Range` through
+/// `architect::http::ranged` (v0.9.12); these pin the cases they rely on.
 #[cfg(test)]
 mod range_tests {
-    use super::parse_byte_range;
+    use architect::http::ranged::{ByteRange, parse_range};
 
     #[test]
     fn full_open_range() {
         // Chrome's initial media probe: `bytes=0-`.
-        assert_eq!(parse_byte_range("bytes=0-", 1000), Some((0, 999)));
+        assert_eq!(
+            parse_range("bytes=0-", 1000),
+            ByteRange::Satisfiable(0, 999)
+        );
     }
 
     #[test]
     fn clamped_end() {
-        assert_eq!(parse_byte_range("bytes=0-100000", 1000), Some((0, 999)));
+        assert_eq!(
+            parse_range("bytes=0-100000", 1000),
+            ByteRange::Satisfiable(0, 999)
+        );
     }
 
     #[test]
     fn mid_range() {
         assert_eq!(
-            parse_byte_range("bytes=500-799", 3_415_886),
-            Some((500, 799))
+            parse_range("bytes=500-799", 3_415_886),
+            ByteRange::Satisfiable(500, 799)
         );
     }
 
     #[test]
     fn suffix_range() {
-        assert_eq!(parse_byte_range("bytes=-500", 1000), Some((500, 999)));
+        assert_eq!(
+            parse_range("bytes=-500", 1000),
+            ByteRange::Satisfiable(500, 999)
+        );
     }
 
     #[test]
     fn rejects_bad() {
-        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
-        assert_eq!(parse_byte_range("bytes=800-500", 1000), None); // start > end
-        assert_eq!(parse_byte_range("bytes=0-", 0), None); // empty file
-        assert_eq!(parse_byte_range("bytes=0-10,20-30", 1000), None); // multi-range
-        assert_eq!(parse_byte_range("garbage", 1000), None);
-        assert_eq!(parse_byte_range("bytes=5000-6000", 1000), None); // start past end
+        // Well-formed but selecting nothing: 416 now (was a whole-body 200).
+        assert_eq!(parse_range("bytes=-0", 1000), ByteRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=800-500", 1000), ByteRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=0-", 0), ByteRange::Unsatisfiable);
+        assert_eq!(
+            parse_range("bytes=5000-6000", 1000),
+            ByteRange::Unsatisfiable
+        );
+        // Not understood: ignored, whole body.
+        assert_eq!(parse_range("bytes=0-10,20-30", 1000), ByteRange::Absent);
+        assert_eq!(parse_range("garbage", 1000), ByteRange::Absent);
     }
 }
 

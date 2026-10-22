@@ -2422,6 +2422,7 @@ pub fn chordsheet_songs(lib: &ChordsheetLibrary) -> Result<Vec<ImportedSong>, St
         let source = String::from_utf8_lossy(kf.contents()).into_owned();
 
         let song = resources_proto::SongDoc {
+            revision: String::new(),
             slug: String::new(),
             title: entry.title.trim().to_owned(),
             writers: vec![entry.artist.trim().to_owned()],
@@ -2435,6 +2436,7 @@ pub fn chordsheet_songs(lib: &ChordsheetLibrary) -> Result<Vec<ImportedSong>, St
         // As Keyflow saves one: the source verbatim, the song named by
         // token, and — being each song's only chart — its default.
         let chart = resources_proto::ChartDoc {
+            revision: String::new(),
             title: song.title.clone(),
             source,
             song: links::NodeRef::song(&song_slug).to_token(),

@@ -584,7 +584,7 @@ impl live_proto::LiveSessionsStreamSource for GuestLiveLane {
 #[derive(Clone)]
 pub struct DocSyncRouter {
     pub live: LiveHost,
-    pub vault: crate::doc_guard::GuardedVaultDocs,
+    pub vault: vault_collab::VaultCollab,
     /// This connection's access, shared with its [`LiveLane`].
     pub access: LiveAccess,
 }

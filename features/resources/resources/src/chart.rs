@@ -344,6 +344,7 @@ mod tests {
 
     fn chart() -> ChartDoc {
         ChartDoc {
+            revision: String::new(),
             slug: String::new(),
             title: "Great Are You Lord".into(),
             source: SOURCE_TEXT.into(),

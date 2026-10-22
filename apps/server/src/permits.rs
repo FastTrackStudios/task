@@ -555,6 +555,11 @@ const FILES_SYNC: ServicePermits = ServicePermits {
         rd("residency", "files/**"),
         wr("set_residency", "files/**"),
         wr("apply_residency", "files/**"),
+        // What a session references, and what of it this root holds.
+        // A read of the root's content (the session file's own lines),
+        // so a member's like `facets`; a device learns it from the root
+        // it already holds rather than by asking.
+        rd("session_media", "files/**"),
     ],
 };
 
@@ -822,6 +827,9 @@ table!(COLLECTION, "collection", "collections/**", [
     // gathered goes with it — the songs and charts stay — but a set list
     // somebody built is work, and its removal is worth a line.
     wr "rename", wa "delete",
+    // The safe whole-list save: conditional on the revision the editor
+    // read, so it writes no more than `rename` + `reorder` already may.
+    wr "save",
 ]);
 // Live sessions: a setlist played together. Joining admits the set's docs
 // for sync (DocSync gates the edits themselves) and writes nothing of the
@@ -1194,11 +1202,7 @@ pub fn mounts() -> Vec<Mount> {
             SHARING,
         ),
         m("core", crdt::sync::doc_sync_service_descriptor(), DOC_SYNC),
-        m(
-            "core",
-            vault_doc::peer::doc_peer_service_descriptor(),
-            DOC_PEER,
-        ),
+        m("core", crdt::peer::doc_peer_service_descriptor(), DOC_PEER),
         m(
             "core",
             crdt::sync::doc_presence_service_descriptor(),

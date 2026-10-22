@@ -1,25 +1,21 @@
 /*
  * Task palette — an OVERRIDE LAYER over the canonical FTS design tokens.
  *
- * The canonical sheet lives in the architect repo (architect-ui's
- * assets/fts-theme.css). assets/fts-theme.css beside this file is a
- * VENDORED COPY of it, imported verbatim below; this file adds only the
- * handful of tokens where Task deliberately departs from the shadcn
- * defaults.
+ * The canonical sheet is architect-ui's assets/fts-theme.css, imported
+ * below straight from the architect-ui checkout cargo resolved for
+ * Cargo.lock's pin: `apps/.architect-ui` is a gitignored symlink that
+ * scripts/architect-ui-link.sh writes (`just css` runs it). Tailwind
+ * resolves `@import` on the filesystem and a git dependency has no stable
+ * path, hence the link. There is no vendored copy any more, so a repin
+ * brings its tokens with it; `just ci-architect-css` fails if a copy comes
+ * back or the link points at another pin.
  *
- * It has to be a copy. Tailwind resolves `@import` on the filesystem, and
- * architect-ui is a git dependency — a cargo checkout has no stable path,
- * so there is nothing to point at. Rust code reads the same bytes through
- * `architect_ui::THEME_CSS`, which is the equivalent trick for the
- * compiler; CSS has no such escape.
- *
- * This header used to say "Do NOT re-vendor", which was true while
- * architect-ui was in the same tree and became false the moment it left.
- * Keeping the copy in step with architect-ui is a manual job until
- * architect ships a compiled utilities sheet.
+ * This file adds only the handful of tokens where Task deliberately
+ * departs from the shadcn defaults. The runtime twin of this block is
+ * `OBSIDIAN_DARK` in crates/ui/src/theming.rs; keep the two in step.
  */
 
-@import "./assets/fts-theme.css";
+@import "./.architect-ui/assets/fts-theme.css";
 
 /* Obsidian dark: editor #1e1e1e, panels #161616 (2026-07-03).
  * These 9 tokens are the entire Task departure from the canonical dark

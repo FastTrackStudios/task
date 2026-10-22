@@ -18,6 +18,12 @@ vault-live = { workspace = true }
 # `CrdtDoc` + `DocRegistry` + `FilePersistence`. `vox` because the
 # registry implements the DocSync/DocPresence service traits.
 crdt = { workspace = true, features = ["vox"] }
+# The collab lane's `DocSync` (`impl DocSync for VaultCollab`): the
+# `vox` channel types and the `collab.sync` outcome on the request's wide
+# event (the caller comes through `crdt::architect`, so this crate turns on
+# no architect features of its own).
+vox = { workspace = true }
+architect-telemetry = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 tracing = { workspace = true }
 sha2 = "0.10"

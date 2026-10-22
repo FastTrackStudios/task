@@ -20,7 +20,7 @@
 //! down is a fact about the network, decided in
 //! [`crate::catalogue`]; this module answers what the device *wants*.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use files_proto::path::RootPath;
 use files_proto::service::tree::Hydration;
@@ -111,6 +111,9 @@ pub enum Reason {
     Dependency(Facet),
     /// The device takes everything.
     Everything,
+    /// Referenced by a session the device keeps — the session's media,
+    /// wherever in the root it sits (see [`decide_with`]).
+    Referenced(RootPath),
     /// Not subscribed, and not pinned.
     NotSubscribed,
 }
@@ -180,7 +183,13 @@ pub fn decide(path: &RootPath, facets: &FacetMap, sub: &Subscription) -> Decisio
 }
 
 /// Resolve a path's facet from itself or its nearest classified
-/// ancestor.
+/// ancestor — and, for a file nothing classified, from what it is: a
+/// session file belongs to the atomic `sessions` facet wherever it sits.
+///
+/// The session check comes last on purpose. A directory's binding is the
+/// more specific statement: a Pro Tools backup in `Session File Backups`
+/// is a backup, and a session a project filed under its own mapping is
+/// that mapping's.
 fn classify(path: &RootPath, facets: &FacetMap) -> Option<crate::facet::Binding> {
     let mut probe = Some(path.clone());
     while let Some(p) = probe {
@@ -190,7 +199,95 @@ fn classify(path: &RootPath, facets: &FacetMap) -> Option<crate::facet::Binding>
         }
         probe = p.parent();
     }
-    None
+    facets.session(path.as_str())
+}
+
+/// The media sessions reference, each mapped to the session that wants
+/// it — the dependency half of an atomic facet.
+///
+/// Built by whoever can read session files (the lane does; this module
+/// touches no disk) from the sessions this device keeps
+/// ([`kept_sessions`]), and handed to [`decide_with`]. Only kept
+/// sessions belong in it: a session the device does not keep brings
+/// nothing, which is how a laptop that took one song is not handed the
+/// whole album's audio.
+#[derive(Debug, Clone, Default)]
+pub struct References {
+    by_media: BTreeMap<RootPath, RootPath>,
+}
+
+impl References {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that `session` references each of `media`. When two
+    /// sessions share a file the first one recorded is the one reported.
+    pub fn add(&mut self, session: &RootPath, media: impl IntoIterator<Item = RootPath>) {
+        for m in media {
+            if &m != session {
+                self.by_media.entry(m).or_insert_with(|| session.clone());
+            }
+        }
+    }
+
+    /// The kept session that wants `media`, if any does.
+    #[must_use]
+    pub fn session_of(&self, media: &RootPath) -> Option<&RootPath> {
+        self.by_media.get(media)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_media.is_empty()
+    }
+}
+
+/// The session files among `files` that this device keeps resident.
+///
+/// A session is kept by the same rules as anything else — pinned,
+/// subscribed by facet, or taken with everything — so pinning
+/// `Song/Song.RPP` is how one session is selected without taking every
+/// other session in the project.
+pub fn kept_sessions<'a, I>(files: I, facets: &FacetMap, sub: &Subscription) -> Vec<&'a RootPath>
+where
+    I: IntoIterator<Item = &'a RootPath>,
+{
+    files
+        .into_iter()
+        .filter(|f| {
+            facets.is_session(f.as_str()) && decide(f, facets, sub).hydration == Hydration::Resident
+        })
+        .collect()
+}
+
+/// [`decide`], plus the rule an atomic facet makes: what a kept session
+/// references is resident with it, wherever in the root it sits.
+///
+/// A path the subscription already keeps keeps its own reason. A path
+/// it does not, but a kept session references, is resident because of
+/// that session — which is the case that matters: REAPER records media
+/// by path, and a take in a shared samples folder no tool layout names
+/// is as much the session as the `.rpp` is. Nothing else changes: an
+/// unreferenced file follows the subscription, so footage beside the
+/// session stays a stub.
+#[must_use]
+// t[impl files.sync.selective] — a kept session brings what it references
+pub fn decide_with(
+    path: &RootPath,
+    facets: &FacetMap,
+    sub: &Subscription,
+    refs: &References,
+) -> Decision {
+    let own = decide(path, facets, sub);
+    if own.hydration == Hydration::Resident {
+        return own;
+    }
+    match refs.session_of(path) {
+        Some(session) => Decision::resident(Reason::Referenced(session.clone())),
+        None => own,
+    }
 }
 
 /// Decide a whole listing at once — what a sync pass works from.
@@ -361,6 +458,98 @@ mod tests {
         assert!(
             plan.iter().all(|(_, d)| d.hydration == Hydration::Stub),
             "unsubscribed is a stub — present and sized — never missing"
+        );
+    }
+
+    /// A REAPER album: a session per song, footage nobody's music tool
+    /// names, and a samples folder the sessions reach into.
+    fn reaper_album() -> FacetMap {
+        FacetMap::new([Capability::MusicProduction])
+    }
+
+    #[test]
+    // t[verify files.sync.selective]
+    fn a_session_file_is_in_the_sessions_facet_and_a_backup_is_not() {
+        let m = album();
+        let sub = Subscription::new([Facet::new("sessions")]);
+        let rpp = decide(&p("Song/Song.RPP"), &m, &sub);
+        assert_eq!(
+            rpp.hydration,
+            Hydration::Resident,
+            "subscribing to sessions must keep the session file itself, not only its media"
+        );
+        let backup = decide(&p("Song/Session File Backups/Song.ptx"), &m, &sub);
+        assert_eq!(
+            backup.hydration,
+            Hydration::Stub,
+            "a backup directory's binding beats the file's extension"
+        );
+    }
+
+    #[test]
+    // t[verify files.sync.selective]
+    fn a_pinned_session_brings_what_it_references_and_nothing_else() {
+        let m = reaper_album();
+        let mut sub = Subscription::default();
+        sub.pin(p("Track One/Track One.RPP"));
+        let files: Vec<RootPath> = [
+            "Track One/Track One.RPP",
+            "Track One/Audio Files/Vox_1.wav",
+            "Track Two/Track Two.RPP",
+            "Track Two/Audio Files/Vox_1.wav",
+            "Shared Samples/clap.wav",
+            "Footage/cam-a.mov",
+        ]
+        .iter()
+        .map(|s| p(s))
+        .collect();
+
+        let kept = kept_sessions(files.iter(), &m, &sub);
+        assert_eq!(kept, vec![&p("Track One/Track One.RPP")]);
+
+        let mut refs = References::new();
+        refs.add(
+            kept[0],
+            [
+                p("Track One/Audio Files/Vox_1.wav"),
+                p("Shared Samples/clap.wav"),
+            ],
+        );
+
+        let d = |path: &str| decide_with(&p(path), &m, &sub, &refs);
+        assert_eq!(d("Track One/Track One.RPP").reason, Reason::Pinned);
+        assert_eq!(
+            d("Shared Samples/clap.wav").reason,
+            Reason::Referenced(p("Track One/Track One.RPP")),
+            "media outside every tool directory still comes with its session"
+        );
+        assert_eq!(
+            d("Track One/Audio Files/Vox_1.wav").hydration,
+            Hydration::Resident
+        );
+        for other in [
+            "Track Two/Track Two.RPP",
+            "Track Two/Audio Files/Vox_1.wav",
+            "Footage/cam-a.mov",
+        ] {
+            assert_eq!(d(other).hydration, Hydration::Stub, "{other}");
+        }
+    }
+
+    #[test]
+    fn references_of_a_session_nobody_keeps_bring_nothing() {
+        let m = reaper_album();
+        let sub = Subscription::default();
+        let files = [p("Song/Song.RPP")];
+        assert!(
+            kept_sessions(files.iter(), &m, &sub).is_empty(),
+            "an unselected session is not kept"
+        );
+        // And a References built from no kept session changes nothing.
+        let refs = References::new();
+        assert_eq!(
+            decide_with(&p("Song/Media/take.wav"), &m, &sub, &refs).hydration,
+            Hydration::Stub
         );
     }
 }

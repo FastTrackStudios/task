@@ -242,6 +242,24 @@ pub struct Collection {
     /// The items, kept sorted ascending by [`CollectionItem::rank`].
     #[serde(default)]
     pub items: Vec<CollectionItem>,
+    /// The collection's **revision** — the etag of a safe save.
+    ///
+    /// Issued by the store, never by a caller: `1` on create, and one
+    /// more on every change of any kind (a rename, an item added,
+    /// removed or moved, a [`CollectionService::save`]). A caller that
+    /// edits a whole set list holds the revision it read and hands it to
+    /// `save`; if anything changed the collection in between, the save
+    /// is [`CollectionError::Stale`] and nothing is written.
+    ///
+    /// A row written before revisions existed reads as `0`, and its
+    /// next change makes it `1` — so a revision is comparable from the
+    /// first read onward without rewriting anybody's store.
+    ///
+    /// [`CollectionService::save`]: crate::CollectionService::save
+    /// [`CollectionError::Stale`]: crate::CollectionError::Stale
+    #[serde(default)]
+    #[facet(default)]
+    pub revision: u64,
 }
 
 impl Collection {
@@ -254,6 +272,7 @@ impl Collection {
             title: title.into(),
             kind,
             items: Vec::new(),
+            revision: 0,
         }
     }
 

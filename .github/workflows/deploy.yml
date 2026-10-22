@@ -28,6 +28,14 @@
 # and node-binaries.yml attaches the headless node binaries. The first step
 # checks the tag is a release commit on main (scripts/release.sh tag-guard),
 # so a stray tag cannot reach production.
+#
+# THE `production` BRANCH. starcommand's Argo CD `task` Application follows
+# the `production` branch of this repo (deploy/chart/task), not `main`, so
+# a chart change reaches the cluster at release time only. This workflow
+# is what moves that branch: after the images are pushed it points
+# `production` at the tagged commit (fast-forward for a release; a
+# `workflow_dispatch` of an older tag, i.e. a rollback, may move it back).
+# The branch is a pointer, never pushed to by hand and never a PR base.
 
 name: deploy
 
@@ -82,6 +90,10 @@ jobs:
     # while both slots compiled tests. Its release target dir is its
     # own, which is also what keeps it warm between deploys.
     runs-on: [self-hosted, task-deploy]
+    # contents: write only to move the `production` branch (last step
+    # before the target-dir sweep); the default token is read-only.
+    permissions:
+      contents: write
     steps:
       # A plain checkout, unlike the monorepo's local-first clone. That
       # existed because the monorepo is ~200 MB and the runner held a
@@ -136,6 +148,7 @@ jobs:
           nix develop --accept-flake-config .#default -c \
             python3 scripts/target-sweep.py run deploy-web -- bash -c '
             set -e
+            bash scripts/architect-ui-link.sh
             (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
             cd apps/web
             dx build --release --platform web --debug-symbols false \
@@ -170,6 +183,36 @@ jobs:
                 "docker://${REGISTRY}/${img}:${tag}"
             done
           done
+
+      # Chart and images roll together: Argo follows `production`, so the
+      # chart revision it deploys changes only here, AFTER the images this
+      # tag names are in the registry (a failed build moves nothing).
+      # A release moves the branch forward (fast-forward only, so a tag
+      # that is not a descendant of the live release fails loudly). A
+      # dispatch of an older tag is a rollback and may move it back.
+      # Re-running the same tag is a no-op.
+      - name: Point production at this tag
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "+refs/heads/production:refs/remotes/origin/production" 2>/dev/null || true
+          head="$(git rev-parse HEAD)"
+          if ! git rev-parse --verify --quiet origin/production >/dev/null; then
+            echo "creating production at $head"
+            git push origin "HEAD:refs/heads/production"
+          elif [ "$(git rev-parse origin/production)" = "$head" ]; then
+            echo "production already at $head"
+          elif git merge-base --is-ancestor origin/production HEAD; then
+            echo "fast-forward production -> $head"
+            git push origin "HEAD:refs/heads/production"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "rollback: moving production back to $head (was $(git rev-parse origin/production))"
+            git push --force-with-lease="production:$(git rev-parse origin/production)" origin "HEAD:refs/heads/production"
+          else
+            echo "::error::production ($(git rev-parse origin/production)) is not an ancestor of $head; refusing a non-fast-forward on a tag push (dispatch this tag to roll back)"
+            exit 1
+          fi
 
       # Same discipline as checks: a persistent release target dir grows
       # without bound otherwise. Keep the latest build of each kind
@@ -273,8 +316,10 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/node-binaries.yml
-    # TASK_RELEASE_MINISIGN_KEY signs the release's SHA256SUMS.
-    secrets: inherit
+    # No `secrets: inherit`: the one secret the called workflow needs
+    # (TASK_RELEASE_MINISIGN_KEY, which signs SHA256SUMS) lives in the
+    # `release-signing` environment and is read by its `publish` job
+    # directly, so the repo's other secrets never reach it.
 
   # The release is tagged: build the Linux desktop package at the tag and
   # push it to fasttrackstudio.cachix.org, so NixOS hosts (nix-fleet's

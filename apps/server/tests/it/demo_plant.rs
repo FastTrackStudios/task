@@ -82,6 +82,45 @@ async fn demo_plants_two_devices_with_their_own_subscriptions() -> eyre::Result<
         seen[0] != seen[1],
         "the two planted machines keep the same thing: {seen:?}"
     );
+
+    // What the Mix Room's "sessions" means on this album: each REAPER
+    // session with the takes it names, read through the project page the
+    // seeder declared — music production, so the album's tool folders
+    // are recognised and a folder no tool made is reported.
+    use files::service::sync::FacetSource;
+    let album = roots
+        .iter()
+        .find(|r| r.name == "Example Album")
+        .ok_or_else(|| eyre::eyre!("no Example Album root: {roots:?}"))?;
+    let album = files::RootId::new(album.id);
+    let unit = SyncService::session_media(
+        &files,
+        album,
+        files::RootPath::parse("Track One/Track One.RPP")?,
+    )
+    .await?;
+    eyre::ensure!(unit.parsed && unit.missing.is_empty(), "{unit:?}");
+    let named: Vec<&str> = unit.media.iter().map(|p| p.as_str()).collect();
+    eyre::ensure!(
+        named
+            == [
+                "Track One/Audio Files/Drums_1.wav",
+                "Track One/Audio Files/Vox_1.wav"
+            ],
+        "Track One brings the takes its session names: {named:?}"
+    );
+    let facets = SyncService::facets(&files, album).await?;
+    let source = |path: &str| {
+        facets
+            .iter()
+            .find(|b| b.path.as_str() == path)
+            .map(|b| b.source)
+    };
+    eyre::ensure!(
+        source("Track One/Audio Files") == Some(FacetSource::ToolLayout),
+        "{facets:?}"
+    );
+    eyre::ensure!(source("Inbox") == Some(FacetSource::Unmapped), "{facets:?}");
     Ok(())
 }
 

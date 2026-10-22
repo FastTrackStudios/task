@@ -28,6 +28,7 @@ use resources_proto::{ChartDoc, ResourcesServiceClient};
 
 fn chart(title: &str, source: &str, sections: &[&str]) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         source: source.into(),
@@ -46,6 +47,7 @@ fn chart(title: &str, source: &str, sections: &[&str]) -> ChartDoc {
 /// whether it is asking to be the main one.
 fn arrangement(title: &str, song: &str, label: &str, is_default: bool) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         song: song.into(),
         arrangement: label.into(),
         is_default,
@@ -314,6 +316,7 @@ async fn a_song_carries_several_arrangements_with_one_default() {
     // Asking moves it, and clears the loser in the same operation.
     charts
         .upsert_chart(ChartDoc {
+            revision: String::new(),
             slug: live.slug.clone(),
             ..arrangement("Be Thou My Vision", "song:be-thou", "condensed live", true)
         })

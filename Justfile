@@ -91,6 +91,7 @@ live: css
 # `source(none)` and names every source explicitly, so the output does
 # not depend on the working directory.
 css:
+    bash scripts/architect-ui-link.sh
     tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css
     tailwindcss -i apps/tailwind.css -o apps/mobile/assets/tailwind.css
     tailwindcss -i apps/tailwind.css -o apps/web/assets/tailwind.css
@@ -381,13 +382,20 @@ clippy: ci-clippy
 ci-fmt:
     cargo fmt --all -- --check
 
+# Task's token sheet is architect-ui's, imported through apps/.architect-ui
+# (no vendored copy). Fails on drift: a re-vendored copy, an import that
+# no longer goes through the link, or a link left on another pin. Depends
+# on `css` so the sheet was also compiled from that link.
+ci-architect-css: css
+    bash scripts/architect-ui-link.sh --check
+
 ci-manifests:
     cargo metadata --locked --format-version 1 > /dev/null
 
 # Crate-layout boundaries + ratcheted idioms (boundaries.toml), checked by
 # architect's xtask at a pinned release tag. Resolves graphs, compiles nothing
 # of Task's. Bump the tag with architect releases.
-architect_xtask_tag := "v0.9.10"
+architect_xtask_tag := "v0.9.15"
 ci-boundaries:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -423,7 +431,13 @@ ci-tests: css
     set -uo pipefail
     log="${TASK_CI_TEST_LOG:-${TMPDIR:-/tmp}/nextest-ci.log}"
     mkdir -p "$(dirname "$log")"
-    cargo nextest run --profile ci --workspace --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }} >"$log" 2>&1
+    # TASK_CI_TEST_FILTER: a nextest filterset from the plan job (only the
+    # packages a PR affects, scripts/ci-rail-plan.py). Empty = every test.
+    # The BUILD stays --workspace either way so the warm target dir keeps
+    # one artifact set; only which tests run narrows.
+    filter=()
+    [ -n "${TASK_CI_TEST_FILTER:-}" ] && filter=(-E "$TASK_CI_TEST_FILTER" --no-tests=pass)
+    cargo nextest run --profile ci --workspace "${filter[@]}" --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }} >"$log" 2>&1
     rc=$?
     { grep -E '^ *(FAIL|TRY [0-9]+ (FAIL|TMT)|SIGSEGV|SIGABRT|LEAK|TIMEOUT)|Summary \[|tests were not run|^error' "$log" | head -n 200
       echo "── tail of $log (full log: the step's nextest-ci artifact) ──"; tail -n 60 "$log"; } || true
@@ -462,7 +476,7 @@ ci-docs: css
 # card: on a PR into dev this IS the gate (CI does not run there), and
 # its output is the evidence the reviewer checks on the card. (`ci-docs`
 # runs only on release PRs; `just ci-release` adds it.)
-ci: ci-fmt ci-manifests ci-versions ci-tests ci-clippy ci-wasm
+ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
 #

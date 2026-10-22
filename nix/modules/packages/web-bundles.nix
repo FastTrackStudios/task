@@ -100,6 +100,7 @@
         # and names every source explicitly, so the sheet is identical
         # from anywhere. Run from apps/ purely for the short path.
         preBuild = ''
+          bash scripts/architect-ui-link.sh
           (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
         '';
       };

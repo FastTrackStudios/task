@@ -47,6 +47,159 @@ pub enum Capability {
     VideoProduction,
 }
 
+impl Capability {
+    /// Every capability there is.
+    #[must_use]
+    pub fn all() -> &'static [Self] {
+        &[Self::MusicProduction, Self::VideoProduction]
+    }
+
+    /// The declaration's spelling — `capabilities: [music-production]`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MusicProduction => "music-production",
+            Self::VideoProduction => "video-production",
+        }
+    }
+
+    /// Parse a declared capability name, exactly as
+    /// `project_proto::parts::Capability::parse` does — the two are held
+    /// in step by `project::conventions`' tests. `None` for anything
+    /// outside the vocabulary: reported by the caller, never guessed.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "music-production" | "music_production" => Some(Self::MusicProduction),
+            "video-production" | "video_production" => Some(Self::VideoProduction),
+            _ => None,
+        }
+    }
+
+    /// Read a legacy free-string `projectType`, exactly as
+    /// `project_proto::parts::Capability::from_project_type` does.
+    #[must_use]
+    pub fn from_project_type(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "music" | "audio" | "album" | "song" | "music-production" => {
+                Some(Self::MusicProduction)
+            }
+            "video" | "film" | "documentary" | "video-production" => Some(Self::VideoProduction),
+            _ => None,
+        }
+    }
+}
+
+/// The file at the top of a project's directory that says what the
+/// project is — its page, with the `capabilities:` list in frontmatter
+/// (`project.identity.declaration`).
+///
+/// A File Root adopted from a project's directory carries the page in
+/// its own tree, so the declaration travels with the root: every device
+/// that syncs the root reads the same capabilities from the same bytes,
+/// with no second channel to keep in step and nothing to lose on a
+/// restart.
+pub const DECLARATION: &str = "project.md";
+
+/// What a project page declares about the work it holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declaration {
+    /// The recognised capabilities, in the page's order.
+    pub held: Vec<Capability>,
+    /// Names the page carries that are not capabilities — a typo, or an
+    /// application name ADR 0004 removed. Kept so a surface can say so.
+    pub unrecognised: Vec<String>,
+}
+
+impl Declaration {
+    fn from_names<I: IntoIterator<Item = String>>(names: I) -> Self {
+        let mut out = Self::default();
+        for name in names {
+            match Capability::parse(&name) {
+                Some(c) if !out.held.contains(&c) => out.held.push(c),
+                Some(_) => {}
+                None if name.trim().is_empty() => {}
+                None => out.unrecognised.push(name.trim().to_owned()),
+            }
+        }
+        out
+    }
+}
+
+/// Read the capabilities a project page declares.
+///
+/// The same reading `project`'s entity parser makes of the same page:
+/// `capabilities:` as written (a single string is a set of one), and
+/// only when that is absent the legacy `projectType` / `project_type`.
+/// A page with neither, or no frontmatter at all, declares nothing —
+/// and a project that declares nothing gets no tool layouts, because we
+/// do not know which tool wrote it and guessing is how footage ends up
+/// on the wrong tier.
+#[must_use]
+// t[impl project.identity.declaration] — the root's capabilities are
+// read from its own project page and nowhere else
+pub fn declaration(page: &str) -> Declaration {
+    let Some(front) = frontmatter(page) else {
+        return Declaration::default();
+    };
+    let Ok(serde_yaml::Value::Mapping(map)) = serde_yaml::from_str::<serde_yaml::Value>(front)
+    else {
+        return Declaration::default();
+    };
+    if let Some(value) = map.get("capabilities") {
+        let names = match value {
+            serde_yaml::Value::String(one) => vec![one.clone()],
+            other => serde_yaml::from_value::<Vec<String>>(other.clone()).unwrap_or_default(),
+        };
+        if !names.is_empty() {
+            return Declaration::from_names(names);
+        }
+    }
+    for key in ["projectType", "project_type"] {
+        if let Some(serde_yaml::Value::String(t)) = map.get(key) {
+            return Declaration {
+                held: Capability::from_project_type(t).into_iter().collect(),
+                unrecognised: Vec::new(),
+            };
+        }
+    }
+    Declaration::default()
+}
+
+/// The YAML between a page's opening `---` and the next `---` line.
+fn frontmatter(page: &str) -> Option<&str> {
+    let page = page.strip_prefix('\u{feff}').unwrap_or(page);
+    let rest = page
+        .strip_prefix("---\r\n")
+        .or_else(|| page.strip_prefix("---\n"))?;
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end() == "---" {
+            return rest.get(..offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// The facet a session file belongs to, and the one its media follows.
+pub const SESSIONS: &str = "sessions";
+
+/// Session-file extensions a capability's tools write, lowercased.
+///
+/// Part of the convention set for the same reason tool directories are:
+/// REAPER always saves `.rpp`, Pro Tools `.ptx`, and nobody should have
+/// to tell a project so. A session is the unit a person opens, so it is
+/// what selective sync must keep whole (`files.sync.selective`).
+fn session_extensions_for(capability: Capability) -> &'static [&'static str] {
+    match capability {
+        // REAPER; Pro Tools (current, 7–9, 5–6).
+        Capability::MusicProduction => &["rpp", "ptx", "ptf", "pts"],
+        // DaVinci Resolve's exported project; Premiere.
+        Capability::VideoProduction => &["drp", "prproj"],
+    }
+}
+
 /// A named class of content.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Facet(pub String);
@@ -326,6 +479,42 @@ impl FacetMap {
         Binding::unmapped()
     }
 
+    /// The capabilities whose conventions this map applies.
+    #[must_use]
+    pub fn capabilities(&self) -> &[Capability] {
+        &self.capabilities
+    }
+
+    /// Whether `path` names a session file one of this project's
+    /// capabilities writes — `Song.RPP` in a music project, never in a
+    /// project that declared only video.
+    #[must_use]
+    pub fn is_session(&self, path: &str) -> bool {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let Some((stem, ext)) = name.rsplit_once('.') else {
+            return false;
+        };
+        if stem.is_empty() {
+            return false;
+        }
+        let ext = ext.to_ascii_lowercase();
+        self.capabilities
+            .iter()
+            .copied()
+            .any(|c| session_extensions_for(c).contains(&ext.as_str()))
+    }
+
+    /// A session file's own binding: the atomic `sessions` facet.
+    ///
+    /// Asked only of a file nothing else classified (see
+    /// `hydration::decide`), so a Pro Tools backup in `Session File
+    /// Backups` stays a backup and a session a project deliberately
+    /// filed under its own mapping stays there.
+    #[must_use]
+    pub fn session(&self, path: &str) -> Option<Binding> {
+        self.is_session(path).then(|| Binding::tool(SESSIONS, true))
+    }
+
     /// The facet an unmapped path syncs with.
     #[must_use]
     pub fn default_facet(&self) -> Option<&Facet> {
@@ -358,6 +547,13 @@ impl FacetMap {
             .flat_map(|l| l.iter())
             .map(|d| Facet::new(d.facet))
             .chain(self.project.values().cloned())
+            // Every capability's tools write a session file, so a
+            // project holding any of them can be subscribed by session.
+            .chain(
+                (!self.capabilities.is_empty())
+                    .then(|| Facet::new(SESSIONS))
+                    .into_iter(),
+            )
             .collect();
         out.sort();
         out.dedup();
@@ -455,6 +651,86 @@ mod tests {
                 "Video ISO Files",
                 "Archive - Original AAC MP4s"
             ]
+        );
+    }
+
+    #[test]
+    // t[verify project.identity.declaration]
+    fn a_project_page_declares_the_capabilities_its_root_is_read_by() {
+        let page = "---\ntype: project\ntitle: Album\ncapabilities:\n  - music-production\n  - keyflow\n---\n\n# Album\n";
+        let d = declaration(page);
+        assert_eq!(d.held, vec![Capability::MusicProduction]);
+        assert_eq!(
+            d.unrecognised,
+            vec!["keyflow".to_string()],
+            "an application name is reported, not dropped"
+        );
+
+        let inline = declaration("---\ncapabilities: [video-production, music-production]\n---\n");
+        assert_eq!(
+            inline.held,
+            vec![Capability::VideoProduction, Capability::MusicProduction]
+        );
+        let one = declaration("---\ncapabilities: video-production\n---\nbody");
+        assert_eq!(one.held, vec![Capability::VideoProduction]);
+    }
+
+    #[test]
+    fn the_legacy_project_type_is_read_only_when_capabilities_are_absent() {
+        let legacy = declaration("---\nprojectType: film\n---\n");
+        assert_eq!(legacy.held, vec![Capability::VideoProduction]);
+        let both = declaration("---\nproject_type: film\ncapabilities: [music-production]\n---\n");
+        assert_eq!(both.held, vec![Capability::MusicProduction]);
+        // `audio-production` is not a type anyone mapped: declared
+        // nothing, which is a legible state rather than a guess.
+        let unknown = declaration("---\nproject_type: audio-production\n---\n");
+        assert!(unknown.held.is_empty());
+    }
+
+    #[test]
+    fn a_page_without_frontmatter_declares_nothing() {
+        assert_eq!(declaration("# Just notes\n"), Declaration::default());
+        assert_eq!(declaration(""), Declaration::default());
+        assert_eq!(
+            declaration("---\ncapabilities: [music-production]\n"),
+            Declaration::default(),
+            "an unterminated block is not frontmatter"
+        );
+    }
+
+    #[test]
+    fn capability_names_round_trip() {
+        for c in Capability::all() {
+            assert_eq!(Capability::parse(c.as_str()), Some(*c));
+        }
+    }
+
+    #[test]
+    // t[verify files.sync.selective]
+    fn a_session_file_is_known_only_to_the_capability_whose_tools_write_it() {
+        let m = music();
+        assert!(m.is_session("Track One/Track One.RPP"));
+        assert!(m.is_session("01 Song/01 Song.ptx"));
+        assert!(!m.is_session("Track One/Track One.rpp-bak"));
+        assert!(
+            !m.is_session("Track One/.rpp"),
+            "a dotfile is not a session"
+        );
+        assert!(
+            !m.is_session("Grade/cut.drp"),
+            "Resolve is not music production"
+        );
+        assert_eq!(
+            m.session("a.rpp").map(|b| (b.facet, b.atomic)),
+            Some((Some(Facet::new(SESSIONS)), true))
+        );
+
+        let video = FacetMap::new([Capability::VideoProduction]);
+        assert!(video.is_session("Grade/cut.drp"));
+        assert!(!video.is_session("Track One/Track One.RPP"));
+        assert!(
+            !FacetMap::default().is_session("Track One/Track One.RPP"),
+            "a project that declared nothing has no sessions to recognise"
         );
     }
 

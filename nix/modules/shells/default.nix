@@ -28,8 +28,8 @@
         config.fts.dx.wasmBindgen  # wasm-bindgen-cli 0.2.127 (lock match)
         config.fts.dx.binaryen     # wasm-opt 129 — what dx pins
       ]
-      # cargo-rail — graph-aware workspace maintenance and the CI change
-      # selection this repo's checks.yml plans with. Pinned + patched
+      # cargo-rail — the CI change selection checks.yml plans with
+      # (`cargo rail plan`), so a local plan gives CI's answer. Pinned
       # build, NOT nixpkgs' stale 0.7.0 (nix/modules/cargo-rail.nix).
       ++ lib.optionals (config.fts.cargoRail != null) [ config.fts.cargoRail ]
       ++ lib.optionals pkgs.stdenv.isLinux [

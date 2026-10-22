@@ -56,6 +56,7 @@ const PATCHES: &str = "patches";
 
 fn song(title: &str, key: &str) -> SongDoc {
     SongDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         writers: vec!["Victor".into()],
@@ -67,6 +68,7 @@ fn song(title: &str, key: &str) -> SongDoc {
 
 fn chart(title: &str, song_slug: &str, body: &str) -> ChartDoc {
     ChartDoc {
+        revision: String::new(),
         slug: String::new(),
         title: title.into(),
         source: body.into(),

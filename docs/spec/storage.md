@@ -98,6 +98,36 @@ record of what it already says.
 
 ---
 
+### A whole-document save names the revision it was made against
+
+t[storage.save.revision]
+A chart or a song read through the library lane carries a server-issued
+revision: a digest of what the document says — its frontmatter as data, keys
+in sorted order, then its body — so it means the same thing on every node
+holding the document, including after the collaborative layer re-renders the
+file with its keys in another order. A
+save that sends a revision lands only if the document is still at it; anything
+else — another client's save, a collaborative edit flushed, a change pulled
+from another device, the document deleted — is refused as `Stale` with the
+revision it is at now, and nothing is written. The check and the write are one
+step on the node. A save with no revision is unconditional, for creates and
+for clients written before revisions existed.
+
+---
+
+### A whole-list save of a collection is conditional too
+
+t[storage.save.collection]
+A collection (a setlist, a show, a library) carries a revision the store
+issues — one on create, one more on every change of any kind. A whole-list
+save (`CollectionService::save`: the title and the full order) names the
+revision it was read at and is refused as `Stale` when the collection has
+moved on, writing nothing. Single-item edits (`add_item`, `remove_item`,
+`reorder`) stay unconditional because two of them compose rather than one
+erasing the other; they still move the revision on.
+
+---
+
 ## Query
 
 ### No query answers by scanning

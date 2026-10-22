@@ -14,8 +14,8 @@
   perSystem = { pkgs, lib, config, ... }: {
     devShells.ci = pkgs.mkShell ({
       packages = [ config.fts.rustToolchain pkgs.cargo-nextest ]
-      # cargo-rail — the `plan` job's change selection (and `cargo rail
-      # unify --check` as a hygiene gate). Store-sourced only.
+      # cargo-rail — the `plan` job's change selection and the Tests
+      # step's evidence recorder. Store-sourced only.
       ++ lib.optionals (config.fts.cargoRail != null) [ config.fts.cargoRail ]
       ++ config.fts.buildInputs
       # The shared native tool list (pkg-config, bindgen, tailwindcss),
@@ -30,8 +30,8 @@
         pkgs.nodejs_22
         # git — task-server tests and the snapshot engine shell out to it.
         pkgs.git
-        # python3 — the `plan` job parses `cargo rail plan --format json`
-        # with it. Hosted Ubuntu images ship one; the self-hosted NixOS
+        # python3 — the `plan` job turns `cargo rail plan --json` into gates
+        # with it (scripts/ci-rail-plan.py). Hosted Ubuntu images ship one; the self-hosted NixOS
         # runner does not, so the shell has to carry it.
         pkgs.python3
         # mold — CI selects it for the host target via

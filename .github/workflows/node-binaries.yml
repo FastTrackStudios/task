@@ -15,9 +15,10 @@
 # The secret half is the TASK_RELEASE_MINISIGN_KEY Actions secret (an
 # unencrypted minisign secret key file, `minisign -G -W`); the public half
 # is RELEASE_SIGNING_KEY in apps/server/src/self_update.rs, and the publish
-# job refuses to sign with a key that is not that one. Until the secret is
-# set, releases go out unsigned with a warning, and `self-update` installs
-# none of them.
+# job refuses to sign with a key that is not that one. A tag that pins a
+# key fails without the secret (an unsigned release would be one no pinned
+# node installs); only a backfill of a tag from before the pin (v0.2.4 and
+# older) goes out unsigned, with a warning.
 #
 # The asset names are a contract: `task-server self-update`
 # (apps/server/src/self_update.rs) and scripts/install-node.sh look them up
@@ -155,7 +156,11 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
       # libssl.a instead of libssl.so.3 / Homebrew's dylib: the binary must
-      # not depend on a library a fresh host may not have.
+      # not depend on a library a fresh host may not have. On Linux this is
+      # only honoured together with OPENSSL_LIB_DIR / OPENSSL_INCLUDE_DIR
+      # (set below): with `OPENSSL_STATIC=1` alone openssl-sys goes through
+      # pkg-config, emits a dynamic `link-lib=ssl` and v0.2.4's binaries
+      # needed libssl.so.3 (probed on ubuntu-22.04 and -arm, STA-161).
       OPENSSL_STATIC: "1"
     steps:
       - uses: actions/checkout@v4
@@ -167,6 +172,13 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q pkg-config libssl-dev cmake clang
+          # Point openssl-sys at the static archives (/usr/lib/<multiarch>/libssl.a,
+          # libcrypto.a ship in libssl-dev) so it links them statically.
+          m="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+          test -f "/usr/lib/$m/libssl.a" -a -f "/usr/lib/$m/libcrypto.a" \
+            || { echo "::error::no static OpenSSL archives in /usr/lib/$m"; exit 1; }
+          echo "OPENSSL_LIB_DIR=/usr/lib/$m" >> "$GITHUB_ENV"
+          echo "OPENSSL_INCLUDE_DIR=/usr/include" >> "$GITHUB_ENV"
 
       - name: Native build dependencies (macOS)
         if: ${{ runner.os == 'macOS' }}
@@ -227,6 +239,12 @@ jobs:
     needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The signing key is an environment secret, and the environment only
+    # admits runs on a `v*` tag (deployment policy). A branch run, or a
+    # workflow edited on a branch, cannot read it (Reviewer S11, STA-161).
+    # Keep TASK_RELEASE_MINISIGN_KEY out of the repository-level secrets:
+    # an environment job can read those too.
+    environment: release-signing
     permissions:
       contents: write
     steps:
@@ -257,6 +275,10 @@ jobs:
           sha256sum task-server-* > SHA256SUMS
           cat SHA256SUMS
           assets=(task-server-* SHA256SUMS)
+          if [ -n "$pinned" ] && [ -z "$MINISIGN_KEY" ]; then
+            echo "::error::$TAG pins RELEASE_SIGNING_KEY but TASK_RELEASE_MINISIGN_KEY is not set (release-signing environment): an unsigned release would install on no node"
+            exit 1
+          fi
           if [ -n "$MINISIGN_KEY" ]; then
             [ -n "$pinned" ] || { echo "::error::TASK_RELEASE_MINISIGN_KEY is set but $TAG pins no RELEASE_SIGNING_KEY: nodes could not verify this signature"; exit 1; }
             sudo apt-get install -y -q minisign >/dev/null
@@ -268,7 +290,7 @@ jobs:
             minisign -V -P "$pinned" -m SHA256SUMS -x SHA256SUMS.minisig
             assets+=(SHA256SUMS.minisig)
           else
-            echo "::warning::TASK_RELEASE_MINISIGN_KEY is not set: $TAG's node binaries go out unsigned, and task-server self-update will not install them"
+            echo "::warning::$TAG pins no RELEASE_SIGNING_KEY (a tag from before the pin) and TASK_RELEASE_MINISIGN_KEY is not set: its node binaries go out unsigned, and task-server self-update will not install them"
           fi
           gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           {

@@ -1,3 +1,26 @@
 <REAPER_PROJECT 0.1 "7.09" 1728662400
   TEMPO 120 4 4
+  RECORD_PATH "Audio Files" ""
+  <TRACK
+    NAME Vox
+    <ITEM
+      POSITION 0
+      LENGTH 4
+      NAME Vox_1.wav
+      <SOURCE WAVE
+        FILE "Audio Files/Vox_1.wav"
+      >
+    >
+  >
+  <TRACK
+    NAME Drums
+    <ITEM
+      POSITION 0
+      LENGTH 4
+      NAME Drums_1.wav
+      <SOURCE WAVE
+        FILE "Audio Files/Drums_1.wav"
+      >
+    >
+  >
 >

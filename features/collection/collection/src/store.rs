@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collection_proto::{
-    Collection, CollectionError, CollectionItem, CollectionKind, CollectionService, NodeKind,
-    NodeRef, Placement,
+    Collection, CollectionError, CollectionItem, CollectionKind, CollectionSave, CollectionService,
+    NodeKind, NodeRef, Placement,
 };
 use vault_live::lexorank;
 
@@ -157,6 +157,7 @@ impl CollectionService for Store {
         let mut inner = self.inner.lock().expect("collection store poisoned");
         let mut c = Collection::new(org, title, kind);
         c.id = uuid::Uuid::new_v4().to_string();
+        c.revision = 1;
         inner.collections.push(c.clone());
         inner.persist()?;
         Ok(c)
@@ -176,6 +177,7 @@ impl CollectionService for Store {
         let mut inner = self.inner.lock().expect("collection store poisoned");
         let c = inner.find_mut(id)?;
         c.title = title;
+        c.revision += 1;
         inner.persist()?;
         inner.find_mut(id).cloned()
     }
@@ -237,6 +239,7 @@ impl CollectionService for Store {
         let rank = rank_after(&c.items, placement.after.as_ref());
         c.items.push(CollectionItem::new(placement.node, rank));
         c.sort_items();
+        c.revision += 1;
         inner.persist()?;
         inner.find_mut(&placement.collection_id).cloned()
     }
@@ -253,6 +256,7 @@ impl CollectionService for Store {
         if c.items.len() == before {
             return Err(CollectionError::NotFound(node.to_token()));
         }
+        c.revision += 1;
         inner.persist()?;
         inner.find_mut(collection_id).cloned()
     }
@@ -279,8 +283,64 @@ impl CollectionService for Store {
             }
         }
         c.sort_items();
+        c.revision += 1;
         inner.persist()?;
         inner.find_mut(&placement.collection_id).cloned()
+    }
+
+    // t[impl storage.save.collection]
+    fn save(&self, edit: CollectionSave) -> Result<Collection, CollectionError> {
+        if edit.title.trim().is_empty() {
+            return Err(CollectionError::BadRequest(
+                "a collection's title may not be blank".to_string(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        if let Some(twice) = edit.items.iter().find(|n| !seen.insert(*n)) {
+            return Err(CollectionError::BadRequest(format!(
+                "item listed twice: {}",
+                twice.to_token()
+            )));
+        }
+        let mut inner = self.inner.lock().expect("collection store poisoned");
+        // The check comes first, under the same lock as the write: a save
+        // made against an old read is refused before anything about it —
+        // even its validity — is looked at, because the person's next
+        // step is the same either way (see what changed, then decide).
+        let current = inner.find_mut(&edit.id)?.revision;
+        if current != edit.revision {
+            return Err(CollectionError::Stale(current));
+        }
+        // The one loop `add_item` refuses, refused here too: a saved
+        // list may hold collections, but never one that holds this one.
+        if let Some(cycle) = edit.items.iter().find(|n| {
+            n.kind == NodeKind::Collection
+                && n.is_local()
+                && reaches(&inner.collections, &n.id, &edit.id)
+        }) {
+            return Err(CollectionError::BadRequest(format!(
+                "`{}` already contains `{}`, directly or through the collections \
+                 it holds, so saving it there would make a collection that \
+                 contains itself",
+                cycle.id, edit.id
+            )));
+        }
+        let c = inner.find_mut(&edit.id)?;
+        // Ranked fresh, in the order given: the list *is* the order, and
+        // a whole-list save has no single moved item to rank locally.
+        let mut items: Vec<CollectionItem> = Vec::with_capacity(edit.items.len());
+        for node in edit.items {
+            let rank = match items.last() {
+                Some(prev) => lexorank::after(&prev.rank),
+                None => lexorank::first(),
+            };
+            items.push(CollectionItem::new(node, rank));
+        }
+        c.title = edit.title;
+        c.items = items;
+        c.revision += 1;
+        inner.persist()?;
+        inner.find_mut(&edit.id).cloned()
     }
 }
 
@@ -733,5 +793,124 @@ mod tests {
             s.remove_item(&c.id, NodeRef::song("a")),
             Err(CollectionError::NotFound(_))
         ));
+    }
+
+    /// Every change moves the revision on, and a whole-list save against
+    /// an old one is `Stale` and writes nothing.
+    #[test]
+    fn a_save_against_an_old_revision_is_stale() {
+        let s = store();
+        let c = s
+            .create("acme".into(), "Set".into(), CollectionKind::new("setlist"))
+            .unwrap();
+        assert_eq!(c.revision, 1, "a new collection is at revision one");
+        let mut at = c.revision;
+        for id in ["a", "b", "c"] {
+            let next = s
+                .add_item(Placement {
+                    collection_id: c.id.clone(),
+                    node: NodeRef::song(id),
+                    after: None,
+                })
+                .unwrap();
+            assert_eq!(next.revision, at + 1, "an add moves it on");
+            at = next.revision;
+        }
+        let read = s.get(&c.id).unwrap().unwrap();
+        let save = |revision, title: &str, items: &[&str]| CollectionSave {
+            id: c.id.clone(),
+            revision,
+            title: title.into(),
+            items: items.iter().map(|i| NodeRef::song(*i)).collect(),
+        };
+
+        let first = s
+            .save(save(read.revision, "Set", &["c", "a", "b"]))
+            .unwrap();
+        assert_eq!(first.revision, read.revision + 1);
+        assert_eq!(nodes(&first), ["c", "a", "b"]);
+        assert!(
+            first.items.windows(2).all(|w| w[0].rank < w[1].rank),
+            "ranks follow the saved order"
+        );
+
+        assert_eq!(
+            s.save(save(read.revision, "Late", &["b"])),
+            Err(CollectionError::Stale(first.revision))
+        );
+        let held = s.get(&c.id).unwrap().unwrap();
+        assert_eq!(held, first, "the refused save wrote nothing");
+
+        // A rename, a removal, a reorder: each makes a held list stale.
+        let renamed = s.rename(&c.id, "Set (final)".into()).unwrap();
+        assert_eq!(renamed.revision, first.revision + 1);
+        assert_eq!(
+            s.save(save(first.revision, "Set", &["a"])),
+            Err(CollectionError::Stale(renamed.revision))
+        );
+        let removed = s.remove_item(&c.id, NodeRef::song("b")).unwrap();
+        let moved = s
+            .reorder(Placement {
+                collection_id: c.id.clone(),
+                node: NodeRef::song("c"),
+                after: None,
+            })
+            .unwrap();
+        assert_eq!(moved.revision, removed.revision + 1);
+
+        // Bad lists are refused, and say why.
+        assert!(matches!(
+            s.save(save(moved.revision, "  ", &["a"])),
+            Err(CollectionError::BadRequest(_))
+        ));
+        assert!(matches!(
+            s.save(save(moved.revision, "Set", &["a", "a"])),
+            Err(CollectionError::BadRequest(_))
+        ));
+        let mut into_itself = save(moved.revision, "Set", &["a"]);
+        into_itself
+            .items
+            .push(NodeRef::parse(&format!("collection:{}", c.id)).unwrap());
+        assert!(matches!(
+            s.save(into_itself),
+            Err(CollectionError::BadRequest(_))
+        ));
+        assert!(matches!(
+            s.save(CollectionSave {
+                id: "nope".into(),
+                ..save(1, "Set", &[])
+            }),
+            Err(CollectionError::NotFound(_))
+        ));
+
+        // And the revision survives a reopen.
+        let reopened = Store::open(s.inner.lock().unwrap().path.clone());
+        assert_eq!(
+            reopened.get(&c.id).unwrap().unwrap().revision,
+            moved.revision
+        );
+    }
+
+    /// A row written before revisions existed reads as revision zero, and
+    /// its next change makes it one.
+    #[test]
+    fn a_legacy_row_starts_at_revision_zero() {
+        let path = std::env::temp_dir().join(format!("col-rev-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&path, LEGACY_JSONL).unwrap();
+        let s = Store::open(&path);
+        let set = s
+            .list("acme-audio".into(), Some(CollectionKind::new("setlist")))
+            .unwrap()
+            .remove(0);
+        assert_eq!(set.revision, 0);
+        let saved = s
+            .save(CollectionSave {
+                id: set.id.clone(),
+                revision: 0,
+                title: set.title.clone(),
+                items: vec![],
+            })
+            .unwrap();
+        assert_eq!(saved.revision, 1);
     }
 }

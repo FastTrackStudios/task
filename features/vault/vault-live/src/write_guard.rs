@@ -53,7 +53,15 @@ pub fn current_caller() -> Option<String> {
 /// The account the permissions gate resolved for the call on this task.
 #[must_use]
 pub fn gate_principal() -> Option<String> {
-    match architect::permissions_gate::caller() {
+    account_of(architect::permissions_gate::caller().as_ref()).map(str::to_owned)
+}
+
+/// The account `who` is, for a [`WriteGuard`]: a signed-in user's id;
+/// `None` for everyone else (a node, the server itself), whom the guard
+/// does not govern.
+#[must_use]
+pub fn account_of(who: Option<&architect_permissions::Principal>) -> Option<&str> {
+    match who {
         Some(architect_permissions::Principal::User { user_id }) => Some(user_id),
         _ => None,
     }

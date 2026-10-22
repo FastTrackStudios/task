@@ -123,9 +123,9 @@ const DEFAULT_SYNC_SECS: u64 = 600;
 
 /// The sync interval the deployment asked for.
 fn sync_interval() -> Duration {
-    std::env::var("TASK_WIKI_REPO_SYNC_SECS")
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
+    crate::config::ServerConfig::load()
+        .wiki_repo_sync_secs
+        .and_then(|s| s.parse::<u64>().ok())
         .filter(|s| *s > 0)
         .map_or(Duration::from_secs(DEFAULT_SYNC_SECS), Duration::from_secs)
 }
@@ -140,10 +140,16 @@ fn sync_interval() -> Duration {
 pub fn spawn_sync_loop(org_slug: String, edits: EditsBackend) {
     tokio::spawn(async move {
         let every = sync_interval();
-        loop {
-            sync_all(&org_slug, &edits).await;
-            tokio::time::sleep(every).await;
-        }
+        let (org_slug, edits) = (org_slug.as_str(), &edits);
+        // Never ends: a pass that fails logs and the next one runs.
+        let _never: Result<(), std::convert::Infallible> = architect::repeat(
+            move || async move {
+                sync_all(org_slug, edits).await;
+                Ok(())
+            },
+            architect::Schedule::spaced(every),
+        )
+        .await;
     });
 }
 

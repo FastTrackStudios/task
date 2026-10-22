@@ -492,6 +492,9 @@ impl Contacts for VaultContacts {
         self.delete_file(&format!("{ACCOUNTS_DIR}/{}.md", sanitize(id)))
     }
 
+    // t[impl contacts.sync.host-absent] — the pull is this node's own:
+    // its account file, its credential store, its transport; no host in
+    // the path.
     fn sync_account(&self, id: String) -> Result<SyncReport, ContactsError> {
         let stored = self
             .load_account(&id)?

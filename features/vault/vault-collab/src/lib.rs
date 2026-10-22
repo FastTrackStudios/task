@@ -75,8 +75,10 @@ use std::time::Duration;
 // (2026-10-13) the doc is the authored record and the file its mirror:
 // it is written from the doc, and text arriving in it merges back as a
 // change
+use architect_telemetry::wide;
 use crdt::codec::TextOp;
 use crdt::registry::DocRegistry;
+use crdt::sync::{DocSync, SyncDown, SyncError};
 use crdt::{CrdtDoc, FilePersistence, PersistError, WeakCrdtDoc};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -176,6 +178,15 @@ impl VaultCollab {
         .with_admission({
             let backend = backend.clone();
             move |doc_id| backend.collab_route(doc_id).is_some()
+        })
+        // Authorization: the file's write guard, asked for the caller
+        // the permissions gate resolved, on every attach through every
+        // lane (the collab lane, the peer lane, this node's own).
+        .with_authorizer({
+            let backend = backend.clone();
+            move |who, doc_id| {
+                may_attach(&backend, vault_live::write_guard::account_of(who), doc_id).is_ok()
+            }
         })
         .with_idle_eviction(IDLE_EVICTION);
 
@@ -762,6 +773,59 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(hex, "{b:02x}");
     }
     hex
+}
+
+/// May `account` attach to `doc_id`? A vault file is written two ways:
+/// a save (`VaultSync::put_file`, which asks the backend's
+/// [`vault_live::WriteGuard`] itself) and a live session, whose edits
+/// reach disk through the write-behind, which runs as the server. So the
+/// rule is applied at the attach: the doc is looked back up to its file
+/// and the same guard is asked. An id no `open_collab` registered is the
+/// registry's admission to refuse.
+fn may_attach(backend: &Backend, account: Option<&str>, doc_id: Uuid) -> Result<(), SyncError> {
+    let Some((vault_id, path)) = backend.collab_route(doc_id) else {
+        return Ok(());
+    };
+    backend
+        .check_write(&vault_id, &path, account)
+        .map_err(|e| SyncError::Internal(e.to_string()))
+}
+
+/// The collab lane: the registry's `DocSync`, refusing (before anything
+/// is opened) a caller the write guard refuses, with the guard's reason,
+/// and a replica whose history shares nothing with the served document:
+/// the server's document was recreated (a fresh data root, a reseeded
+/// demo) under the same id. Merging the two would put every line in
+/// twice; refusing with [`crdt::peer::FOREIGN_LINEAGE`] lets the device
+/// keep its copy and decide (`vault_doc::Replica::reset`).
+impl DocSync for VaultCollab {
+    // t[impl offline.doc.access] — every attach (each reconnect of each
+    // device, offline-created documents' first sync included) is checked
+    // against the file's write guard for the caller on this request, and
+    // a replica from another lineage is refused rather than merged
+    async fn sync(
+        &self,
+        doc_id: Uuid,
+        from: Vec<u8>,
+        up: vox::Rx<Vec<u8>>,
+        down: vox::Tx<SyncDown>,
+    ) -> Result<(), SyncError> {
+        let who = crdt::architect::permissions_gate::caller();
+        if let Err(e) = may_attach(
+            &self.shared.backend,
+            vault_live::write_guard::account_of(who.as_ref()),
+            doc_id,
+        ) {
+            wide::set("collab.sync", "refused");
+            return Err(e);
+        }
+        if let Err(e) = crdt::peer::check_lineage(&self.registry, doc_id, &from).await {
+            wide::set("collab.sync", "foreign_lineage");
+            return Err(e);
+        }
+        wide::set("collab.sync", "attached");
+        self.registry.sync(doc_id, from, up, down).await
+    }
 }
 
 #[cfg(test)]

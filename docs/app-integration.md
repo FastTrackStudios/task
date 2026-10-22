@@ -258,6 +258,7 @@ never re-lists the tree.
 - [ ] A fresh account signs in and lands in its personal org with no manual step.
 - [ ] The app's roots are found by `ensure_root` on every start, never created twice.
 - [ ] Every save passes an `Expect` (`create_only` or `replacing(etag)`) unless last-writer-wins is genuinely what the person wants.
+- [ ] Every edit of a chart, song or setlist sends the `revision` it was read at (see *Saving safely*).
 - [ ] Every manifest that names bytes carries a pinned `ContentRef`.
 - [ ] A second machine signed in as the same person lists the manifests and fetches the bytes.
 - [ ] A late save from a second machine surfaces `Stale` to the person instead of overwriting.
@@ -281,6 +282,20 @@ safe saving exists for. Name a milestone with `CurationServiceClient::
 name_version` so it survives retention. A DAW opens files on local disk, so
 the working copy on a machine comes from the Files daemon, not from streaming
 — see *Not built yet*.
+
+A session and its media are one unit. Declare the project's work in the
+`capabilities:` list of the `project.md` at the top of the root
+(`music-production` for REAPER and Pro Tools, `video-production` for
+Resolve): that page travels with the root, and it is what makes `.rpp` a
+session and `Media/` a tool directory on every machine that syncs it. A
+machine then selects one session by pinning its file
+(`SyncServiceClient::pin(root, vec![session], true)`), or every session by
+subscribing to `sessions`; either way the session and every file its `FILE`
+lines name stay resident together — wherever those files sit in the root —
+and nothing else does. `SyncServiceClient::session_media(root, session)`
+lists that unit before you open it: the media present, what the session
+names but the root lacks (`missing`), and paths outside the root
+(`outside`).
 
 **Keyflow (charts).** Charts are vault documents, not bytes:
 `ResourcesServiceClient::upsert_chart` / `chart` / `list_charts`, with
@@ -329,6 +344,56 @@ and let them choose; re-fetch the current etag with `files.entry(root, path)`.
 The etag is issued by the server (`CatalogueEntry::content`); an app never
 computes one.
 
+#### Charts, songs and setlists
+
+The library lanes follow the same rule, with a **revision** in place of the
+etag. Every read carries one, and a save that hands it back lands only if
+nothing has changed since:
+
+| what | read it from | save with | refused as |
+|---|---|---|---|
+| chart | `resources.chart(slug)` → `ChartDoc::revision` | `upsert_chart(ChartDoc { revision, .. })` | `ResourcesError::Stale(now)` |
+| song | `resources.song(slug)` → `SongDoc::revision` | `upsert_song(SongDoc { revision, .. })` | `ResourcesError::Stale(now)` |
+| setlist, show, library | `collections.get(id)` → `Collection::revision` | `collections.save(CollectionSave { id, revision, title, items })` | `CollectionError::Stale(now)` |
+
+```rust
+let chart = resources.chart("track-one".into()).await?;
+let edited = ChartDoc { source: new_source, ..chart }; // keeps `revision`
+match resources.upsert_chart(edited).await {
+    Ok(saved) => held_revision = saved.revision, // the next save's revision
+    Err(VoxError::User(e)) if matches!(*e, ResourcesError::Stale(_)) => {
+        // Somebody saved first. Nothing was written: re-read, show the
+        // person both versions, save again against the new revision.
+    }
+    Err(e) => return Err(e.into()),
+}
+```
+
+- **Keep the revision with what the person is editing**, and send it back
+  unchanged; the upsert's answer (`ChartUpsert::revision`,
+  `SongUpsert::revision`, the saved `Collection`) is the one to hold next, so
+  a second save needs no re-read.
+- A chart's or song's revision is a digest of what its document says (the
+  frontmatter as data, then the body), not the file's sha: the collaborative
+  layer re-renders a synced document with its frontmatter keys in its own
+  order, and that is not an edit. So a revision means the same thing on every
+  node — one read on a laptop's node is checked correctly on a phone's after
+  the devices sync, with no host anywhere. Anything that changes what the
+  document says makes it stale: another app's save, a collaborative edit
+  flushed, a change pulled from another device, the chart deleted
+  (`Stale("")`), or the server moving the song's default flag off it.
+- An **empty** revision is the unconditional save. That is what a create
+  sends, and what every app built before revisions sends, so older Keyflow
+  builds keep working exactly as before — and keep overwriting. Send the
+  revision for anything a person edits.
+- `CollectionService::save` replaces a collection's title and its whole
+  order, and has no unconditional form. `add_item`, `remove_item` and
+  `reorder` stay unconditional because each names one item and two of them
+  compose; they still move the revision on, so a list an editor is holding
+  goes stale when anyone changes it.
+- Over MCP (`read_chart` / `write_chart`), the same revision is the
+  `revision` field of the read and the `revision` argument of the write.
+
 ### Access
 
 What a person may do is their org role united with any grants: owner, admin
@@ -363,10 +428,12 @@ be expanded against `VersionService::chain` first.
 
 Plan around these; do not search for them:
 
-- **The desktop working copy.** Files the DAW opens come from the Files
-  daemon (`fts-files-daemon`), which syncs roots to disk with on-demand stubs.
-  A device's identity still resets when the daemon restarts, and "a session
-  brings its media with it" is specified but not wired — Session needs both.
+- **The desktop working copy, end to end.** Files the DAW opens come from
+  the Files daemon (`fts-files-daemon`), which syncs roots to disk with
+  on-demand stubs. A device keeps its identity across restarts, and a
+  selected session keeps its media (above); what is not built is the daemon
+  re-applying a device's selection after every pull on its own — today the
+  selection is applied when it is made and on the next `subscribe` / `pin`.
 - **A browser playing an original.** Bytes ride vox; a browser `<audio>` tag
   reaches only renditions (proxies, waveform peaks) through the rendition
   route. Play originals through `read_to` into Media Source Extensions.
@@ -389,5 +456,6 @@ The current list of gaps is `docs/spec/unmet.md`; the full surface is
 | Files rules | `features/files/spec/files.md` |
 | manifests | `features/resources/resources-proto/src/lib.rs` |
 | collections | `features/collection/collection-proto/src/` |
+| safe saves for charts, songs and setlists | `tests/integration/tests/it/safe_saves.rs`; host absent: `apps/server/tests/it/safe_saves_e2e.rs` |
 | the end-to-end chapter an app should mirror | `tests/integration/tests/it/app_store.rs` |
 | the planted example (a sample bound and pinned) | `apps/server/src/demo_cli.rs` → `plant_bound_sample` |

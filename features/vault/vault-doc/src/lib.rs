@@ -26,7 +26,6 @@ pub mod body;
 pub mod book;
 pub mod doc;
 pub mod markdown;
-pub mod peer;
 pub mod replica;
 
 pub use book::{Book, Entry, Index, IndexRow, MemoryIndex, Projected, Projector, SyncReport};

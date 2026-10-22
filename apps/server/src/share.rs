@@ -1061,10 +1061,7 @@ pub async fn share_rendition_handler(
     {
         architect_telemetry::wide::set("share.outcome", "rendition-proxy-file");
         org.shares.log_access(&token, "rendition", &rel);
-        let range = headers
-            .get(header::RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| crate::parse_byte_range(s, total));
+        let range = architect::http::ranged::range_of(&headers, total);
         return crate::stream_response(
             &org,
             scope.root_id,
@@ -1097,10 +1094,7 @@ pub async fn share_rendition_handler(
     };
     org.shares.log_access(&token, "rendition", &rel);
     let total = info.len;
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| crate::parse_byte_range(s, total));
+    let range = architect::http::ranged::range_of(&headers, total);
     crate::rendition_stream_response(&org, scope.root_id, &info.file_id, &info.mime, total, range)
 }
 
