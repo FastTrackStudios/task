@@ -235,12 +235,17 @@ pub fn InboxView() -> Element {
                         let kind = CaptureKind::of(&it);
                         let age = ago(&it.created, Utc::now());
                         // t[impl attribution.shown]
-                        // Who captured it — "from you", "from Atlas" —
-                        // from the server-stamped creator. A capture
-                        // from before attribution says nothing.
-                        let from = inbox_proto::creator::creator_label(
+                        // Who captured it — "from you", "from Atlas",
+                        // "from Atlas (for Cody)" — from the server-
+                        // stamped creator and whom a personal bot acted
+                        // for. A capture from before attribution says
+                        // nothing.
+                        // t[impl attribution.on-behalf-of.shown]
+                        let from = inbox_proto::creator::attribution_label(
                             it.created_by.as_deref(),
                             it.created_by_name.as_deref(),
+                            it.on_behalf_of.as_deref(),
+                            it.on_behalf_of_name.as_deref(),
                             me.as_deref(),
                         );
                         let has_meta = from.is_some() || !tags.is_empty() || !contexts.is_empty();

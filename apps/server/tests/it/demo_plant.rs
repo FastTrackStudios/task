@@ -562,7 +562,7 @@ async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Resul
     );
     let today = chrono::Utc::now().date_naive().to_string();
     let queue = inbox
-        .review_queue(today.clone())
+        .review_queue(today)
         .map_err(|e| eyre::eyre!("{e:?}"))?;
     eyre::ensure!(
         items.iter().any(|i| i.status == "suggested"),
@@ -616,6 +616,48 @@ async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Resul
     eyre::ensure!(
         made_by("Comp lead vocals — Track One").as_deref() == Some("Alice"),
         "a task from Alice"
+    );
+    // On behalf of (`attribution.on-behalf-of`): Atlas is Alice's
+    // assistant, the Studio Desk a team bot; what Atlas made for Alice
+    // is Priya's, a second employee's, to do.
+    let task = |title: &str| {
+        board
+            .iter()
+            .find(|t| t.title == title)
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("no task `{title}`"))
+    };
+    let metadata = task("Collect streaming metadata")?;
+    eyre::ensure!(
+        metadata.created_by_name.as_deref() == Some("Atlas")
+            && metadata.on_behalf_of_name.as_deref() == Some("Alice")
+            && metadata
+                .on_behalf_of
+                .as_deref()
+                .is_some_and(|r| r.starts_with("user:")),
+        "Atlas made it for Alice: {metadata:?}"
+    );
+    eyre::ensure!(
+        metadata
+            .workflow
+            .as_ref()
+            .is_some_and(|w| w.assignees.0.iter().any(
+                |a| matches!(a, task::workflows_proto::AgentRef::Human { display_name, .. }
+                if display_name.as_deref() == Some("Priya"))
+            )),
+        "…and it is Priya's: {metadata:?}"
+    );
+    let chore = task("Vacuum the live room")?;
+    eyre::ensure!(
+        chore.created_by_name.as_deref() == Some("Studio Desk") && chore.on_behalf_of.is_none(),
+        "a team bot's task is for nobody in particular: {chore:?}"
+    );
+    eyre::ensure!(
+        items
+            .iter()
+            .any(|i| i.created_by_name.as_deref() == Some("Atlas")
+                && i.on_behalf_of_name.as_deref() == Some("Alice")),
+        "an Atlas capture for Alice: {items:?}"
     );
 
     // The day: a maintenance hour on both kinds of day.
@@ -1362,7 +1404,7 @@ async fn a_client_manages_its_own_subscriptions() -> eyre::Result<()> {
     };
     backend.subscribe(me.clone(), music.clone())?;
     // Twice is refused rather than silently ignored.
-    assert!(backend.subscribe(me.clone(), music.clone()).is_err());
+    assert!(backend.subscribe(me.clone(), music).is_err());
 
     // Nothing is on disk until it is refreshed.
     let before = backend.list_subscriptions(me.clone())?;

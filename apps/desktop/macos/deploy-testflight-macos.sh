@@ -16,7 +16,7 @@
 #     bash apps/desktop/macos/deploy-testflight-macos.sh
 #
 # Env knobs (all optional):
-#   MARKETING_VER  CFBundleShortVersionString (default 0.0.2) — keep in step
+#   MARKETING_VER  CFBundleShortVersionString (default: the release version) — keep in step
 #                  with the iOS build's; both platforms share the app record.
 #   BUILD_NO       CFBundleVersion (default: unix time). App Store Connect
 #                  tracks build numbers PER PLATFORM, so the macOS train
@@ -142,7 +142,9 @@ echo "agent: $APP/Contents/MacOS/fts-files-daemon"
 
 # ── Info.plist: identity, versions, category, SDK metadata ───────────────────
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
-MARKETING_VER="${MARKETING_VER:-0.0.2}"
+# Default: the release version (`[workspace.package]` in Cargo.toml), the
+# one every artifact of a release reports (scripts/check-versions.sh).
+MARKETING_VER="${MARKETING_VER:-$(cd "$ROOT" && bash scripts/release.sh version)}"
 pb() { /usr/libexec/PlistBuddy -c "Set :$1 $2" "$PLIST" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PLIST"; }
 pb CFBundleIdentifier "$DX_BUNDLE_ID"

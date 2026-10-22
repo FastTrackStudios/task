@@ -284,6 +284,7 @@ pub struct TaskInfo {
     /// value already on disk. `None` on tasks made before attribution,
     /// and on writes no principal stands behind (the server itself, a
     /// note edited in place).
+    #[facet(default)]
     #[serde(skip_serializing_if = "Option::is_none", default, rename = "createdBy")]
     #[architect(filterable)]
     pub created_by: Option<String>,
@@ -291,12 +292,40 @@ pub struct TaskInfo {
     /// The creator's display name at creation ("Atlas", "Cody") — what
     /// a surface shows without a directory lookup. Kept with
     /// [`Self::created_by`].
+    #[facet(default)]
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
         rename = "createdByName"
     )]
     pub created_by_name: Option<String>,
+
+    // t[impl attribution.on-behalf-of]
+    /// Whom the creator acted for, when it is a **personal** bot (an
+    /// assistant working for one person): that person's ref
+    /// (`"user:<uuid>"`) — "from Atlas (for Cody)". `None` for a
+    /// person's own task, a team bot's, and tasks from before.
+    ///
+    /// Stamped by the server from the bot key's owner, never from the
+    /// task a client sends, and write-once with [`Self::created_by`].
+    #[facet(default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        rename = "onBehalfOf"
+    )]
+    #[architect(filterable)]
+    pub on_behalf_of: Option<String>,
+
+    /// That person's display name at creation, kept with
+    /// [`Self::on_behalf_of`].
+    #[facet(default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        rename = "onBehalfOfName"
+    )]
+    pub on_behalf_of_name: Option<String>,
 
     /// Body text (the markdown after the frontmatter close
     /// fence). Populated by `parse_page`; written verbatim by
@@ -353,6 +382,8 @@ impl TaskInfo {
             date_modified: Some(now),
             created_by: None,
             created_by_name: None,
+            on_behalf_of: None,
+            on_behalf_of_name: None,
             details: String::new(),
             workflow: None,
         }
@@ -783,6 +814,9 @@ pub struct WorkflowAttrs {
     /// work this is the *claim*: an empty list means unclaimed
     /// and available; a single agent means claimed. Human +
     /// agent + agent triple is the supervised pattern.
+    // t[impl attribution.assignee.separate]
+    // Who does it — never who made it (`TaskInfo::created_by`): assigning
+    // is its own explicit, changeable act, logged by the activity feed.
     #[serde(skip_serializing_if = "AgentRefList::is_empty", default)]
     pub assignees: AgentRefList,
 

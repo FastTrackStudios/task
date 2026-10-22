@@ -12,7 +12,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::TaskInfo;
-use crate::parse::{looks_like_task, parse_page};
+use crate::parse::{looks_like_task_raw, parse_page};
 use crate::service::{
     ClaimResult, TaskError, TaskEvent, TaskListFilter, TaskReverseRelations, TaskService,
 };
@@ -146,13 +146,17 @@ impl TaskBackend {
         let vault = Vault::open(&self.vault_root)
             .map_err(|e| TaskError::Io(format!("open vault {}: {e}", self.vault_root.display())))?;
         let mut out = Vec::new();
-        for page in &vault.pages {
-            // The parser consumes the wasm-clean
-            // `vault_proto::VaultPage`; convert the live page first.
-            let proto = page.to_proto();
-            if !looks_like_task(&proto) {
+        // By value, and tested on the raw text first: a page that is not
+        // a task is dropped without being copied, and one that is moves
+        // into the proto shape instead of being cloned into it. This
+        // runs over the whole vault on every list and every get.
+        for page in vault.pages {
+            if !looks_like_task_raw(&page.raw) {
                 continue;
             }
+            // The parser consumes the wasm-clean
+            // `vault_proto::VaultPage`; convert the live page first.
+            let proto = page.into_proto();
             match parse_page(&proto) {
                 Ok(t) => {
                     self.remember(&t.path, t.id);
@@ -229,6 +233,8 @@ impl TaskService for TaskBackend {
         // on disk, whatever the incoming task says (or leaves out).
         next.created_by = existing.created_by;
         next.created_by_name = existing.created_by_name;
+        next.on_behalf_of = existing.on_behalf_of;
+        next.on_behalf_of_name = existing.on_behalf_of_name;
         next.date_modified = Some(Utc::now());
         // Automatic time tracking on status transitions (authoritative
         // here so CLI / cascade / any client gets it): entering
@@ -365,6 +371,17 @@ impl TaskService for TaskBackend {
             .filter(|t| {
                 filter.created_by.as_deref().is_none_or(|who| {
                     workflows_proto::creator::creator_matches(t.created_by.as_deref(), who)
+                })
+            })
+            .filter(|t| {
+                filter.on_behalf_of.as_deref().is_none_or(|who| {
+                    workflows_proto::creator::creator_matches(t.on_behalf_of.as_deref(), who)
+                })
+            })
+            .filter(|t| {
+                filter.assignee.as_deref().is_none_or(|who| {
+                    let assignees = t.workflow.as_ref().map_or(&[][..], |w| &w.assignees.0[..]);
+                    workflows_proto::creator::assignee_matches(assignees, who)
                 })
             })
             .collect();
@@ -805,5 +822,80 @@ mod tests {
         assert_eq!(by("atlas"), vec!["Restring the Strat".to_owned()]);
         assert_eq!(by("none"), vec!["Unattributed".to_owned()]);
         assert!(by("user:mallory").is_empty());
+    }
+
+    // t[verify attribution.on-behalf-of]
+    // t[verify attribution.assignee.filter]
+    #[test]
+    fn on_behalf_of_is_write_once_and_both_filters_work() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let be = TaskBackend::new(tmp.path());
+        let mut t = crate::capture("Book the rehearsal room");
+        t.created_by = Some("bot:atlas".into());
+        t.on_behalf_of = Some("user:cody".into());
+        t.on_behalf_of_name = Some("Cody".into());
+        let made = be.create(t).expect("create");
+        let mut theirs = crate::capture("Load the van");
+        theirs
+            .workflow
+            .get_or_insert_with(Default::default)
+            .assignees =
+            task_proto::model::AgentRefList(vec![workflows_proto::AgentRef::human("jordan")]);
+        be.create(theirs).expect("create");
+
+        // Neither an edit naming someone else nor one leaving it out
+        // moves whom it was made for — but the assignee is the edit's.
+        let mut edit = made.clone();
+        edit.on_behalf_of = Some("user:mallory".into());
+        edit.on_behalf_of_name = None;
+        edit.workflow.get_or_insert_with(Default::default).assignees =
+            task_proto::model::AgentRefList(vec![workflows_proto::AgentRef::human("jordan")]);
+        be.update(edit).expect("update");
+        let read = be.get(made.id).expect("get");
+        assert_eq!(read.on_behalf_of.as_deref(), Some("user:cody"));
+        assert_eq!(read.on_behalf_of_name.as_deref(), Some("Cody"));
+        assert_eq!(read.created_by.as_deref(), Some("bot:atlas"));
+
+        let titles = |filter: TaskListFilter| {
+            let mut v: Vec<String> = be
+                .query(filter)
+                .expect("query")
+                .into_iter()
+                .map(|t| t.title)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            titles(TaskListFilter {
+                on_behalf_of: Some("cody".into()),
+                ..Default::default()
+            }),
+            vec!["Book the rehearsal room".to_owned()]
+        );
+        assert_eq!(
+            titles(TaskListFilter {
+                on_behalf_of: Some("none".into()),
+                ..Default::default()
+            }),
+            vec!["Load the van".to_owned()]
+        );
+        assert_eq!(
+            titles(TaskListFilter {
+                assignee: Some("user:jordan".into()),
+                ..Default::default()
+            }),
+            vec![
+                "Book the rehearsal room".to_owned(),
+                "Load the van".to_owned()
+            ]
+        );
+        assert!(
+            titles(TaskListFilter {
+                assignee: Some("none".into()),
+                ..Default::default()
+            })
+            .is_empty()
+        );
     }
 }

@@ -20,6 +20,7 @@ tests/playwright/
 ├── smoke.spec.js          # shell + route smoke + screenshots
 ├── connection-stability.spec.js  # vox reconnect-storm regression (needs a server)
 ├── vault-editing.spec.js  # create/type/link a note + reload (CRDT path; needs a server)
+├── sidebar-projects.spec.js  # sidebar lists recent top-level projects only (needs `just demo`)
 └── README.md              # you are here
 ```
 

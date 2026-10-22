@@ -50,8 +50,8 @@ async fn concurrent_writes_of_identical_content_do_not_race() {
         "identical content must always produce the same FileId"
     );
 
-    let bytes = store.read_to_vec(ids[0]).await.unwrap();
-    assert_eq!(&bytes, content.as_ref());
+    let bytes = store.read_bytes(ids[0]).await.unwrap();
+    assert_eq!(bytes, content.as_slice());
 
     store.shutdown().await.unwrap();
 }

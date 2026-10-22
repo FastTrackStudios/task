@@ -203,10 +203,17 @@ impl IrohRemotes {
     }
 
     /// Open a federation lane on `origin`, over a pooled connection.
+    ///
+    /// The lane is its own vox connection on its own bi-stream, and it
+    /// ends when the returned [`crate::Dialled`] drops — after the one
+    /// call each caller makes on it. The QUIC connection stays pooled.
+    /// Before, the vox connection was never shut down, so every browse,
+    /// read and relay left a stream and a far-side session open for as
+    /// long as the pooled connection lived.
     async fn lane(
         &self,
         origin: &EndpointId,
-    ) -> Result<crate::FederationServiceClient, FilesFault> {
+    ) -> Result<crate::Dialled<crate::FederationServiceClient>, FilesFault> {
         let id: iroh::EndpointId = origin.0.parse().map_err(|e| {
             // A malformed id is not an outage. Saying `Unavailable` here
             // would tell the caller to retry something that cannot come
@@ -228,11 +235,9 @@ impl IrohRemotes {
             None => Self::open(self.redial(id).await?).await?,
         };
 
-        // `establish` does the handshake and opens the service lane in
-        // one step — the same call a client makes over a WebSocket, with
-        // only the link underneath it different.
-        architect::vox::initiator_on(link)
-            .establish()
+        // The handshake and the service lane in one step, keeping the
+        // connection's handle so dropping the lane closes its stream.
+        crate::Dialled::establish(link)
             .await
             .map_err(|e| FilesFault::Io(format!("establish on {origin}: {e}")))
     }
@@ -319,7 +324,7 @@ impl IrohRemotes {
             .get_or_try_init(|| async {
                 let dir = tempfile::tempdir()
                     .map_err(|e| FilesFault::Io(format!("relay scratch dir: {e}")))?;
-                let store = iroh_blobs::store::fs::FsStore::load(dir.path())
+                let store = files_store::chunk::runtime::load_fs_store_at(dir.path())
                     .await
                     .map_err(|e| FilesFault::Io(format!("opening relay scratch store: {e}")))?;
                 Ok((dir, store))
@@ -480,5 +485,53 @@ impl RemoteFiles for IrohRemotes {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use files_proto::path::RootPath;
+    use files_proto::service::federation::EndpointId;
+
+    use super::IrohRemotes;
+    use crate::dialled::far_side::FarSide;
+    use crate::lane::federation::RemoteFiles as _;
+
+    /// Each call's session ends with the call; the QUIC connection under
+    /// them stays pooled. Before, every call left its session open on the
+    /// far side for as long as the pooled connection lived.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_federation_call_ends_its_far_session() {
+        let book = crate::AddressBook::new();
+        let far = FarSide::serve(&book).await;
+        let near = crate::bind_endpoint(
+            architect::iroh_link::iroh::SecretKey::generate(),
+            Some(book.clone()),
+        )
+        .await
+        .expect("bind the dialler");
+        book.add_endpoint_info(near.addr());
+        let remotes = IrohRemotes::new(near);
+        let origin = EndpointId(far.endpoint.id().to_string());
+
+        for round in 0..3 {
+            // The far side serves an empty router, so the call itself is
+            // refused; what is measured is the session it opened.
+            let _ = remotes
+                .browse_offered(&origin, "no-secret", &RootPath::root())
+                .await;
+            assert!(
+                far.settles_at(0, Duration::from_secs(5)).await,
+                "round {round}: the call's far session should have ended, {} still live",
+                far.live()
+            );
+        }
+        assert_eq!(
+            remotes.pool.lock().await.len(),
+            1,
+            "one pooled connection throughout"
+        );
     }
 }

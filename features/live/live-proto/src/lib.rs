@@ -12,6 +12,14 @@
 //! A song's doc starts empty: the first peer on it seeds it from the song
 //! it opened (the prepared session in Task), and everyone after adopts it.
 //!
+//! **Observers.** A peer that watches without editing (an assistant with no
+//! edit rights, a screen in the room) [`LiveSessions::observe`]s the set
+//! instead: it gets the same [`LiveSet`], marked [`LiveSet::read_only`],
+//! follows every song's doc and the set's presence, and may put itself in
+//! the presence channel (who is watching, where) — but whatever it sends
+//! up a song's `DocSync` is refused. Members and bots with edit rights
+//! join and write live.
+//!
 //! **Epochs.** A set can be a playground that resets (the public demo):
 //! every so often its epoch moves on, its songs' docs start fresh under new
 //! ids, and peers ([`LiveSessions::epochs`]) re-open their songs from the
@@ -52,6 +60,12 @@ pub struct LiveSet {
     /// microseconds) — what a playground counts down to. `None` for a set
     /// that does not reset.
     pub resets_at: Option<f64>,
+    /// Whether this peer only watches ([`LiveSessions::observe`]): the
+    /// server refuses what it sends up a song's doc. Its presence still
+    /// counts. `false` for a [`LiveSessions::join`].
+    #[serde(default)]
+    #[facet(default)]
+    pub read_only: bool,
 }
 
 /// A set's epoch moved on: its docs start fresh.
@@ -83,6 +97,14 @@ pub trait LiveSessions {
     /// Task's monotonic clock now, microseconds — the clock every peer's
     /// positions are stamped in. Pinged a few times a second.
     async fn now(&self) -> f64;
+
+    /// Watch `setlist`'s live session without editing it: the same set as
+    /// [`Self::join`] (opening it if nobody is in it), with `read_only`
+    /// set. This connection's `DocSync` serves the set's songs down to it
+    /// and refuses every update it sends up; its `DocPresence` on the set
+    /// is a member's. A later `join` on the same connection lifts it. On
+    /// a live share link's guest lane, empty observes the link's set.
+    async fn observe(&self, setlist: String) -> Result<LiveSet, LiveError>;
 
     /// Every set's epoch as it moves on.
     #[subscribe]

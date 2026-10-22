@@ -61,7 +61,11 @@ pub fn not_shared_line() -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
 #[repr(C)]
 pub struct VisibleItem {
-    /// `project` | `part` | `task` | `file_root` | `note`.
+    /// `project` | `part` | `task` | `milestone` | `workstream` |
+    /// `file_root` (a root, or `<root>:<dir>` within one) |
+    /// `note_dir` (`<dir>/`: the notes under a project directory), and
+    /// the carve-outs `file_root_excluded` / `note_dir_excluded` — an
+    /// outside project's directory sitting inside a shared one.
     pub kind: String,
     /// The object's id (a uuid, or a vault path for a note).
     pub id: String,

@@ -88,7 +88,8 @@ pub async fn run_brief(args: BriefArgs) -> eyre::Result<()> {
                 view.events = evs
                     .into_iter()
                     .filter(|e| {
-                        date_prefix(&e.start) <= today.as_str()
+                        e.tombstone.is_none()
+                            && date_prefix(&e.start) <= today.as_str()
                             && date_prefix(&e.end) >= today.as_str()
                     })
                     .collect();

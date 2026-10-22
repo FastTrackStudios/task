@@ -45,25 +45,34 @@ name: checks
 
 # WHEN THIS RUNS — the release model (skills/release-workflow.md):
 #
-#   card PR -> dev      NOT here. The gate is the worker's own `just ci`
-#                       under the build lease, in the canonical warm
-#                       checkout, recorded on the card; the reviewer
-#                       checks that evidence and squash-merges. Running it
-#                       again here rebuilt the same tree in a second
+#   card PR -> dev      NOT here. The gate is the worker's own `cargo check
+#                       --workspace --all-targets` under the build lease,
+#                       recorded on the card; the squash merge follows. Running
+#                       the full set again here rebuilt the same tree in a second
 #                       target dir for ~20 minutes per push.
-#   release PR dev -> main   HERE, automatically, the FULL set (no change
-#                       selection): it is the last look before production
-#                       and it runs once per release, not once per card.
+#   PROMOTION PR dev -> main   HERE, automatically, the FULL set (no change
+#                       selection): main is "finished features", so this is
+#                       the one place the whole workspace is checked and
+#                       the Reviewer reads the diff. It runs once per promotion,
+#                       not once per card. Promotions happen whenever a feature
+#                       set is verified.
+#   hotfix/* -> main    the same full set.
+#   RELEASE PR release/vX.Y.Z -> main   a one-commit version bump + changelog on
+#                       top of main. The release guard proves it touches nothing
+#                       else, so this workflow SKIPS the heavy job (the job is
+#                       skipped, which counts as passing for the required
+#                       check): the content was checked when it was promoted.
 #   by hand             `gh workflow run checks.yml --ref <branch>` runs
 #                       everything on that branch; add `-f base=dev` to
 #                       check only what the branch changed against dev.
 #   nightly             dev's tip, once a day, so two cards that each
 #                       passed alone but break together are caught before
-#                       the release PR rather than in it. Cheap: dev moves
+#                       the promotion PR rather than in it. Cheap: dev moves
 #                       a few cards a day and the target dir is warm.
 #
-# A merge to main is never checked on push: the release guard
-# (release.yml) proves the merge commit's tree IS the tree this tested.
+# A merge to main is never checked on push, and never deploys: the checks ran
+# on the PR's merge ref, which is the tree main receives. Production changes
+# only when a v* tag is pushed (deploy.yml).
 on:
   pull_request:
     branches: [main]
@@ -161,6 +170,9 @@ jobs:
         id: filter
         env:
           DISPATCH_BASE: ${{ inputs.base }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -u
 
@@ -179,10 +191,15 @@ jobs:
           }
 
           case "${GITHUB_EVENT_NAME:-}" in
-            # Release PRs (the only PRs this workflow sees) run the full
-            # set. There is no skip token any more: a release is exactly
-            # the run that must not be skipped.
-            pull_request) run_all "release PR into ${GITHUB_BASE_REF}" ;;
+            # PRs into main (promotions, hotfixes) run the full set. There
+            # is no skip token. The one exception is the release commit
+            # (version + changelog only, proved by release.sh): its
+            # content was checked when it was promoted.
+            pull_request)
+              if bash scripts/release.sh release-only; then
+                skip_all "release commit only (${HEAD_REF}): content checked at promotion"
+              fi
+              run_all "PR into ${GITHUB_BASE_REF}" ;;
             # Nightly: the integration branch's tip. Before `dev` exists
             # (migration step 1) there is nothing to check.
             schedule)
@@ -325,13 +342,38 @@ jobs:
       # save nothing.
       - name: fmt
         run: ${NIX_DEV} just ci-fmt
+      # Ungated too: greps manifests and workflows, compiles nothing.
+      - name: One version everywhere
+        if: ${{ !cancelled() }}
+        run: ${NIX_DEV} just ci-versions
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} just ci-manifests
+      # Ungated: resolves dependency graphs and scans sources, compiles
+      # nothing of Task's. Layer table + ratcheted baselines in
+      # boundaries.toml (architect ADR layout.md, STA-268).
+      - name: Boundaries
+        if: ${{ !cancelled() }}
+        run: ${NIX_DEV} just ci-boundaries
 
+      # `macpro-*` runners are Lima VMs on the Mac Pro: half the test
+      # threads (see `ci-tests` in the Justfile), and test scratch on the
+      # unit's tmpfs `RuntimeDirectory` (`.config/nextest.toml`,
+      # `ci-test-tmpdir`). STA-369.
       - name: Tests
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        env:
+          TASK_CI_TEST_THREADS: ${{ startsWith(runner.name, 'macpro-') && '8' || '16' }}
+          TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
         run: ${NIX_DEV} ${SWEEP_RUN} checks-tests -- just ci-tests
+      - name: Test log
+        if: ${{ always() && needs.plan.outputs.workspace == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-ci
+          path: ${{ runner.temp }}/nextest-ci.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} ${SWEEP_RUN} checks-clippy -- just ci-clippy
@@ -374,6 +416,9 @@ jobs:
       - name: Bound the target dir
         if: ${{ always() }}
         run: |
+          # The tmpfs test scratch is RAM: give it back even after a red
+          # run (tests killed by a timeout leave their worlds behind).
+          [ -n "${RUNTIME_DIRECTORY:-}" ] && rm -rf "${RUNTIME_DIRECTORY%%:*}/nextest-tmp" || true
           # CARGO_INCREMENTAL=0 stops new incremental output but does not
           # remove what earlier runs left; nothing regenerates this now.
           rm -rf "${CARGO_TARGET_DIR}/debug/incremental"

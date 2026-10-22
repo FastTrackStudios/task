@@ -57,7 +57,7 @@ async fn authenticate(
     state: &AppState,
     slug: &str,
     headers: &HeaderMap,
-) -> Result<(crate::OrgAppState, Uuid, Uuid), Response> {
+) -> Result<(std::sync::Arc<crate::OrgAppState>, Uuid, Uuid), Response> {
     let token = bearer(headers)
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, "missing bearer token").into_response())?;
     let org = state.org(slug).ok_or_else(|| {

@@ -392,6 +392,52 @@ impl Backend {
         }
     }
 
+    /// The manifest's rows for only the files `keep` admits (by
+    /// root-relative path), hashing nothing else.
+    ///
+    /// [`VaultSync::manifest`] hashes every file in the vault. A caller
+    /// that wants a subset — the doc peer lists only markdown — would
+    /// otherwise stream every attachment, PDF and bounce through SHA-256
+    /// to throw the row away.
+    ///
+    /// # Errors
+    ///
+    /// As [`VaultSync::manifest`].
+    pub fn manifest_where(
+        &self,
+        vault_id: &str,
+        keep: impl Fn(&str) -> bool,
+    ) -> Result<Manifest, VaultSyncError> {
+        let dir = self.root(vault_id)?;
+        let mut files = Vec::new();
+        if dir.exists() {
+            collect(&dir, &dir, &keep, &mut files)?;
+        }
+        Ok(Manifest {
+            vault_id: vault_id.to_string(),
+            files,
+        })
+    }
+
+    /// The root-relative path of every file [`VaultSync::manifest`]
+    /// would list, without reading or hashing any of them — for a caller
+    /// that only matches on names (`search_vault`).
+    ///
+    /// # Errors
+    ///
+    /// The vault is unknown, or its directory cannot be read.
+    pub fn paths(&self, vault_id: &str) -> Result<Vec<String>, VaultSyncError> {
+        let dir = self.root(vault_id)?;
+        let mut out = Vec::new();
+        if dir.exists() {
+            walk_files(&dir, &dir, &mut |_, rel| {
+                out.push(rel);
+                Ok(())
+            })?;
+        }
+        Ok(out)
+    }
+
     fn file_path(&self, vault_id: &str, rel: &str) -> Result<PathBuf, VaultSyncError> {
         // Refuse anything that could traverse out of the vault
         // dir. Reject `..`, absolute paths, and Windows drive
@@ -560,7 +606,7 @@ impl VaultSync for Backend {
             });
         }
         let mut entries = Vec::new();
-        collect(&dir, &dir, &mut entries)?;
+        collect(&dir, &dir, &|_| true, &mut entries)?;
         Ok(Manifest {
             vault_id: vault_id.to_string(),
             files: entries,
@@ -590,16 +636,13 @@ impl VaultSync for Backend {
             .lock()
             .expect("vault::sync write_lock poisoned");
         let existing_sha = if abs.exists() {
-            let bytes = std::fs::read(&abs).map_err(io_err)?;
-            Some(sha256_hex(&bytes))
+            Some(sha256_file(&abs).map_err(io_err)?.0)
         } else {
             None
         };
         match (&if_match, existing_sha.as_deref()) {
-            (IfMatch::CreateOnly, Some(_)) => return Err(conflict(&abs, existing_sha.as_deref())),
-            (IfMatch::Sha(want), Some(have)) if want != have => {
-                return Err(conflict(&abs, existing_sha.as_deref()));
-            }
+            (IfMatch::CreateOnly, Some(_)) => return Err(conflict(&abs)),
+            (IfMatch::Sha(want), Some(have)) if want != have => return Err(conflict(&abs)),
             _ => {}
         }
         let (new_sha, mtime_ms) = write_file_atomic(&abs, &bytes)?;
@@ -636,13 +679,9 @@ impl VaultSync for Backend {
             return Ok(());
         }
         if let IfMatch::Sha(want) = &if_match {
-            let bytes = std::fs::read(&abs).map_err(io_err)?;
-            let have = sha256_hex(&bytes);
+            let (have, _) = sha256_file(&abs).map_err(io_err)?;
             if *want != have {
-                return Err(VaultSyncError::Conflict {
-                    server_sha: have,
-                    server_bytes: bytes,
-                });
+                return Err(conflict(&abs));
             }
         }
         std::fs::remove_file(&abs).map_err(io_err)?;
@@ -1006,20 +1045,13 @@ impl VaultSync for Backend {
         // ack's sha is then empty — there are no bytes to hash.
         // t[impl offline.doc.create]
         let exists = abs.exists();
-        let bytes = if exists {
-            std::fs::read(&abs).map_err(io_err)?
+        let sha256 = if exists {
+            sha256_file(&abs).map_err(io_err)?.0
         } else {
-            Vec::new()
+            String::new()
         };
         let doc_id = self.register_collab(vault_id, path)?;
-        Ok(CollabAck {
-            doc_id,
-            sha256: if exists {
-                sha256_hex(&bytes)
-            } else {
-                String::new()
-            },
-        })
+        Ok(CollabAck { doc_id, sha256 })
     }
 }
 
@@ -1067,7 +1099,14 @@ fn is_root_internal(root: &Path, path: &Path) -> bool {
         })
 }
 
-fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), VaultSyncError> {
+/// Walk the files a manifest covers, calling `visit` with each file's
+/// absolute path and its root-relative, `/`-separated path. Reads no
+/// file: what to do with one is the visitor's.
+fn walk_files(
+    root: &Path,
+    dir: &Path,
+    visit: &mut dyn FnMut(&Path, String) -> Result<(), VaultSyncError>,
+) -> Result<(), VaultSyncError> {
     for entry in std::fs::read_dir(dir).map_err(io_err)? {
         let entry = entry.map_err(io_err)?;
         let path = entry.path();
@@ -1093,7 +1132,7 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), 
             if crate::shelf_boundary::is_nested_shelf(root, &path) {
                 continue;
             }
-            collect(root, &path, out)?;
+            walk_files(root, &path, visit)?;
             continue;
         }
         let rel = path
@@ -1101,9 +1140,32 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), 
             .map_err(|_| VaultSyncError::Internal("strip prefix".into()))?
             .to_string_lossy()
             .replace('\\', "/");
-        let bytes = std::fs::read(&path).map_err(io_err)?;
-        let sha256 = sha256_hex(&bytes);
-        let mtime_ms = std::fs::metadata(&path)
+        visit(&path, rel)?;
+    }
+    Ok(())
+}
+
+/// Every file the manifest covers, hashed — the manifest's rows, for
+/// the files `keep` admits (by root-relative path).
+///
+/// Each file is hashed by streaming it through [`sha256_file`], never
+/// read whole: a manifest is asked for on every replica poll and every
+/// doc-peer `list`, and a vault holds whatever its people drop into it.
+/// Reading each file into a `Vec` to hash it made the peak of one call
+/// the size of the largest file, and made every call allocate the whole
+/// vault once over.
+fn collect(
+    root: &Path,
+    dir: &Path,
+    keep: &dyn Fn(&str) -> bool,
+    out: &mut Vec<ManifestEntry>,
+) -> Result<(), VaultSyncError> {
+    walk_files(root, dir, &mut |path, rel| {
+        if !keep(&rel) {
+            return Ok(());
+        }
+        let (sha256, size) = sha256_file(path).map_err(io_err)?;
+        let mtime_ms = std::fs::metadata(path)
             .map_err(io_err)?
             .modified()
             .ok()
@@ -1114,12 +1176,12 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), 
             path: rel,
             sha256,
             mtime_ms,
-            size: bytes.len() as u64,
+            size,
             created_at: now,
             updated_at: now,
         });
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// After a file left `abs`'s folder: remove the folders it leaves empty,
@@ -1162,11 +1224,22 @@ fn write_file_atomic(abs: &Path, bytes: &[u8]) -> Result<(String, i64), VaultSyn
     Ok((sha256_hex(bytes), mtime_ms))
 }
 
-fn conflict(abs: &Path, existing_sha: Option<&str>) -> VaultSyncError {
-    let bytes = std::fs::read(abs).unwrap_or_default();
-    VaultSyncError::Conflict {
-        server_sha: existing_sha.unwrap_or("").to_string(),
-        server_bytes: bytes,
+/// The refusal of a write whose `If-Match` failed, carrying the file as
+/// it is now.
+///
+/// The check hashed the file by streaming it (no buffer the size of the
+/// file); the bytes are read only here, on the refusal that ships them.
+/// The file can change between the two reads (an editor on the host
+/// saving it), so `server_sha` is computed from the bytes that are sent
+/// rather than reused from the check: a client gets a pair that agrees,
+/// and its retry's `If-Match` names what it was actually shown.
+fn conflict(abs: &Path) -> VaultSyncError {
+    match std::fs::read(abs) {
+        Ok(bytes) => VaultSyncError::Conflict {
+            server_sha: sha256_hex(&bytes),
+            server_bytes: bytes,
+        },
+        Err(e) => io_err(e),
     }
 }
 
@@ -1450,9 +1523,10 @@ fn forward_watcher_events(
         // existence — cheaper than disambiguating the raw
         // `notify::EventKind`.
         let payload = if abs.exists() {
-            match std::fs::read(&abs) {
-                Ok(bytes) => {
-                    let sha256 = sha256_hex(&bytes);
+            // Hashed by streaming: the event needs the digest and the
+            // size, never the bytes.
+            match sha256_file(&abs) {
+                Ok((sha256, size)) => {
                     let mtime_ms = mtime_ms(&abs);
                     let now = Seen {
                         mtime_ms,
@@ -1465,7 +1539,7 @@ fn forward_watcher_events(
                         path: rel,
                         sha256,
                         mtime_ms,
-                        size: bytes.len() as u64,
+                        size,
                     }
                 }
                 Err(e) => {
@@ -1492,9 +1566,38 @@ fn forward_watcher_events(
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
-    let out = h.finalize();
-    let mut hex = String::with_capacity(out.len() * 2);
-    for b in out {
+    hex_of(&h.finalize())
+}
+
+/// A file's SHA-256 (hex) and length, streamed through a fixed buffer.
+///
+/// The hashing paths here — the manifest, the watcher, an `If-Match`
+/// check — need the digest, not the bytes. Streaming makes their cost a
+/// 16 KiB stack buffer whatever the file is, where `std::fs::read`
+/// allocated the whole file (and, for a vault holding a bounce or a
+/// PDF, made that the peak of the call).
+fn sha256_file(path: &Path) -> std::io::Result<(String, u64)> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = [0u8; 16 * 1024];
+    let mut len = 0u64;
+    loop {
+        let n = match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        h.update(&buf[..n]);
+        len += n as u64;
+    }
+    Ok((hex_of(&h.finalize()), len))
+}
+
+fn hex_of(digest: &[u8]) -> String {
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for b in digest {
         use std::fmt::Write;
         let _ = write!(hex, "{b:02x}");
     }
@@ -1612,6 +1715,52 @@ mod tests {
     }
 
     #[test]
+    fn a_streamed_hash_is_the_hash_of_the_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Bigger than the stream buffer and not a multiple of it, so the
+        // last partial read is in the digest.
+        let bytes: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+        let path = tmp.path().join("f.bin");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            sha256_file(&path).unwrap(),
+            (sha256_hex(&bytes), bytes.len() as u64)
+        );
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(sha256_file(&path).unwrap(), (sha256_hex(b""), 0));
+    }
+
+    #[test]
+    fn paths_and_a_filtered_manifest_agree_with_the_manifest() {
+        let (tmp, b) = make_backend();
+        std::fs::create_dir_all(tmp.path().join("Notes")).unwrap();
+        std::fs::write(tmp.path().join("Notes/a.md"), b"# a").unwrap();
+        std::fs::write(tmp.path().join("b.md"), b"# b").unwrap();
+        std::fs::write(tmp.path().join("bounce.wav"), vec![1u8; 70_000]).unwrap();
+
+        let full = b.manifest("v1").unwrap();
+        let mut from_manifest: Vec<String> = full.files.iter().map(|f| f.path.clone()).collect();
+        from_manifest.sort();
+        let mut paths = b.paths("v1").unwrap();
+        paths.sort();
+        assert_eq!(
+            paths, from_manifest,
+            "a path listing is the manifest's paths"
+        );
+
+        let md = b.manifest_where("v1", |p| p.ends_with(".md")).unwrap();
+        let mut md_paths: Vec<&str> = md.files.iter().map(|f| f.path.as_str()).collect();
+        md_paths.sort_unstable();
+        assert_eq!(md_paths, ["Notes/a.md", "b.md"]);
+        for row in &md.files {
+            let same = full.files.iter().find(|f| f.path == row.path).unwrap();
+            assert_eq!((&row.sha256, row.size), (&same.sha256, same.size));
+        }
+        let wav = full.files.iter().find(|f| f.path == "bounce.wav").unwrap();
+        assert_eq!(wav.size, 70_000, "a streamed row still carries the size");
+    }
+
+    #[test]
     fn manifest_empty_vault() {
         let (_tmp, b) = make_backend();
         let m = b.manifest("v1").unwrap();
@@ -1698,9 +1847,39 @@ mod tests {
             )
             .unwrap_err();
         match err {
-            VaultSyncError::Conflict { server_bytes, .. } => assert_eq!(server_bytes, b"v1"),
+            VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            } => {
+                assert_eq!(server_bytes, b"v1");
+                assert_eq!(server_sha, sha256_hex(b"v1"));
+            }
             other => panic!("expected Conflict, got {other:?}"),
         }
+    }
+
+    /// A refused delete ships the file as it is, and the sha it names is
+    /// the sha of exactly those bytes, so the client's retry can match
+    /// what it was shown.
+    #[test]
+    fn if_match_delete_conflict_names_the_sha_of_the_bytes_it_ships() {
+        let (_tmp, b) = make_backend();
+        b.put_file("v1", "x.md", b"kept".to_vec(), IfMatch::CreateOnly)
+            .unwrap();
+        let err = b
+            .delete_file("v1", "x.md", IfMatch::Sha("deadbeef".into()))
+            .unwrap_err();
+        match err {
+            VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            } => {
+                assert_eq!(server_bytes, b"kept");
+                assert_eq!(server_sha, sha256_hex(&server_bytes));
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        assert_eq!(b.get_file("v1", "x.md").unwrap().0, b"kept");
     }
 
     #[test]

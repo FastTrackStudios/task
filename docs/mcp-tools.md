@@ -87,15 +87,63 @@ deletion anywhere).
 | tool | does | wire permit |
 |---|---|---|
 | `search_vault` | path search over the manifest | read `vault/**` (`vault-sync/manifest`) |
-| `read_note` | one note's markdown | read `vault/{path}` |
+| `read_note` | one note's markdown, plus its `revision` (sha256) | read `vault/{path}` |
+| `query_base` | run a `.base` (by path, or inline YAML): rows per view with column + formula values; filters/formulas get `file.links`, `file.hasLink()`, `.exists()` and link-follow (`note.song.key`); bounded (≤5,000 notes / 64 MiB read, ≤64 KiB inline YAML, `limit` rows per view) and reports `notes.read` / `unreadable` / `capped` | read `vault/**` (manifest + each note) |
 | `append_note` | append-only add to an existing note | write `vault/{path}` |
-| `write_note` | create **or replace** a note (flagged destructive in its description) | write `vault/{path}` |
+| `write_note` | create **or replace** a note (flagged destructive in its description); frontmatter values it changes are schema-checked | write `vault/{path}` |
+| `update_properties` | set / remove frontmatter keys, body byte-identical; schema-validated; optional `expected_revision` refuses a stale write | write `vault/{path}` |
+| `read_property_schema` | the built-in kinds plus the org's `kind: schema` pages under `Schemas/` | read `vault/**` |
+
+### Wiki (core) — subscriptions
+
+The wiki tools (`list_wikis` … `search_wiki`) call the `wiki/*` backends the
+vox lane serves. The two subscription tools are the cross-org half:
+
+| tool | does | wire permit |
+|---|---|---|
+| `list_wiki_subscriptions` | what the vault (or `wiki`) subscribes to, each with its `kind` (as a noun: `wiki`, `resource`, `asset shelf`, `project`) and local-copy state | read `wiki/subscriptions/**` (`list_subscriptions`) |
+| `subscribe_wiki` | subscribe the vault (or `wiki`) to `qualified_id` = `domain/slug`, as `kind` | write `wiki/subscriptions/**` (`subscribe`) |
+
+`subscribe_wiki` takes `kind`, one of:
+
+| `kind` | source | slug | example |
+|---|---|---|---|
+| `wiki` (default) | `<org>/wikis/<slug>/` | one segment | `acme.test/music-theory` |
+| `resource` | `<org>/resources/<slug>/`, read-only | one segment | `fasttrackstudio.app/bible` |
+| `assets` | an asset shelf, `<org>/assets/<kind>/` | the shelf kind | `acme.test/songs` |
+| `projects` | `<org>/projects/<path>/` | a path; projects nest | `acme.test/album/track-two` |
+
+- `resource: true` is kept as an alias for `kind: "resource"`. Passing it
+  beside a different `kind` is refused instead of guessed.
+- An unknown `kind`, or a slash in a flat tier's slug, is refused before any
+  backend work, and the message lists the valid shapes.
+- Shelves and projects are private to their org unless they are unlisted,
+  public, or the owner granted the subscribing org (ADR 0004 amendment,
+  2026-10-21). A refused source reads the same whether or not it exists.
+- The answer echoes the `kind` it subscribed as.
+
+Once a source is held, a reference resolves into the kind it is held as:
+`[[acme.test/songs::hallelujah]]` is the song on ACME's shelf for an org
+holding `acme.test/songs` as `assets`, and ACME's wiki `songs` otherwise.
+
+### Live sets (`fasttrackstudio` plugin)
+
+An agent in a set the band plays together (spec: `docs/spec/agents.md`
+§ "An agent in a live set"; the rules are `apps/server/src/live_docs.rs`).
+The docs are the very ones the band's apps sync over `DocSync`, so an apply
+is live the moment it returns.
+
+| tool | does | permit (checked in the tool, always enforced) |
+|---|---|---|
+| `live_observe` | a set's songs in order, each with its `doc_ref` (`live:<setlist>/<song>`), doc id and `version`; `read_only` says whether you may edit | read `live/<setlist>` |
+| `doc_read` | one song's doc as JSON, its `version`, and the latest applies (who, when, apply id, undone by) | read `live/<setlist>` |
+| `doc_apply` | `ops` (`set` / `insert` / `delete` / `splice`, or one `undo`) **applied at once**, as one commit attributed to the caller; `expected_version` refuses a stale edit; `mode: "propose"` checks and previews only. The batch is checked against the doc's shape first (a field keeps its kind; paths and indexes must exist) and one bad op refuses all of it | write `live/<setlist>`; refused to an observer (a library key) |
 
 ### Calendar & scheduling (`scheduling` plugin)
 
 | tool | does | wire permit |
 |---|---|---|
-| `list_events` / `create_event` / `reschedule_event` / `cancel_event` | calendar CRUD (cancel = audited delete) | `scheduling/events/**` |
+| `list_events` / `create_event` / `update_event` / `reschedule_event` / `cancel_event` | calendar CRUD (cancel = audited delete). `create_event` takes `links` (typed links to notes, stored as frontmatter wikilink properties so the note's backlinks and `.base` views find the event) and `external_ref` (`system:id`; a second create with the same ref returns the existing event). `update_event` changes title/description/location/links without moving the event, and `tombstone: true` marks an event removed upstream (kept, hidden). `list_events` filters by `external_ref`, `linked_to` and `include_tombstoned`. Rules: `features/scheduling/spec/scheduling.md` | `scheduling/events/**` |
 | `get_day_plan` / `upsert_day_plan` | the time-blocked day (upsert replaces the whole day) | `scheduling/day-plans/**` |
 | `list_open_slots` | free bookable slots for an event type | read `scheduling/slots/**` |
 | `list_bookings` / `book_slot` / `cancel_booking` | bookings against the user's bookable event types | `scheduling/bookings/**` |

@@ -218,6 +218,9 @@ exclude = [
     # recursion limit inside the big workspace graph); it keeps its own
     # [workspace]. `task-pdf-render` is the stdin/stdout interop point.
     "features/pdf/pdf",
+    # Patched iroh-blobs (see [patch.crates-io] below): a dependency, not
+    # a member, so its own tests/examples stay out of workspace builds.
+    "vendor/iroh-blobs",
 ]
 
 [workspace.package]
@@ -686,6 +689,16 @@ vox-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.3.0" 
 # iOS release builds crashed on every launch: tao returned its scene
 # configuration already released (vendor README, `tao`).
 tao = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.2" }
+# iroh-blobs 0.103.0 + one additive entry point, `FsStore::load_with_opts_on`,
+# that opens a store on a caller's runtime. Upstream builds a private
+# multi-thread runtime per store sized to the core count, and the server
+# opens one store per root: roots × cores threads (1,280 for 40 roots on
+# 32 cores), each with its own malloc arena — ~250 MiB/h of RSS growth.
+# files-store's `chunk::runtime` opens every store on one bounded runtime
+# instead (TASK_BLOB_STORE_THREADS). 0.103 exposes no runtime hook and
+# upstream main still builds its own, so this is a patch; in-tree because
+# it is a ~30-line diff over the published crate (vendor/iroh-blobs/PATCHED.md).
+iroh-blobs = { path = "vendor/iroh-blobs" }
 # The editor's vendored mermaid-rs-renderer fork now lives in the editor
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.

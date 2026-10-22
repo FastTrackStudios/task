@@ -6652,6 +6652,7 @@ dependencies = [
  "async-trait",
  "bao-tree",
  "blake3",
+ "bytes",
  "chrono",
  "facet",
  "facet-json",
@@ -6695,7 +6696,7 @@ dependencies = [
 
 [[package]]
 name = "files-daemon"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
  "axum",
@@ -6841,6 +6842,7 @@ dependencies = [
  "async-trait",
  "bao-tree",
  "blake3",
+ "bytes",
  "fastcdc",
  "futures",
  "iroh-blobs",
@@ -6860,6 +6862,7 @@ name = "files-sync"
 version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
+ "bytes",
  "chrono",
  "facet",
  "files",
@@ -10514,15 +10517,13 @@ dependencies = [
 [[package]]
 name = "iroh-blobs"
 version = "0.103.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be50b0e2d0a9ba65cee4e0dfb708b3704e02ad12bd4c14c6307e94245943126"
 dependencies = [
  "arrayvec",
  "bao-tree",
  "bytes",
  "cfg_aliases",
  "chrono",
- "constant_time_eq 0.4.2",
+ "constant_time_eq 0.3.1",
  "data-encoding",
  "derive_more 2.1.1",
  "genawaiter",
@@ -13231,6 +13232,12 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "minisign-verify"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f9645cb765ea72b8111f36c522475d2daa0d22c957a9826437e97534bc4e9e"
 
 [[package]]
 name = "miniz_oxide"
@@ -20144,6 +20151,7 @@ dependencies = [
  "mealplan",
  "media-proto",
  "milestone",
+ "minisign-verify",
  "notify 0.2.3",
  "notify-proto",
  "org-proto",

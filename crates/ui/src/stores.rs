@@ -678,6 +678,8 @@ impl ProjectMutations {
     /// its org's `ProjectService` (markdown frontmatter).
     pub fn update(&self, slug: String, project: ProjectInfo) {
         let id = project.id;
+        // An edit is activity: it moves the project up the sidebar.
+        crate::recent_projects::touch(id);
         let row = OrgProject {
             slug: slug.clone(),
             project: project.clone(),

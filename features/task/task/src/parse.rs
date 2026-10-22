@@ -30,25 +30,17 @@ pub enum ParseError {
 /// `type: task` field, OR `task` present in the `tags` array.
 #[must_use]
 pub fn looks_like_task(page: &VaultPage) -> bool {
-    let Some((fm, _body)) = split_frontmatter(&page.raw) else {
-        return false;
-    };
-    let Ok(map) = serde_yaml::from_str::<serde_yaml::Mapping>(fm) else {
-        return false;
-    };
-    if let Some(t) = map.get("type") {
-        if t.as_str() == Some("task") {
-            return true;
-        }
-    }
-    if let Some(tags) = map.get("tags") {
-        if let Some(seq) = tags.as_sequence() {
-            if seq.iter().any(|v| v.as_str() == Some("task")) {
-                return true;
-            }
-        }
-    }
-    false
+    looks_like_task_raw(&page.raw)
+}
+
+/// [`looks_like_task`] over a page's raw text — so a caller holding a
+/// live `vault::VaultPage` can test it **before** paying for
+/// `to_proto`, which clones the whole page. One discriminator for both
+/// shapes: `task_proto::doc::looks_like_task`, which reads only the two
+/// keys it decides on.
+#[must_use]
+pub fn looks_like_task_raw(raw: &str) -> bool {
+    task_proto::doc::looks_like_task(raw)
 }
 
 /// Parse the raw bytes of a task note (frontmatter + body) into
@@ -59,18 +51,9 @@ pub fn looks_like_task(page: &VaultPage) -> bool {
 /// reads the source task back from disk after the agent
 /// completes.
 pub fn parse_str(rel_path: &str, basename: &str, raw: &str) -> Result<TaskInfo, ParseError> {
-    let page = VaultPageShim {
-        rel_path: rel_path.to_string(),
-        basename: basename.to_string(),
-        raw: raw.to_string(),
-    };
-    parse_page_inner(&page.rel_path, &page.basename, &page.raw)
-}
-
-struct VaultPageShim {
-    rel_path: String,
-    basename: String,
-    raw: String,
+    // Parsed from the borrowed text: this used to copy all three
+    // strings into a shim first, the page's whole text included.
+    parse_page_inner(rel_path, basename, raw)
 }
 
 /// Parse a `VaultPage` into a `TaskInfo`. The page must have
@@ -184,6 +167,8 @@ fn parse_page_impl(page: &ParsePageRef<'_>) -> Result<TaskInfo, ParseError> {
         date_modified,
         created_by: take_str(&map, "createdBy"),
         created_by_name: take_str(&map, "createdByName"),
+        on_behalf_of: take_str(&map, "onBehalfOf"),
+        on_behalf_of_name: take_str(&map, "onBehalfOfName"),
         // The writer sets the body off with one blank line; take exactly
         // that one back (see `write::serialize_task`), so details round-trip.
         details: body.strip_prefix('\n').unwrap_or(body).to_string(),

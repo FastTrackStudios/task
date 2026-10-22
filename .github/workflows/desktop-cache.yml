@@ -1,0 +1,137 @@
+# Linux desktop to the binary cache — build `task-desktop` (x86_64-linux)
+# at a release tag and push it to fasttrackstudio.cachix.org, so a NixOS
+# host installing the release downloads it instead of compiling the
+# workspace (nix/modules/packages/desktop-apps.nix).
+#
+# The consumer is nix-fleet: a timer on THEBATTLESHIP builds
+# `github:FastTrackStudios/task/<rev of the newest vX.Y.Z tag>#task-desktop`
+# into /nix/var/nix/profiles/task-desktop. This job builds exactly that
+# flake reference, so the out path it pushes is the one the fleet asks
+# for. (The cargo derivations are rev-free — crane.nix — so the release
+# merge on main and the tag on the release branch, which share a tree,
+# give the same path anyway.)
+#
+# WHEN: called from deploy.yml once the release is published (after
+# "Verify live" + "Tag + GitHub Release"). By hand, to backfill a release:
+# `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
+# already cached is harmless to re-run: cachix skips paths it holds.
+#
+# WHERE: Task's self-hosted `task` runner on THEBATTLESHIP. The package is
+# a pure Nix build of the whole workspace (cargoArtifacts = null), which a
+# 4-vCPU hosted runner takes the better part of an hour and ~30 GB of disk
+# to do; on the 32-core host it is minutes, and its store keeps the result,
+# which is also the store the fleet's timer installs from.
+#
+# SECRET: CACHIX_AUTH_TOKEN, a repo Actions secret (owned by Keeper; a
+# cachix token with write access to `fasttrackstudio`). It reaches cachix
+# only through the environment. Without it the job fails loudly rather
+# than reporting a release cached that is not.
+
+name: desktop-cache
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to cache. Empty = v<Cargo.toml version> at the ref."
+        type: string
+        required: false
+        default: ""
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to cache (v<X.Y.Z>). Empty = v<Cargo.toml version> at the ref."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-cache-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CACHE: fasttrackstudio
+
+jobs:
+  cache:
+    name: task-desktop -> cachix
+    runs-on: [self-hosted, task]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Which release
+        id: plan
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --tags --force origin
+          tag="${INPUT_TAG:-v$(bash scripts/release.sh version)}"
+          rev="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")" \
+            || { echo "::error::no tag $tag — this caches a release that has been tagged (release.yml)"; exit 1; }
+          v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
+          [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "flake=github:${GITHUB_REPOSITORY}/${rev}#packages.x86_64-linux.task-desktop" >> "$GITHUB_OUTPUT"
+          echo "release $tag = $rev"
+
+      - name: Build
+        id: build
+        env:
+          FLAKE: ${{ steps.plan.outputs.flake }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="$(nix build --accept-flake-config --no-link --print-out-paths --print-build-logs "$FLAKE")"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+          echo "built $out"
+          # What the fleet checks after an update. `--version` returns
+          # before any window, so it needs no display.
+          got="$("$out/bin/task-app-desktop" --version)"
+          echo "$got"
+          [ "$got" = "task-app-desktop $VERSION" ] \
+            || echo "::warning::--version says '$got', not 'task-app-desktop $VERSION' (releases before v0.2.4 have no --version)"
+
+      - name: Push to cachix
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          OUT: ${{ steps.build.outputs.out }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CACHIX_AUTH_TOKEN:-}" ]; then
+            echo "::error::CACHIX_AUTH_TOKEN is not set for this repo — nothing pushed. Keeper adds it as a repo Actions secret (write access to $CACHE.cachix.org)."
+            exit 1
+          fi
+          # The closure; cachix skips what cache.nixos.org already serves.
+          nix run --accept-flake-config nixpkgs#cachix -- push "$CACHE" "$OUT"
+
+      - name: Verify the cache serves it
+        env:
+          OUT: ${{ steps.build.outputs.out }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          hash="$(basename "$OUT" | cut -d- -f1)"
+          url="https://$CACHE.cachix.org/$hash.narinfo"
+          for i in $(seq 1 10); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -I "$url" || true)"
+            [ "$code" = 200 ] && break
+            sleep 6
+          done
+          echo "$url -> $code"
+          [ "$code" = 200 ] || { echo "::error::$url answers $code after the push"; exit 1; }
+          {
+            echo "### task-desktop $TAG cached"
+            echo ""
+            echo "- out path: \`$OUT\`"
+            echo "- narinfo: $url (200)"
+          } >> "$GITHUB_STEP_SUMMARY"

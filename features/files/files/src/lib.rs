@@ -1,6 +1,14 @@
 // architect's HasDispatcher/rpc derives emit cfg-gated blocks; allow at
 // crate scope (same convention as `milestone` / `task`).
 #![allow(unexpected_cfgs)]
+// Zero-copy port (docs/perf/zero-copy-audit.md): this crate is clean of
+// the four copy lints, and keeps them out.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
 
 //! Server-side half of the Files feature (issue #259, ADR 0001 —
 //! `apps/task/docs/adr/0001-files-version-store-jj-cas.md`). The
@@ -29,6 +37,8 @@ pub mod certify;
 mod checkpoint;
 mod consts;
 mod content;
+/// A dialled client that shuts its vox connection down when dropped.
+pub mod dialled;
 mod durable;
 mod entity;
 mod error;
@@ -60,6 +70,7 @@ pub mod watcher;
 pub use backend::{
     Captured, FilesBackend, LocationBoundaries, MaterializeReport, OpLogCompaction, SyncTreeMeta,
 };
+pub use dialled::Dialled;
 pub use remotes::{AddressBook, IrohRemotes, bind_endpoint};
 // The cadence engine moved to `files-domain`: it is a state machine
 // about time, and needs neither jj-lib nor the version store. Re-exported

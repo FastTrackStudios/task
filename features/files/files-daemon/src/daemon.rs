@@ -19,7 +19,7 @@ use files::service::roots::{AdoptRequest, RootsService as _};
 use files::service::sync::SyncService as _;
 use files::service::version::{Resolution, VersionService as _};
 use files::{FilesBackend, RootId};
-use files_sync::{SyncObserver, SyncServiceClient, reconcile_with_progress};
+use files_sync::{Dialled, SyncObserver, SyncServiceClient, reconcile_with_progress};
 use uuid::Uuid;
 
 use crate::error::{DaemonError, Result, from_files, root_path};
@@ -50,7 +50,10 @@ struct SyncedRoot {
 
 /// One peer a root is pulled from.
 struct PeerLink {
-    client: SyncServiceClient,
+    /// The lane, with the connection it rides when this daemon dialled
+    /// it. Replacing it (a redial, the same machine chosen again) closes
+    /// the old connection once the pass holding a clone is done.
+    client: Dialled<SyncServiceClient>,
     /// Its endpoint id, when it was dialled by one.
     ///
     /// A client cannot be written to disk, so this is what a restart
@@ -309,7 +312,8 @@ struct DaemonInner {
     /// The coordinator this daemon pulls from — its `SyncService` peer.
     /// Set once the daemon knows where to sync from; the control
     /// surface's `set_sync_choice` uses it.
-    coordinator: Mutex<Option<SyncServiceClient>>,
+    /// Replacing it closes the old connection.
+    coordinator: Mutex<Option<Dialled<SyncServiceClient>>>,
     live: LiveStatus,
     paused: std::sync::atomic::AtomicBool,
     events: EventHub,
@@ -389,8 +393,11 @@ impl SyncDaemon {
     }
 
     /// Point the daemon at the coordinator it pulls from.
-    pub fn set_coordinator(&self, peer: SyncServiceClient) {
-        *self.inner.coordinator.lock().expect("coordinator lock") = Some(peer);
+    ///
+    /// Takes a dialled lane (whose connection closes when it is
+    /// replaced) or a bare client an embedder already holds.
+    pub fn set_coordinator(&self, peer: impl Into<Dialled<SyncServiceClient>>) {
+        *self.inner.coordinator.lock().expect("coordinator lock") = Some(peer.into());
     }
 
     // ── The device as a peer ───────────────────────────────────────
@@ -511,8 +518,9 @@ impl SyncDaemon {
             .collect()
     }
 
-    /// Open the replica lane on `endpoint_id`.
-    pub async fn dial(&self, endpoint_id: &str) -> Result<SyncServiceClient> {
+    /// Open the replica lane on `endpoint_id`. Its connection closes when
+    /// the last copy of the returned lane drops.
+    pub async fn dial(&self, endpoint_id: &str) -> Result<Dialled<SyncServiceClient>> {
         crate::peering::dial(&self.endpoint()?, endpoint_id).await
     }
 
@@ -578,6 +586,9 @@ impl SyncDaemon {
                             .find(|p| p.endpoint.as_deref() == Some(endpoint))
                     })
                 {
+                    // Dropping the old lane closes its connection (once
+                    // this tick's pass lets go of its clone); before, it
+                    // stayed open on both ends for good.
                     link.client = fresh;
                 }
                 tracing::info!(%root_id, peer = %endpoint, "files-daemon: reconnected to the peer");
@@ -1562,7 +1573,7 @@ impl SyncDaemon {
         root_id: Uuid,
         name: &str,
         slice: Vec<String>,
-        peer: SyncServiceClient,
+        peer: impl Into<Dialled<SyncServiceClient>>,
     ) -> Result<()> {
         self.set_sync_choice_from(root_id, name, slice, peer, None)
             .await
@@ -1575,9 +1586,10 @@ impl SyncDaemon {
         root_id: Uuid,
         name: &str,
         slice: Vec<String>,
-        peer: SyncServiceClient,
+        peer: impl Into<Dialled<SyncServiceClient>>,
         peer_endpoint: Option<String>,
     ) -> Result<()> {
+        let peer = peer.into();
         // Always write the policy — including an empty one — so
         // re-choosing a root with slice=[] ("the whole root") CLEARS a
         // stale partial policy instead of leaving the replica silently
@@ -1598,7 +1610,7 @@ impl SyncDaemon {
         entry.slice = slice;
         // Added, not replaced — unless it is the same machine again, in
         // which case the fresh client supersedes the old one (that is
-        // what a redial is).
+        // what a redial is) and the old connection closes.
         match entry
             .peers
             .iter_mut()
@@ -1848,7 +1860,7 @@ impl SyncDaemon {
         self.reach_pending(&under).await;
         // One job per (root, peer): any peer may hold the newest heads,
         // so a machine that syncs with three others asks all three.
-        let jobs: Vec<(Uuid, SyncServiceClient, Option<String>, bool)> = {
+        let jobs: Vec<(Uuid, Dialled<SyncServiceClient>, Option<String>, bool)> = {
             let roots = self.inner.roots.lock().expect("roots lock");
             roots
                 .iter()

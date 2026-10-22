@@ -182,10 +182,10 @@ pub fn import_from_git(repo: Arc<ReadonlyRepo>) -> Result<Arc<ReadonlyRepo>> {
 /// the branch, HEAD, and index are all left alone and the divergence is
 /// reported (PR #282 review).
 pub fn publish_checkpoint(
-    repo: Arc<ReadonlyRepo>,
+    repo: &Arc<ReadonlyRepo>,
     commit_id: &CommitId,
 ) -> Result<Arc<ReadonlyRepo>> {
-    let head = head_ref(&repo)?;
+    let head = head_ref(repo)?;
     let repo = match &head {
         HeadRef::Branch(bookmark) => export_bookmark(repo, bookmark, commit_id)?,
         HeadRef::Detached(_) => record_git_head(repo, commit_id)?,
@@ -212,7 +212,7 @@ pub fn publish_checkpoint(
 /// left for the next import). Dropping that would leave the git branch at
 /// the human's commit while we rewrote HEAD and the index to ours.
 fn export_bookmark(
-    repo: Arc<ReadonlyRepo>,
+    repo: &Arc<ReadonlyRepo>,
     bookmark: &RefNameBuf,
     commit_id: &CommitId,
 ) -> Result<Arc<ReadonlyRepo>> {
@@ -241,7 +241,7 @@ fn export_bookmark(
 
 /// The detached-HEAD counterpart of [`export_bookmark`]: no bookmark, no
 /// export — only jj's record of where git's HEAD now is.
-fn record_git_head(repo: Arc<ReadonlyRepo>, commit_id: &CommitId) -> Result<Arc<ReadonlyRepo>> {
+fn record_git_head(repo: &Arc<ReadonlyRepo>, commit_id: &CommitId) -> Result<Arc<ReadonlyRepo>> {
     let mut tx = repo.start_transaction();
     tx.repo_mut()
         .set_git_head_target(RefTarget::normal(commit_id.clone()));

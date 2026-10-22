@@ -5,9 +5,43 @@
 //! ([`crate::debug_profile`]), so the two lanes can never drift apart on
 //! who they let in.
 
+use std::sync::Arc;
+
 use axum::http::HeaderMap;
 
 use crate::AppState;
+
+/// The deployment's static `TASK_MCP_TOKEN` — the cluster agent's
+/// credential, which reaches every hosted org and counts as an operator.
+///
+/// Read once when the [`AppState`] is built and held there (zero-copy
+/// audit S3). Every MCP call, operator check and org lookup used to read
+/// the environment again, a fresh `String` each time, for a value that
+/// cannot change while the process runs.
+#[derive(Clone, Default)]
+pub struct StaticToken(Option<Arc<str>>);
+
+impl StaticToken {
+    /// The token in `TASK_MCP_TOKEN`. Unset or empty means there is no
+    /// static token, and [`Self::matches`] is false for everything.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::new(std::env::var("TASK_MCP_TOKEN").ok().as_deref())
+    }
+
+    /// The static token `token`; `None` or empty means none.
+    #[must_use]
+    pub fn new(token: Option<&str>) -> Self {
+        Self(token.filter(|t| !t.is_empty()).map(Arc::from))
+    }
+
+    /// Is `presented` the static token? Never true when none is set, so
+    /// an empty bearer can't match an unset token.
+    #[must_use]
+    pub fn matches(&self, presented: &str) -> bool {
+        self.0.as_deref().is_some_and(|t| t == presented)
+    }
+}
 
 /// Is this caller an operator — allowed to read what spans every org?
 /// The static `TASK_MCP_TOKEN` is one by definition; a session is one
@@ -22,8 +56,7 @@ pub(crate) async fn is_operator(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(token) = crate::watch_bridge::bearer(headers) else {
         return false;
     };
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if state.static_token.matches(&token) {
         architect_telemetry::wide::set("auth.principal_kind", "static_token");
         return true;
     }

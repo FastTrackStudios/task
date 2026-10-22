@@ -53,6 +53,26 @@ impl VaultPage {
             mtime_ms,
         }
     }
+
+    /// [`Self::to_proto`] by value: the strings move, nothing is cloned.
+    /// For a caller that owns the page it converts (a scan over a
+    /// freshly opened [`crate::Vault`]), where `to_proto` would copy
+    /// every page's whole text to drop the original a line later.
+    #[must_use]
+    pub fn into_proto(self) -> vault_proto::VaultPage {
+        let mtime_ms = self
+            .mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        vault_proto::VaultPage {
+            rel_path: self.rel_path,
+            basename: self.basename,
+            folder: self.folder,
+            raw: self.raw,
+            mtime_ms,
+        }
+    }
 }
 
 /// One `.base` file (Obsidian Bases). The vault loads + holds
@@ -135,8 +155,12 @@ impl Vault {
         // Read every file in parallel. I/O dominates the cold
         // scan (350ms single-threaded for an 8k-page vault);
         // rayon brings it under 100ms on a multi-core box.
+        //
+        // The entries are consumed: each one's `rel_path` moves into its
+        // page rather than being cloned out of a list dropped a line
+        // later.
         let loaded: Vec<LoadedEntry> = entries
-            .par_iter()
+            .into_par_iter()
             .filter_map(|entry| load_entry(entry).ok())
             .collect();
         let (pages, bases) = split_by_kind(loaded);
@@ -201,24 +225,20 @@ fn split_by_kind(entries: Vec<LoadedEntry>) -> (Vec<VaultPage>, Vec<VaultBase>) 
     (pages, bases)
 }
 
-fn load_entry(entry: &VaultEntry) -> Result<LoadedEntry, std::io::Error> {
-    let raw = std::fs::read_to_string(&entry.abs_path)?;
-    let mtime = std::fs::metadata(&entry.abs_path)
-        .and_then(|m| m.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    let path = PathBuf::from(&entry.rel_path);
-    let basename = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&entry.rel_path)
-        .to_string();
-    let folder = path
-        .parent()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_default();
-    Ok(match entry.kind {
+fn load_entry(entry: VaultEntry) -> Result<LoadedEntry, std::io::Error> {
+    let VaultEntry {
+        abs_path,
+        rel_path,
+        kind,
+    } = entry;
+    // One open for the text and its mtime, where `read_to_string` and
+    // `metadata` each resolved the path again.
+    let (raw, mtime) = read_with_mtime(&abs_path)?;
+    let (basename, folder) = name_parts(&rel_path);
+    let (basename, folder) = (basename.to_owned(), folder.to_owned());
+    Ok(match kind {
         VaultEntryKind::Markdown => LoadedEntry::Page(VaultPage {
-            rel_path: entry.rel_path.clone(),
+            rel_path,
             basename,
             folder,
             raw,
@@ -227,7 +247,7 @@ fn load_entry(entry: &VaultEntry) -> Result<LoadedEntry, std::io::Error> {
         VaultEntryKind::Base => {
             let parsed = crate::bases::parse(&raw).map_err(|e| format!("{e}"));
             LoadedEntry::Base(VaultBase {
-                rel_path: entry.rel_path.clone(),
+                rel_path,
                 basename,
                 folder,
                 raw,
@@ -236,6 +256,45 @@ fn load_entry(entry: &VaultEntry) -> Result<LoadedEntry, std::io::Error> {
             })
         }
     })
+}
+
+/// Read a file's text and its mtime through one open handle. The
+/// buffer is sized from that handle's `fstat`, so the read does not
+/// grow it. An unreadable mtime is the epoch, as before.
+fn read_with_mtime(abs: &Path) -> Result<(String, SystemTime), std::io::Error> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(abs)?;
+    let meta = file.metadata().ok();
+    let mtime = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let len = meta.map_or(0, |m| usize::try_from(m.len()).unwrap_or(0));
+    let mut raw = String::with_capacity(len);
+    file.read_to_string(&mut raw)?;
+    Ok((raw, mtime))
+}
+
+/// A vault-relative, `/`-separated path's file stem and folder, as
+/// borrowed slices of it: what `Path::file_stem` and `Path::parent`
+/// returned, without building a `PathBuf` of the path to ask.
+///
+/// The stem follows `file_stem`'s rule (a leading dot is part of the
+/// name, `..` is its own stem); a path with no folder has `""`.
+fn name_parts(rel: &str) -> (&str, &str) {
+    let (folder, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    if name.is_empty() {
+        return (rel, folder);
+    }
+    let stem = if name == ".." {
+        name
+    } else {
+        match name.rsplit_once('.') {
+            Some(("", _)) | None => name,
+            Some((before, _)) => before,
+        }
+    };
+    (stem, folder)
 }
 
 /// Read `.obsidian/types.json` if present. Empty map otherwise.
@@ -254,4 +313,80 @@ fn read_property_types(root: &Path) -> PropertyTypes {
         return PropertyTypes::default();
     };
     PropertyTypes { map: parsed.types }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `name_parts` answers what `Path::file_stem` and `Path::parent`
+    /// answered for every shape of vault-relative path the walker
+    /// produces, without the `PathBuf`.
+    #[test]
+    fn name_parts_agrees_with_path_file_stem_and_parent() {
+        for rel in [
+            "note.md",
+            "Notes/2026/howdy.md",
+            "a/b.c.md",
+            ".hidden.md",
+            "dir/.md",
+            "dir/x.",
+            "dir/no-extension",
+            "Views/Tasks.base",
+            "a/b/c/d/e.markdown",
+        ] {
+            let path = Path::new(rel);
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(rel);
+            let folder = path
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            assert_eq!(name_parts(rel), (stem, folder.as_str()), "{rel}");
+        }
+    }
+
+    /// The single-handle read returns the text and the same mtime
+    /// `metadata` reports.
+    #[test]
+    fn read_with_mtime_returns_text_and_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("n.md");
+        std::fs::write(&file, "---\ntype: note\n---\nbody\n").unwrap();
+        let (raw, mtime) = read_with_mtime(&file).unwrap();
+        assert_eq!(raw, "---\ntype: note\n---\nbody\n");
+        assert_eq!(mtime, std::fs::metadata(&file).unwrap().modified().unwrap());
+        assert!(read_with_mtime(&dir.path().join("missing.md")).is_err());
+    }
+
+    /// `open` still loads pages and bases with their names and folders,
+    /// now that the entries are moved into them instead of cloned.
+    #[test]
+    fn open_moves_each_entry_into_its_page() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Notes/2026")).unwrap();
+        std::fs::write(dir.path().join("Notes/2026/howdy.md"), "hi").unwrap();
+        std::fs::write(dir.path().join("Top.MD"), "upper").unwrap();
+        std::fs::write(dir.path().join("pic.png"), [0u8; 4]).unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let mut pages: Vec<_> = vault
+            .pages
+            .iter()
+            .map(|p| {
+                (
+                    p.rel_path.as_str(),
+                    p.basename.as_str(),
+                    p.folder.as_str(),
+                    p.raw.as_str(),
+                )
+            })
+            .collect();
+        pages.sort_unstable();
+        assert_eq!(
+            pages,
+            vec![
+                ("Notes/2026/howdy.md", "howdy", "Notes/2026", "hi"),
+                ("Top.MD", "Top", "", "upper"),
+            ]
+        );
+    }
 }

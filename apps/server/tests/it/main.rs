@@ -28,8 +28,24 @@
 //! Write `tests/it/<name>.rs` and add a `mod` line below. A file directly
 //! under `tests/` would quietly become a fifty-fourth binary again.
 
+// The copy lints, denied here once the crate is clean of them
+// (zero-copy audit S7, `docs/perf/zero-copy-audit.md`). They move into
+// `[workspace.lints.clippy]` once every crate carries this.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
+
 #[allow(dead_code)]
 mod support;
+
+/// Every allocation in this binary is counted (live bytes and their
+/// high-water mark), so `memory_budget` can hold the server to a heap
+/// budget. Two relaxed atomics per allocation; see `support::alloc`.
+#[global_allocator]
+static ALLOC: support::alloc::Counting = support::alloc::Counting;
 
 mod account_devices_e2e;
 mod activity_e2e;
@@ -59,17 +75,26 @@ mod entity_events_stream;
 mod guest_review_e2e;
 mod iroh_peer_dir;
 #[cfg(feature = "plugin-fasttrackstudio")]
+mod live_docs_e2e;
+#[cfg(feature = "plugin-fasttrackstudio")]
 mod live_e2e;
 mod local_node_e2e;
 mod local_transport;
 mod mcp_account_e2e;
+#[cfg(feature = "plugin-scheduling")]
+mod mcp_calendar_e2e;
 mod mcp_chart_e2e;
 mod mcp_e2e;
+#[cfg(feature = "plugin-scheduling")]
+mod mcp_gig_recipe_e2e;
+mod mcp_properties_e2e;
+mod mcp_query_base_e2e;
 mod mcp_refusals_e2e;
 mod mcp_telemetry_e2e;
 mod mcp_wiki_e2e;
 mod media_auth;
 mod media_stream_e2e;
+mod memory_budget;
 mod node_resolver_e2e;
 mod notes_search_e2e;
 mod notify_e2e;
@@ -85,6 +110,7 @@ mod presence_relay;
 mod rename_org;
 mod rendition_route;
 mod scheduling_durability;
+mod schema_stamps_e2e;
 #[cfg(feature = "plugin-scripture")]
 mod scripture_install_e2e;
 mod sermon_resources_e2e;
@@ -100,7 +126,9 @@ mod task_files_e2e;
 mod vault_collab_e2e;
 mod vault_graph_e2e;
 mod vault_sync_e2e;
+mod version_cli;
 mod watch_bridge_auth;
 mod watch_suggested_e2e;
 mod webdav_auth;
 mod wiki_editor_e2e;
+mod wiki_org_admin_e2e;

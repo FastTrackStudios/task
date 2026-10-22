@@ -16,7 +16,7 @@
 use architect_auth::SignInEmailPassword;
 use architect_auth::proto::AuthServiceClient;
 use serde_json::{Value, json};
-use task_server::bots::{self, OrgChoice, Tools};
+use task_server::bots::{self, Kind, OrgChoice, Tools};
 use task_server::local_node::{LocalNode, NodeOptions, PERSONAL_SLUG};
 use vox_core::FromVoxLane;
 
@@ -116,6 +116,7 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "Atlas",
         &personal,
         Tools::All,
+        Kind::Team,
     )
     .await
     .expect("Atlas is made");
@@ -126,6 +127,7 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "Librarian",
         &personal,
         Tools::Library,
+        Kind::Team,
     )
     .await
     .expect("the Librarian is made");
@@ -195,6 +197,7 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "Snoop",
         &OrgChoice::Some(vec!["someone-elses".to_owned()]),
         Tools::All,
+        Kind::Team,
     )
     .await;
     assert!(refused.is_err(), "no bot gets an org its person is not in");
@@ -259,6 +262,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
             orgs: vec![PERSONAL_SLUG.to_owned()],
             no_orgs: false,
             tools: BotTools::All,
+            personal: false,
         })
         .await
         .expect("the person makes Atlas from the app");
@@ -274,6 +278,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
             orgs: vec!["someone-elses".into()],
             no_orgs: false,
             tools: BotTools::Library,
+            personal: false,
         })
         .await
         .is_err(),
@@ -288,6 +293,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
             orgs: Vec::new(),
             no_orgs: true,
             tools: BotTools::All,
+            personal: false,
         })
         .await
         .expect("a bot with no orgs, on purpose");
@@ -300,6 +306,7 @@ async fn the_app_manages_bots_through_the_server_lane() {
                 orgs,
                 no_orgs,
                 tools: BotTools::All,
+                personal: false,
             })
             .await
             .is_err(),
@@ -326,6 +333,21 @@ async fn the_app_manages_bots_through_the_server_lane() {
     assert!(bots.list_bots(session.token).await.unwrap().is_empty());
 }
 
+/// The secret both sides of [`a_bot_made_with_no_orgs_reaches_nothing_until_granted`]
+/// sign with: the server it boots in this process and every
+/// `task-server admin` it runs.
+///
+/// Named on purpose, because otherwise the two disagree whenever another
+/// test ran first in the same process. A [`LocalNode`] installs its own
+/// random secret process-wide (`task_server::install_auth_secret`, a
+/// `OnceLock` nothing resets), so a later in-process boot without
+/// `TASK_AUTH_SECRET` signs with that node's secret while the admin
+/// child, a fresh process, falls back to the dev default. The key the
+/// child mints then never verifies here, and `list_orgs` calls a live
+/// bot key a dead one. `TASK_AUTH_SECRET` beats the installed secret,
+/// so setting it on both sides makes them agree in any test order.
+const ADMIN_AUTH_SECRET: &str = "bots-e2e-admin-test-auth-secret-32+!";
+
 /// One `task-server admin …` run against `data_root`, as an operator
 /// would type it: `(succeeded, stdout + stderr)`.
 fn admin(data_root: &std::path::Path, args: &[&str]) -> (bool, String) {
@@ -333,6 +355,7 @@ fn admin(data_root: &std::path::Path, args: &[&str]) -> (bool, String) {
         .arg("admin")
         .args(args)
         .env("TASK_DATA_ROOT", data_root)
+        .env("TASK_AUTH_SECRET", ADMIN_AUTH_SECRET)
         .env_remove("TASK_SERVER_ORG")
         .env_remove("TASK_SERVER_VAULT_ROOT")
         .env_remove("TASK_MCP_TOKEN")
@@ -392,8 +415,12 @@ async fn a_bot_made_with_no_orgs_reaches_nothing_until_granted() {
     ];
     let tmp = tempfile::tempdir().unwrap();
     let env = crate::support::env_lock().await;
-    // SAFETY: under the binary's env lock, for the boot only.
-    unsafe { std::env::set_var("TASK_DATA_ROOT", tmp.path()) };
+    // SAFETY: under the binary's env lock, for the boot only. The secret
+    // is the one `admin` signs with (see `ADMIN_AUTH_SECRET`).
+    unsafe {
+        std::env::set_var("TASK_DATA_ROOT", tmp.path());
+        std::env::set_var("TASK_AUTH_SECRET", ADMIN_AUTH_SECRET);
+    }
     let data_root = org_proto::DataRoot::new(tmp.path().to_owned());
     data_root.ensure().unwrap();
     for (slug, name, home) in ORGS {

@@ -154,44 +154,66 @@ release-desktop VERSION:
 
 # ── Releases ─────────────────────────────────────────────────────────────
 #
-# main = production, dev = integration (skills/release-workflow.md). Card
-# PRs squash into dev; a release is a `dev -> main` PR, merged with a merge
-# commit, which deploys and then tags `v<version>`. One version for
-# everything, `[workspace.package] version` in Cargo.toml; the changelog
-# is generated from dev's commit subjects by git-cliff (cliff.toml).
+# Two separate stages (skills/release-workflow.md). dev collects verified
+# work; `just release-promote` opens dev -> main ("finished features": full
+# checks + Reviewer, merge commit, NOTHING deploys). A release is a TAG on
+# main: `release-prepare` cuts release/vX.Y.Z (version + changelog commit),
+# its PR merges into main, and `release-tag` pushes `vX.Y.Z`, which deploys
+# the server + web, uploads TestFlight builds, attaches the node binaries
+# and publishes the GitHub Release. Production = the latest `v*` tag.
+# One version for everything, `[workspace.package] version` in Cargo.toml;
+# the changelog is generated from commit subjects by git-cliff (cliff.toml).
 
 # The product version (server, web, iOS, macOS, desktop-v*).
 version:
     @bash scripts/release.sh version
 
-# What the next release would be: suggested version, unreleased
-# changelog, and the database migrations it carries.
+# What is live (latest v* tag), what main holds since, what waits on dev,
+# the unreleased changelog and the migrations the next release carries.
 release-plan:
     bash scripts/release.sh plan
 
-# Bump the version, regenerate CHANGELOG.md and commit
-# `chore(release): v<next>` on a fresh `release/v<next>` off origin/dev.
+# Stage 1: open the promotion PR dev -> main (finished features). Merge it
+# with a merge commit once `checks`, the release guard and the Reviewer pass.
+release-promote:
+    bash scripts/release.sh promote
+
+# Stage 2: cut `release/v<next>` from origin/main: bump the version, write
+# the changelog section, commit `chore(release): v<next>`.
 # BUMP: patch (the default, whatever the commits say), minor or major (only
 # when the Captain or Commander calls one), auto (git-cliff decides from the
 # commits), or an exact X.Y.Z.
 release-prepare BUMP="patch":
     bash scripts/release.sh prepare {{BUMP}}
 
-# Open the release PR, dev -> main, with the changelog as its body.
+# On the release/v* (or hotfix/*) branch: push it and open its PR into
+# main, with the changelog and migrations as the body.
 release-pr:
     bash scripts/release.sh pr
 
-# On a hotfix/* branch cut from origin/main (fix already committed): the
-# patch bump + changelog + release commit the release guard requires.
-release-hotfix:
-    bash scripts/release.sh hotfix
+# After the release PR merged: tag v<version> on main. THE TAG DEPLOYS
+# (server + web, TestFlight, node binaries, GitHub Release). Then it opens
+# the main -> dev back-merge. Pushes as whoever you are: use the fts-forge
+# bot or a person, not a workflow token (that starts no workflow).
+release-tag *VERSION:
+    bash scripts/release.sh tag {{VERSION}}
+
+# main -> dev (merge commit, auto-merge). A no-op when dev already has all
+# of main's content. `release-tag` runs it; run it alone after a hotfix.
+release-backmerge:
+    bash scripts/release.sh backmerge
+
+# hotfix/<name> from the latest tag (what production runs). Fix, then
+# `just release-pr`; then cut the patch release as usual.
+release-hotfix NAME:
+    bash scripts/release.sh hotfix {{NAME}}
 
 # One version's section of CHANGELOG.md (default: the current version).
 release-notes *VERSION:
     @bash scripts/release.sh notes {{VERSION}}
 
-# The release PR's gate, locally: everything `just ci` runs plus docs
-# (rustdoc -D warnings), which only the release gate runs.
+# The promotion PR's gate, locally: everything `just ci` runs plus docs
+# (rustdoc -D warnings), which only the gate on PRs into main runs.
 ci-release: ci ci-docs
 
 # The typing test: every markdown construct typed into the app's note
@@ -362,11 +384,66 @@ ci-fmt:
 ci-manifests:
     cargo metadata --locked --format-version 1 > /dev/null
 
+# Crate-layout boundaries + ratcheted idioms (boundaries.toml), checked by
+# architect's xtask at a pinned release tag. Resolves graphs, compiles nothing
+# of Task's. Bump the tag with architect releases.
+architect_xtask_tag := "v0.9.10"
+ci-boundaries:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="${CI_CACHE_DIR:-$HOME/.cache}/architect-xtask/{{architect_xtask_tag}}"
+    if [ ! -x "$bin/bin/xtask" ]; then
+        cargo install --locked --quiet --git https://github.com/FastTrackStudios/architect \
+            --tag {{architect_xtask_tag}} xtask --root "$bin"
+    fi
+    "$bin/bin/xtask" boundaries
+
+# One version everywhere: every shipped artifact takes the release's
+# version from `[workspace.package]` (static; compiles nothing). The
+# built binaries are checked where they are built: the deploy and
+# node-binaries.yml run `scripts/check-versions.sh --bin`.
+ci-versions:
+    bash scripts/check-versions.sh
+
+# `TASK_CI_TEST_THREADS` lets one runner ask for fewer test threads than
+# the profile's 16 (the workflow sets it for the Mac Pro VM runner, STA-369:
+# at 16 two tests that dial by endpoint id time out under load, at 8 the
+# whole suite passes in ~2.5 min). `--test-threads` beats the
+# `NEXTEST_TEST_THREADS` the runner unit exports. Unset, it is the
+# profile's own 16, so nothing changes elsewhere.
 ci-tests: css
-    cargo nextest run --profile ci --workspace
+    #!/usr/bin/env bash
+    # nextest's report goes to a FILE, then a digest to the step's pipe. On
+    # the Mac Pro VM runner nextest died with exit 110, "error reporting
+    # results: error writing to output", at the first failing test's output
+    # (run after run, 1250-1460 tests in, the rest "not run due to reporting
+    # error"): writing a failure's captured log to the runner's stdout pipe
+    # failed. A regular file cannot do that. The full log is the step's
+    # artifact (`TASK_CI_TEST_LOG`); the step shows the summary and the tail.
+    set -uo pipefail
+    log="${TASK_CI_TEST_LOG:-${TMPDIR:-/tmp}/nextest-ci.log}"
+    mkdir -p "$(dirname "$log")"
+    cargo nextest run --profile ci --workspace --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }} >"$log" 2>&1
+    rc=$?
+    { grep -E '^ *(FAIL|TRY [0-9]+ (FAIL|TMT)|SIGSEGV|SIGABRT|LEAK|TIMEOUT)|Summary \[|tests were not run|^error' "$log" | head -n 200
+      echo "── tail of $log (full log: the step's nextest-ci artifact) ──"; tail -n 60 "$log"; } || true
+    exit "$rc"
 
 ci-clippy: css
     cargo clippy --workspace --all-targets -- -D warnings
+
+# The copy lints at WARN (docs/perf/zero-copy-audit.md): a report, not a
+# gate. `ci-clippy` denies every warning, so these four cannot sit in
+# `[workspace.lints]` at warn until the whole workspace is clean;
+# instead each crate denies them in its own root (`#![deny(...)]`) as it
+# is cleaned, and this recipe counts what is left everywhere else.
+# `just clippy-copies -p task-server` narrows it to one package.
+clippy-copies *ARGS:
+    cargo clippy {{ if ARGS == "" { "--workspace" } else { ARGS } }} --all-targets -- \
+        -W clippy::redundant_clone -W clippy::implicit_clone \
+        -W clippy::needless_pass_by_value -W clippy::large_types_passed_by_value \
+        2>&1 | grep -oE 'rust-clippy/[^ ]*#(redundant_clone|implicit_clone|needless_pass_by_value|large_types_passed_by_value)' \
+        | sed 's/.*#//' | sort | uniq -c | sort -rn || true
 
 ci-wasm: css
     cargo check --target wasm32-unknown-unknown -p task-app-web
@@ -385,7 +462,7 @@ ci-docs: css
 # card: on a PR into dev this IS the gate (CI does not run there), and
 # its output is the evidence the reviewer checks on the card. (`ci-docs`
 # runs only on release PRs; `just ci-release` adds it.)
-ci: ci-fmt ci-manifests ci-tests ci-clippy ci-wasm
+ci: ci-fmt ci-manifests ci-versions ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
 #

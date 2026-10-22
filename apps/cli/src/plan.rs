@@ -1204,7 +1204,11 @@ async fn run_show(
     let events = cal
         .list_events()
         .await
-        .map_err(|e| eyre::eyre!("list_events: {e:?}"))?;
+        .map_err(|e| eyre::eyre!("list_events: {e:?}"))?
+        .into_iter()
+        // Tombstoned = removed upstream; kept on disk, not on the plan.
+        .filter(|e| e.tombstone.is_none())
+        .collect::<Vec<_>>();
     // Templates drive the soft fallback; meals drive the per-block
     // previews. Both fetched once, even for `week`.
     let templates_client: scheduling_proto::DayTemplatesClient =
@@ -1599,7 +1603,7 @@ async fn fetch_recurring(
         .await
         .map_err(|e| eyre::eyre!("list_events: {e:?}"))?
         .into_iter()
-        .filter(|e| e.recurrence.is_some())
+        .filter(|e| e.recurrence.is_some() && e.tombstone.is_none())
         .collect();
     evs.sort_by(|a, b| a.title.cmp(&b.title).then(a.start.cmp(&b.start)));
     Ok(evs)
@@ -1702,6 +1706,10 @@ async fn run_recurring(cmd: RecurringCmd) -> eyre::Result<()> {
                     capitalize(&desc)
                 )),
                 recurrence: Some(rule),
+                location: None,
+                links: Default::default(),
+                external_ref: None,
+                tombstone: None,
             };
             cal.upsert_event(ev.clone())
                 .await
@@ -1858,7 +1866,10 @@ async fn reconcile_for_date(
     let events = cal
         .list_events()
         .await
-        .map_err(|e| eyre::eyre!("list_events: {e:?}"))?;
+        .map_err(|e| eyre::eyre!("list_events: {e:?}"))?
+        .into_iter()
+        .filter(|e| e.tombstone.is_none())
+        .collect::<Vec<_>>();
 
     let saved = load_plan(plans, date).await?;
     let tpl = template_for_date(date, &templates);
@@ -2513,6 +2524,10 @@ mod tests {
             color: "primary".into(),
             description: None,
             recurrence: Some("FREQ=WEEKLY;BYDAY=SU".into()),
+            location: None,
+            links: Default::default(),
+            external_ref: None,
+            tombstone: None,
         };
         // Every future Sunday, with the right window.
         assert_eq!(event_instance_on(&ev, "2026-06-14"), Some((540, 750)));
@@ -2540,6 +2555,10 @@ mod tests {
             color: "primary".into(),
             description: None,
             recurrence: Some("FREQ=WEEKLY;BYDAY=SU;INTERVAL=2".into()),
+            location: None,
+            links: Default::default(),
+            external_ref: None,
+            tombstone: None,
         };
         // Anchor week and the week after next — not the off week.
         assert_eq!(event_instance_on(&ev, "2026-06-14"), Some((540, 750)));
@@ -2566,6 +2585,10 @@ mod tests {
             color: "primary".into(),
             description: None,
             recurrence: Some("FREQ=MONTHLY".into()),
+            location: None,
+            links: Default::default(),
+            external_ref: None,
+            tombstone: None,
         };
         assert_eq!(event_instance_on(&ev, "2026-06-01"), Some((600, 630)));
         assert_eq!(event_instance_on(&ev, "2026-07-01"), Some((600, 630)));
@@ -2590,6 +2613,10 @@ mod tests {
             color: "primary".into(),
             description: None,
             recurrence: Some("FREQ=FORTNIGHTLYISH".into()),
+            location: None,
+            links: Default::default(),
+            external_ref: None,
+            tombstone: None,
         };
         assert_eq!(event_instance_on(&ev, "2026-06-14"), Some((540, 600)));
         assert_eq!(event_instance_on(&ev, "2026-06-21"), None);
@@ -2612,6 +2639,10 @@ mod tests {
             color: "primary".into(),
             description: None,
             recurrence: None,
+            location: None,
+            links: Default::default(),
+            external_ref: None,
+            tombstone: None,
         };
         assert_eq!(event_instance_on(&ev, "2026-06-13"), Some((600, 660)));
         assert_eq!(event_instance_on(&ev, "2026-06-20"), None);
@@ -2839,6 +2870,8 @@ mod tests {
                 date_modified: None,
                 created_by: None,
                 created_by_name: None,
+                on_behalf_of: None,
+                on_behalf_of_name: None,
                 details: String::new(),
                 workflow: None,
             };

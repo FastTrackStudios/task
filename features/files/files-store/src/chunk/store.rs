@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use bytes::Bytes;
 use fastcdc::v2020::AsyncStreamCDC;
 use futures::StreamExt;
 use iroh_blobs::store::fs::options::Options;
@@ -187,7 +188,7 @@ impl ChunkStore {
         }
 
         let db_path = blobs_dir.join("blobs.db");
-        let blobs = iroh_blobs::store::fs::FsStore::load_with_opts(db_path, options)
+        let blobs = crate::chunk::runtime::load_fs_store(db_path, options)
             .await
             .map_err(|e| {
                 Error::Store(format!(
@@ -418,32 +419,31 @@ impl ChunkStore {
     /// entry point for content that is already a file on disk, as
     /// opposed to [`ChunkStore::write_stream`]'s arbitrary reader.
     ///
-    /// **The bytes are linked, not copied.** When the file and this
-    /// store are on the same filesystem, the content enters the store
-    /// as a second directory entry for the *same data*: a reflink
-    /// (`FICLONE`) where the filesystem can clone extents, otherwise a
-    /// plain hardlink. Either way the store gains a full, independent
-    /// reference to the content for **zero additional space**.
+    /// **The bytes are cloned, not copied, where the filesystem can.**
+    /// When the file and this store are on the same filesystem, the
+    /// content enters the store as a reflink (`FICLONE`): a separate
+    /// inode sharing the same extents, copy-on-write. The store gains a
+    /// full, independent version of the content for **zero additional
+    /// space**.
     ///
     /// This is what makes importing an existing archive possible at
     /// all. Copying is bounded by free space — a 5 TB tree needs 5 TB
-    /// to version — while linking is bounded by nothing: the bytes are
+    /// to version — while cloning is bounded by nothing: the bytes are
     /// already on the disk.
     ///
-    /// It also delivers the property that matters most here: **the
-    /// content cannot be lost by deleting the original.** A hardlink
-    /// keeps the inode alive, so removing the live file (by hand, by
-    /// accident, or by an app) frees nothing and the stored version
-    /// still reads back byte-for-byte. Measured on the production
-    /// array: 300 MB linked costs 0 MB, and deleting the source frees
-    /// 0 MB while the store returns the identical hash.
+    /// It also delivers the properties that matter most here: **the
+    /// content cannot be lost by deleting the original, nor by a
+    /// program rewriting it in place.** Separate inodes, so removing
+    /// the live file frees nothing the store needs, and a rewrite
+    /// copies-on-write rather than touching the stored version.
     ///
-    /// What a hardlink does NOT protect against is a program rewriting
-    /// the file **in place** — one inode, so both change together.
-    /// A reflink does protect against that (separate inodes sharing
-    /// extents, copy-on-write), which is why it is tried first, but it
-    /// is an optimization: the deployment is not required to provide a
-    /// cloning filesystem.
+    /// Where the filesystem cannot clone (ext4, tmpfs, most network
+    /// mounts) the placement is a real copy. It is never a hard link:
+    /// that is free too, but it is the same inode, so an in-place
+    /// rewrite changes the bytes under a blob named by their old hash
+    /// and the stored version is gone (STA-239; see `place_whole`).
+    /// Keeping history on a filesystem that cannot share blocks costs a
+    /// copy.
     ///
     /// Chunking still exists for the case linking cannot serve — a
     /// source on a *different* filesystem, where the content must be
@@ -756,6 +756,15 @@ impl ChunkStore {
         W: AsyncWrite + Unpin,
     {
         let manifest = self.read_manifest(file_id).await?;
+        self.copy_chunks(&manifest, dest).await
+    }
+
+    /// The chunk loop of [`ChunkStore::read_to`], over a manifest the
+    /// caller already holds (so [`ChunkStore::read_bytes`] reads it once).
+    async fn copy_chunks<W>(&self, manifest: &Manifest, dest: &mut W) -> Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
         for chunk in &manifest.chunks {
             // The whole tier first: a linked blob lives as a plain file
             // under `whole/`, not in iroh-blobs (see `write_path`).
@@ -790,14 +799,21 @@ impl ChunkStore {
         Ok(())
     }
 
-    /// Convenience wrapper over [`ChunkStore::read_to`] that collects the
-    /// whole file into memory. For tests and small files — large files
-    /// should use `read_to` against a sink (a file, a network stream)
-    /// directly.
-    pub async fn read_to_vec(&self, file_id: FileId) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.read_to(file_id, &mut buf).await?;
-        Ok(buf)
+    /// The whole file in memory, as immutable [`Bytes`]. For tests and
+    /// small files — a file's size is set by its user, so anything that
+    /// serves one streams it with [`ChunkStore::read_to`] or
+    /// [`ChunkStore::read_range`] against a sink instead.
+    ///
+    /// One allocation, sized from the manifest before any chunk is read
+    /// (the old `read_to_vec` grew a `Vec` by doubling, copying the file
+    /// up to twice on the way), and handed out as `Bytes` so a caller
+    /// that shares it clones a reference count, not the file.
+    pub async fn read_bytes(&self, file_id: FileId) -> Result<Bytes> {
+        let manifest = self.read_manifest(file_id).await?;
+        let total: u64 = manifest.chunks.iter().map(|c| c.len).sum();
+        let mut buf = Vec::with_capacity(usize::try_from(total).unwrap_or(0));
+        self.copy_chunks(&manifest, &mut buf).await?;
+        Ok(Bytes::from(buf))
     }
 
     /// Total byte length of a file's content — the sum of its chunk
@@ -974,21 +990,31 @@ impl ChunkStore {
         }
     }
 
-    /// Read one chunk's bytes. Chunks are bounded by the chunker's max
-    /// size, so a whole-chunk `Vec` is bounded memory by construction.
-    pub async fn read_chunk(&self, hash: blake3::Hash) -> Result<Vec<u8>> {
+    /// Read one chunk's bytes, as immutable [`Bytes`]: a chunk is
+    /// content-addressed and never changes, so every holder of it can
+    /// share one buffer.
+    ///
+    /// A chunked chunk is bounded by the chunker's max size. A
+    /// whole-tier chunk is not — it is the file (see `write_path`) — so a
+    /// caller that may meet a large one reads it by window
+    /// ([`ChunkStore::read_chunk_range`], [`ChunkStore::export_ranges`])
+    /// rather than whole; replica sync does exactly that above its
+    /// window size. A whole-tier read is sized from the file's length up
+    /// front, so it is one allocation rather than a doubling `Vec`.
+    pub async fn read_chunk(&self, hash: blake3::Hash) -> Result<Bytes> {
         if let Some(mut file) = self.open_whole(&hash).await? {
-            let mut buf = Vec::new();
+            let len = file.metadata().await.map_err(Error::Io)?.len();
+            let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
             tokio::io::AsyncReadExt::read_to_end(&mut file, &mut buf)
                 .await
                 .map_err(Error::Io)?;
-            return Ok(buf);
+            return Ok(Bytes::from(buf));
         }
         let hash_bytes = *hash.as_bytes();
         let mut reader = self.blobs.reader(hash_bytes);
         let mut buf = Vec::new();
         match tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf).await {
-            Ok(_) => Ok(buf),
+            Ok(_) => Ok(Bytes::from(buf)),
             Err(io_err) => {
                 let present = self.blobs.has(hash_bytes).await.unwrap_or(true);
                 if present {
@@ -1024,7 +1050,15 @@ impl ChunkStore {
     /// [`ChunkStore::gc_quiesce_guard`] across the whole file import
     /// (chunks + manifest) so nothing sweeps it before its manifest
     /// lands (PR #291 review).
-    pub async fn import_chunk(&self, expected: blake3::Hash, bytes: Vec<u8>) -> Result<()> {
+    ///
+    /// Takes anything that becomes [`Bytes`] without a copy: a `Vec`
+    /// fresh off the wire, or `Bytes` read from another store.
+    pub async fn import_chunk(
+        &self,
+        expected: blake3::Hash,
+        bytes: impl Into<Bytes>,
+    ) -> Result<()> {
+        let bytes: Bytes = bytes.into();
         let actual = blake3::hash(&bytes);
         if actual != expected {
             return Err(Error::Store(format!(
@@ -1235,26 +1269,27 @@ pub enum Placement {
     /// of the source copies-on-write rather than touching the stored
     /// version.
     Reflinked,
-    /// Same inode, second directory entry — free, and the content
-    /// survives deletion of the original. An in-place rewrite of the
-    /// source is visible through both.
-    Hardlinked,
     /// A real copy. Correct everywhere, and the only option when the
-    /// filesystem refuses both links despite reporting the same device
-    /// (a bind mount of a different subvolume, a full disk, an
-    /// exhausted link count).
+    /// filesystem cannot share blocks (ext4, tmpfs, most network
+    /// mounts) or refuses a reflink despite reporting the same device
+    /// (a bind mount of a different subvolume, a full disk).
+    ///
+    /// There is deliberately no hard-link placement: a hard link is the
+    /// same inode, so rewriting the source **in place** changes the
+    /// bytes under a blob named by their old hash, and the stored
+    /// version is lost (see `place_whole`).
     Copied,
 }
 
-/// Place `src`'s content at `dst` as cheaply as the filesystem allows:
-/// reflink, else hardlink, else copy. Blocking; call from
+/// Place `src`'s content at `dst` as cheaply as the filesystem allows
+/// while keeping it immutable: reflink, else copy. Blocking; call from
 /// `spawn_blocking`.
 ///
 /// Writes through a unique temp name and renames, so a crash midway
 /// cannot leave a short file sitting at a content address — the same
-/// discipline `write_manifest` uses. (A reflink or hardlink is atomic
-/// in itself, but the rename costs nothing and keeps one path for all
-/// three cases.)
+/// discipline `write_manifest` uses. (A reflink is atomic
+/// in itself, but the rename costs nothing and keeps one path for both
+/// cases.)
 fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1272,7 +1307,7 @@ fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     ));
     let _ = std::fs::remove_file(&tmp);
 
-    // Reflink first, and a hard link only where there is no reflink.
+    // Reflink, else a real copy. Never a hard link.
     //
     // The order matters for correctness, not speed. A reflink is
     // copy-on-write: the store's blob is unaffected by anything done to
@@ -1290,13 +1325,19 @@ fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     // that, by rewriting a file in place and asking for the first
     // version back.
     //
+    // The revert of that inversion still kept a hard link as the
+    // fallback where reflink fails, so on any filesystem without
+    // reflink (ext4, tmpfs: the Mac Pro CI VM's temp dir, STA-239) the
+    // same in-place rewrite still corrupted the stored version, and
+    // replica sync then refused the blob as "chunk payload hashes to X,
+    // peer claimed Y". A copy is the only fallback that keeps the
+    // promise.
+    //
     // So the space problem on a filesystem with no real reflink is not
     // solved here, and is not solved by linking. It is a genuine cost of
     // keeping history where the filesystem cannot share blocks.
     let placement = if reflink_copy::reflink(src, &tmp).is_ok() {
         Placement::Reflinked
-    } else if std::fs::hard_link(src, &tmp).is_ok() {
-        Placement::Hardlinked
     } else {
         std::fs::copy(src, &tmp)?;
         Placement::Copied
@@ -1404,7 +1445,7 @@ mod tests {
             store.has(file_id).await,
             "the manifest must survive a final write after the race"
         );
-        assert_eq!(store.read_to_vec(file_id).await.unwrap(), content);
+        assert_eq!(store.read_bytes(file_id).await.unwrap(), content);
     }
 
     #[tokio::test]
@@ -1468,7 +1509,7 @@ mod tests {
         // early-returning past the corruption.
         let repaired_id = store.write_stream(&content[..]).await.unwrap();
         assert_eq!(repaired_id, file_id);
-        assert_eq!(store.read_to_vec(file_id).await.unwrap(), content);
+        assert_eq!(store.read_bytes(file_id).await.unwrap(), &content[..]);
     }
 
     /// `content_len` + `read_range` (the `<video>` seek path): the total

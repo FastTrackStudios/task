@@ -312,10 +312,10 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
             t.status = (*status).to_owned();
             t.due = due;
             t.project_id = Some(info.id);
-            // Who made it, per the seed (`attribution`).
+            // Who made it, per the seed (`attribution`) — and, for
+            // Atlas, whom it made it for.
             if let Some(email) = example_org::task_creator(title) {
-                if let Ok(Some(user)) = auth.auth.find_user_by_email(email).await {
-                    let creator = crate::attribution::Creator::of_account(&user);
+                if let Some(creator) = example_org::seeded_creator(&auth, email).await {
                     crate::attribution::attribute_task(&mut t, Some(&creator));
                 }
             }
@@ -780,6 +780,7 @@ async fn plant_bound_sample(
 
 /// Which pass of a deliverable synth this is — the two must LOOK
 /// different, or the review screen's compare demonstrates nothing.
+#[derive(Clone, Copy)]
 enum VideoCut {
     /// Classic bars, shorter, a low tone: obviously the draft.
     Rough,

@@ -39,7 +39,8 @@ async fn bind(book: &files::AddressBook) -> iroh::Endpoint {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_laptops_offline_work_reaches_the_server() {
     let (state, _tmp) = support::boot_app_state().await.expect("boot the server");
-    let mut org = state.org(support::ORG).expect("the example org");
+    let mut org =
+        task_server::OrgAppState::clone(&state.org(support::ORG).expect("the example org"));
     let org_root = state.data_root.org(support::ORG).path().to_path_buf();
     let book = files::AddressBook::new();
 
@@ -53,6 +54,7 @@ async fn a_laptops_offline_work_reaches_the_server() {
         server_endpoint.id().to_string(),
         files::IrohRemotes::port(server_endpoint.clone()),
     );
+    let org = std::sync::Arc::new(org);
     {
         let (org, gate, serving) = (
             org.clone(),

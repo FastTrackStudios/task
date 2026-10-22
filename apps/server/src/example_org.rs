@@ -495,6 +495,16 @@ pub const CAST: &[Member] = &[
         holds: Holds::Employee,
         scope: "",
     },
+    // A second employee, newer than Sam: the person attribution is for —
+    // work Atlas made for Alice and Alice handed on lands on Priya's
+    // own Tasks list (`attribution.seed`).
+    Member {
+        email: "priya@acme.test",
+        name: "Priya",
+        org: "acme-audio",
+        holds: Holds::Employee,
+        scope: "",
+    },
     Member {
         email: "casey@client.test",
         name: "Casey",
@@ -527,7 +537,8 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Comp lead vocals — Track One", "alice@acme.test"),
     ("Mix revisions — Track Two", "alice@acme.test"),
     ("Master review with the label", "alice@acme.test"),
-    ("Collect streaming metadata", "sam@acme.test"),
+    // Atlas made it for Alice; Alice handed it to Priya.
+    ("Collect streaming metadata", "priya@acme.test"),
     ("Cut the visualiser to the album mix", "sam@acme.test"),
     ("Rough cut review", "victor@vnt.test"),
     // Alice's own next actions — the Tasks list is what is assigned to
@@ -1072,15 +1083,52 @@ pub struct DeclaredBot {
     /// Under [`crate::bots::BOT_DOMAIN`] — which is what makes the
     /// account a bot to attribution (`crate::attribution::Creator`).
     pub email: &'static str,
+    /// The cast member a **personal** bot works for (by email): what it
+    /// made reads "from Atlas (for Alice)". `None` for a team bot
+    /// (`crate::bots::Kind`).
+    pub acts_for: Option<&'static str>,
 }
 
-/// The example's bots: Atlas, Alice's assistant, who files suggestions
-/// from mail and makes tasks when asked.
-pub const BOTS: &[DeclaredBot] = &[DeclaredBot {
-    org: "acme-audio",
-    name: "Atlas",
-    email: "atlas@bots.task.invalid",
-}];
+/// The example's bots: Atlas, Alice's personal assistant, who files
+/// suggestions from mail and makes tasks when asked — and the Studio
+/// Desk, a team bot that acts for nobody in particular.
+pub const BOTS: &[DeclaredBot] = &[
+    DeclaredBot {
+        org: "acme-audio",
+        name: "Atlas",
+        email: "atlas@bots.task.invalid",
+        acts_for: Some("alice@acme.test"),
+    },
+    DeclaredBot {
+        org: "acme-audio",
+        name: "Studio Desk",
+        email: "studio-desk@bots.task.invalid",
+        acts_for: None,
+    },
+];
+
+/// The creator a seeded record made by account `email` is attributed
+/// to: the account, and — for a [`BOTS`] entry that is someone's
+/// personal assistant — whom it acted for. `None` when the account was
+/// not made.
+pub async fn seeded_creator(
+    auth: &crate::AuthState,
+    email: &str,
+) -> Option<crate::attribution::Creator> {
+    let user = auth.auth.find_user_by_email(email).await.ok()??;
+    let creator = crate::attribution::Creator::of_account(&user);
+    let Some(person) = BOTS
+        .iter()
+        .find(|b| b.email == email)
+        .and_then(|b| b.acts_for)
+    else {
+        return Some(creator);
+    };
+    match auth.auth.find_user_by_email(person).await {
+        Ok(Some(p)) => Some(creator.acting_for(crate::attribution::Creator::of_account(&p))),
+        _ => Some(creator),
+    }
+}
 
 /// The declared bots of one org.
 pub fn bots_of(slug: &str) -> impl Iterator<Item = &'static DeclaredBot> + '_ {
@@ -1121,6 +1169,9 @@ pub const TASK_CREATORS: &[(&str, &str)] = &[
     ("Cut the visualiser to the album mix", "sam@acme.test"),
     ("Restring the studio guitars", "alice@acme.test"),
     ("Pick up the test pressings", "atlas@bots.task.invalid"),
+    // The team bot's: a chore it files for whoever is in, so for nobody
+    // in particular — no "(for …)".
+    ("Vacuum the live room", "studio-desk@bots.task.invalid"),
 ];
 
 /// Who made the seeded task titled `title`, if the seed says.
@@ -1162,10 +1213,9 @@ pub async fn stamp_capture_creators(
         if item.created_by.is_some() {
             continue;
         }
-        let Ok(Some(user)) = auth.auth.find_user_by_email(email).await else {
+        let Some(creator) = seeded_creator(auth, email).await else {
             continue;
         };
-        let creator = crate::attribution::Creator::of_account(&user);
         crate::attribution::attribute_inbox(&mut item, Some(&creator));
         // Straight to the file, as the planting itself was: the backend
         // keeps an item's first creator, and this one had none.
@@ -3117,6 +3167,220 @@ mod declared_tests {
         );
     }
 
+    /// The seed declares an org kind the property tools can show and
+    /// hold writes to: `Schemas/session.md` parses, the seeded session
+    /// note satisfies it, and `Sessions.base` is there to list it.
+    #[test]
+    fn the_seed_declares_a_session_schema_its_notes_satisfy() {
+        use vault::property_schema::{PropertySchemaRegistry, schema_from_frontmatter};
+        let fm = |path: &str| -> serde_json::Map<String, serde_json::Value> {
+            let text = STUDIO
+                .get_file(format!("acme-audio/Vault/{path}"))
+                .and_then(include_dir::File::contents_utf8)
+                .unwrap_or_else(|| panic!("{path} is not committed"));
+            vault::obsidian::obsidian_parse::parse_frontmatter(text)
+                .0
+                .into_iter()
+                .map(|e| (e.key, e.value))
+                .collect()
+        };
+        let schema = schema_from_frontmatter(&fm("Schemas/session.md")).expect("schema parses");
+        assert_eq!(schema.kind, "session");
+        let mut registry = PropertySchemaRegistry::with_builtins();
+        registry.insert(schema);
+        let note = fm("Records/sessions/tracking-day-washed.md");
+        assert_eq!(note["kind"], "session");
+        for (key, value) in note {
+            registry
+                .validate(Some("session"), &key, value)
+                .unwrap_or_else(|v| panic!("the seeded session breaks its schema: {v}"));
+        }
+        assert!(
+            registry
+                .validate(Some("session"), "room", serde_json::json!("c-room"))
+                .is_err()
+        );
+        assert!(STUDIO.get_file("acme-audio/Vault/Sessions.base").is_some());
+        // The gig recipe's playback sessions are held to the same kind.
+        for path in [
+            "Records/sessions/night-drive-playback.md",
+            "Records/sessions/paper-moon-playback.md",
+        ] {
+            for (key, value) in fm(path) {
+                registry
+                    .validate(Some("session"), &key, value)
+                    .unwrap_or_else(|v| panic!("{path} breaks the session schema: {v}"));
+            }
+        }
+    }
+
+    /// Every committed note of `slug`'s vault as `(vault path, text)`.
+    fn committed_vault_notes(slug: &str) -> Vec<(String, String)> {
+        fn walk(dir: &'static Dir<'static>, prefix: &str, out: &mut Vec<(String, String)>) {
+            for f in dir.files() {
+                let path = f.path().to_string_lossy().replace('\\', "/");
+                if let (Some(rel), Some(text)) = (path.strip_prefix(prefix), f.contents_utf8()) {
+                    out.push((rel.to_owned(), text.to_owned()));
+                }
+            }
+            for d in dir.dirs() {
+                walk(d, prefix, out);
+            }
+        }
+        let root = format!("{slug}/Vault");
+        let dir = STUDIO
+            .get_dir(&root)
+            .unwrap_or_else(|| panic!("{root} is not committed"));
+        let mut out = Vec::new();
+        walk(dir, &format!("{root}/"), &mut out);
+        out.sort();
+        out
+    }
+
+    /// The gig recipe (`docs/recipes/gigs.md`) is data, so the seed is
+    /// its contract: the release show's three `.base` files, run over
+    /// the committed vault exactly as `query_base` runs them, give the
+    /// set in position order with effective keys (`+4`, an absolute
+    /// key, none), flag the one use whose session is missing, and list
+    /// the rehearsal and the show that link to the gig.
+    #[test]
+    fn the_gig_recipe_seed_runs_as_bases() {
+        const GIG: &str = "Gigs/example-album-release";
+        let notes = committed_vault_notes("acme-audio");
+        let rows = vault::obsidian::rows_from_markdown(
+            notes.iter().map(|(p, t)| (p.as_str(), t.as_str())),
+        );
+        fn note_text<'n>(notes: &'n [(String, String)], path: &str) -> &'n str {
+            notes
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, t)| t.as_str())
+                .unwrap_or_else(|| panic!("{path} is not committed"))
+        }
+        let text = |path: &str| note_text(&notes, path);
+        let run = |base: &str, view: &str| -> Vec<(String, serde_json::Value)> {
+            let path = format!("{GIG}/{base}.base");
+            let parsed = vault::bases::parse(text(&path))
+                .unwrap_or_else(|e| panic!("{path} doesn't parse: {e}"));
+            let tables = vault::obsidian::run_base(&parsed, &rows, Some(view))
+                .unwrap_or_else(|e| panic!("{path}: {e}"));
+            tables[0]
+                .groups
+                .iter()
+                .flat_map(|g| &g.rows)
+                .map(|r| {
+                    let mut all = serde_json::Map::new();
+                    for (k, v) in &r.values {
+                        all.insert(k.clone(), v.clone());
+                    }
+                    for (k, v) in &r.formulas {
+                        all.insert(format!("formula.{k}"), v.clone());
+                    }
+                    (r.name.clone(), serde_json::Value::Object(all))
+                })
+                .collect()
+        };
+
+        // The gig note links its project.
+        let gig = text(&format!("{GIG}.md"));
+        assert!(gig.contains("type: gig"), "{gig}");
+        assert!(gig.contains("project: project:example-album"), "{gig}");
+        assert!(
+            declared_of("acme-audio").any(|p| project_rel(p.dir) == "example-album"),
+            "the gig's project is one the seed declares"
+        );
+
+        // Setlist: position order, not file-name order; effective keys.
+        let set = run("Setlist", "Setlist");
+        let got: Vec<(&str, &serde_json::Value, &serde_json::Value)> = set
+            .iter()
+            .map(|(name, v)| (name.as_str(), &v["position"], &v["formula.effective_key"]))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "Night Drive (release show)",
+                    &serde_json::json!(1),
+                    &serde_json::json!("B")
+                ),
+                (
+                    "Paper Moon (release show)",
+                    &serde_json::json!(2),
+                    &serde_json::json!("E")
+                ),
+                (
+                    "Last Call (release show)",
+                    &serde_json::json!(3),
+                    &serde_json::json!("A")
+                ),
+            ],
+            "{set:?}"
+        );
+        assert_eq!(set[0].1["formula.song_key"], "G", "{set:?}");
+        assert_eq!(set[1].1["formula.song_key"], "D", "{set:?}");
+
+        // Readiness: Last Call's session note doesn't exist.
+        let ready = run("Readiness", "Readiness");
+        let flags: Vec<(&str, &serde_json::Value, &serde_json::Value)> = ready
+            .iter()
+            .map(|(name, v)| (name.as_str(), &v["formula.session"], &v["formula.ready"]))
+            .collect();
+        let (t, f) = (serde_json::json!(true), serde_json::json!(false));
+        assert_eq!(
+            flags,
+            [
+                ("Night Drive (release show)", &t, &t),
+                ("Paper Moon (release show)", &t, &t),
+                ("Last Call (release show)", &f, &f),
+            ],
+            "{ready:?}"
+        );
+        for (name, v) in &ready {
+            for check in ["formula.chart", "formula.reference", "formula.patch_set"] {
+                assert_eq!(v[check], true, "{name}: {check}");
+            }
+        }
+        let missing: Vec<String> = run("Readiness", "Not ready")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(missing, ["Last Call (release show)"]);
+
+        // Calendar: the rehearsal, then the show, both linked to the gig.
+        let cal = run("Calendar", "Calendar");
+        let got: Vec<(&str, &serde_json::Value)> = cal
+            .iter()
+            .map(|(name, v)| (name.as_str(), &v["formula.role"]))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "example-album-release-rehearsal",
+                    &serde_json::json!("rehearsal")
+                ),
+                ("example-album-release-show", &serde_json::json!("show")),
+            ],
+            "{cal:?}"
+        );
+        // …and each is an event the scheduler reads, linking the gig.
+        #[cfg(feature = "plugin-scheduling")]
+        for (name, _) in &cal {
+            let path = format!("Records/events/{name}.md");
+            let raw = text(&path);
+            let yaml = raw
+                .strip_prefix("---\n")
+                .and_then(|r| r.split_once("\n---\n"))
+                .map(|(fm, _)| fm)
+                .unwrap_or_else(|| panic!("{path} has no frontmatter"));
+            let event = scheduling::parse::parse_cal_event(&path, yaml)
+                .unwrap_or_else(|e| panic!("{path}: {e:?}"));
+            assert_eq!(&event.id, name);
+            assert!(event.links_to(GIG), "{path}: {:?}", event.links);
+        }
+    }
+
     // t[verify process.due]
     /// What the plant leaves in Alice's inbox, read back through the
     /// inbox backend the server mounts: captures due for processing
@@ -3277,6 +3541,44 @@ mod declared_tests {
                 .iter()
                 .any(|c| !CAPTURE_CREATORS.iter().any(|(id, _)| *id == c.id)),
             "one capture stays unattributed, like those made before attribution"
+        );
+
+        // A personal bot and a team bot (`attribution.on-behalf-of`):
+        // the person a personal bot works for is in its org.
+        for b in BOTS {
+            if let Some(person) = b.acts_for {
+                assert!(
+                    cast_of(b.org).iter().any(|m| m.email == person),
+                    "{} acts for `{person}`, who is not in {}",
+                    b.name,
+                    b.org
+                );
+            }
+        }
+        assert!(BOTS.iter().any(|b| b.acts_for.is_some()), "no personal bot");
+        assert!(BOTS.iter().any(|b| b.acts_for.is_none()), "no team bot");
+        let made_by_team_bot = TASK_CREATORS
+            .iter()
+            .any(|(_, e)| BOTS.iter().any(|b| b.email == *e && b.acts_for.is_none()));
+        assert!(made_by_team_bot, "the team bot made nothing");
+
+        // An employee who is not the first one, with work a personal
+        // bot made for someone else and that someone handed on.
+        let employees: Vec<_> = CAST
+            .iter()
+            .filter(|m| matches!(m.holds, Holds::Employee))
+            .collect();
+        assert!(employees.len() >= 2, "a second employee");
+        let handed_on = TASK_OWNERS.iter().any(|(title, owner)| {
+            employees[1..].iter().any(|e| e.email == *owner)
+                && task_creator(title).is_some_and(|by| {
+                    BOTS.iter()
+                        .any(|b| b.email == by && b.acts_for.is_some_and(|p| p != *owner))
+                })
+        });
+        assert!(
+            handed_on,
+            "no assistant-made task assigned to the new employee"
         );
     }
 

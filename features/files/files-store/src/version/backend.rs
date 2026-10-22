@@ -225,8 +225,20 @@ impl VersionStoreBackend {
     /// (issue #264): objects are content-addressed (id = blake3 of the
     /// bytes), so shipping the bytes verbatim is what guarantees the
     /// receiver derives the identical id — no re-encode, no drift.
-    pub async fn read_raw_object(&self, id: &[u8]) -> Result<Vec<u8>> {
-        self.read_object(id).await
+    ///
+    /// `Bytes`: an object never changes once written, so the bytes are
+    /// handed out shareable (the sync puller holds a commit across its
+    /// closure walk and decodes it on another thread without a copy).
+    pub async fn read_raw_object(&self, id: &[u8]) -> Result<bytes::Bytes> {
+        self.read_object(id).await.map(bytes::Bytes::from)
+    }
+
+    /// Does the store hold this structural object? Answered from the
+    /// object's presence on disk, without reading it (replica sync asks
+    /// this once per object it walks).
+    pub async fn has_raw_object(&self, id: &[u8]) -> Result<bool> {
+        let hash = Self::object_hash(id)?;
+        self.objects.has(&hash).await
     }
 
     /// Decode a raw commit's `(parent ids, root tree id)` **without
@@ -257,23 +269,23 @@ impl VersionStoreBackend {
     /// trusted about content addresses. Also verifies the bytes decode
     /// as one of the three object kinds, so a peer can't park arbitrary
     /// data in the object store under a valid hash.
-    pub async fn import_raw_object(&self, expected_id: &[u8], bytes: Vec<u8>) -> Result<()> {
+    pub async fn import_raw_object(&self, expected_id: &[u8], bytes: &[u8]) -> Result<()> {
         let expected = Self::object_hash(expected_id)?;
-        let actual = blake3::hash(&bytes);
+        let actual = blake3::hash(bytes);
         if actual != expected {
             return Err(Error::Object(format!(
                 "object bytes hash to {actual}, peer claimed {expected}"
             )));
         }
-        if codec::decode_commit(&bytes).is_err()
-            && codec::decode_tree(&bytes).is_err()
-            && codec::decode_copy_history(&bytes).is_err()
+        if codec::decode_commit(bytes).is_err()
+            && codec::decode_tree(bytes).is_err()
+            && codec::decode_copy_history(bytes).is_err()
         {
             return Err(Error::Object(format!(
                 "object {expected} decodes as no known kind — refusing to store it"
             )));
         }
-        self.objects.write(&bytes).await?;
+        self.objects.write(bytes).await?;
         Ok(())
     }
 

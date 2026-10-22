@@ -216,7 +216,10 @@ impl Server {
                 .expect("boot AppState")
         };
 
-        let mut org = state.org(slug).expect("the org we just scaffolded");
+        // A copy of the org to attach peering to, served below (the map
+        // shares each org behind an `Arc`).
+        let mut org =
+            task_server::OrgAppState::clone(&state.org(slug).expect("the org we just scaffolded"));
         let tree = data.path().join("orgs").join(slug).join("files");
         std::fs::create_dir_all(&tree).expect("files dir");
         tracing::info_span!("integration.fixture").in_scope(|| fixture(&tree));
@@ -259,7 +262,7 @@ impl Server {
         // could reach, which is how the replica sync surface went
         // unmounted for as long as it did.
         let serving = endpoint.clone();
-        let org_for_serving = org.clone();
+        let org_for_serving = Arc::new(org);
         let gate = state.write_gate.clone();
         tokio::spawn(async move {
             task_server::serve_org_iroh(org_for_serving, gate, &serving).await;
@@ -348,7 +351,9 @@ impl Server {
                 .expect("boot AppState")
         };
 
-        let mut org = state.org(&slug).expect("the org is still on this disk");
+        let mut org = task_server::OrgAppState::clone(
+            &state.org(&slug).expect("the org is still on this disk"),
+        );
         // Same id, new addresses — so the book is told again, exactly as
         // a deployed endpoint republishes its pkarr record on boot. A
         // device registered against this id notices nothing, which is
@@ -375,7 +380,7 @@ impl Server {
         let backend = org.files.clone();
 
         let serving = endpoint.clone();
-        let org_for_serving = org.clone();
+        let org_for_serving = Arc::new(org);
         let gate = state.write_gate.clone();
         tokio::spawn(async move {
             task_server::serve_org_iroh(org_for_serving, gate, &serving).await;

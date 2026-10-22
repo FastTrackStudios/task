@@ -47,6 +47,8 @@ pub fn parse_inbox_item(
         // Absent on captures from before attribution: no creator.
         created_by: yaml::str_at(&map, "created_by"),
         created_by_name: yaml::str_at(&map, "created_by_name"),
+        on_behalf_of: yaml::str_at(&map, "on_behalf_of"),
+        on_behalf_of_name: yaml::str_at(&map, "on_behalf_of_name"),
         created: yaml::str_at(&map, "created").unwrap_or_default(),
         resurface_on: yaml::str_at(&map, "resurface_on"),
         processed_into: yaml::str_at(&map, "processed_into"),

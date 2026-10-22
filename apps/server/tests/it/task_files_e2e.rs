@@ -20,7 +20,7 @@ async fn next_event(rx: &mut vox::Rx<TaskEvent>, secs: u64) -> TaskEvent {
         .expect("rx error")
         .expect("rx closed");
     let mut owned: Option<TaskEvent> = None;
-    let _ = msg.map(|ev| owned = Some(ev.clone()));
+    let _ = msg.map(|ev| owned = Some(ev));
     owned.expect("decode event")
 }
 

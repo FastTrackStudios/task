@@ -57,12 +57,14 @@ pub use tasks::{TaskItem, list_tasks, page_tasks};
 pub use wordcount::{WordCount, page_wordcount, vault_wordcount};
 
 pub mod base_query;
-pub use base_query::{QueryError, find_base, query_all_views, query_view, vault_to_rows};
+pub use base_query::{
+    QueryError, find_base, query_all_views, query_view, rows_from_markdown, run_base, vault_to_rows,
+};
 
 pub mod mutate;
 pub use mutate::{
-    MutateError, append_to_page, create_page, delete_page, move_page, prepend_to_page,
-    remove_property, set_property,
+    MutateError, append_to_page, create_page, delete_page, edit_frontmatter, move_page,
+    prepend_to_page, remove_property, set_property,
 };
 
 /// "Open an Obsidian vault as a Task vault" translation tool —

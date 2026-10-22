@@ -38,20 +38,67 @@ pub enum ParseError {
 // ── text → TaskInfo ─────────────────────────────────────────────────
 
 /// Whether `raw` reads as a task: `type: task`, or `task` in `tags`.
+///
+/// Every list, get and rollup asks this of **every page in the vault**,
+/// so it must not cost a parse of the whole frontmatter: it reads the
+/// two keys it decides on into a probe and skips every other value
+/// unbuilt, where deserializing a `serde_yaml::Mapping` built (and
+/// dropped) an owned tree of every key on every page, per request.
 #[must_use]
 pub fn looks_like_task(raw: &str) -> bool {
     let Some((fm, _body)) = split_frontmatter(raw) else {
         return false;
     };
-    let Ok(map) = serde_yaml::from_str::<serde_yaml::Mapping>(fm) else {
-        return false;
-    };
-    if map.get("type").and_then(serde_yaml::Value::as_str) == Some("task") {
-        return true;
+    serde_yaml::from_str::<TaskProbe>(fm).is_ok_and(|p| p.0)
+}
+
+/// [`looks_like_task`]'s reading of a frontmatter block: a mapping whose
+/// `type` is `task` or whose `tags` list holds `task`.
+///
+/// A hand-written visitor rather than a derived struct for two reasons.
+/// A derived struct also accepts a YAML *sequence* (positionally, into
+/// its fields), which the mapping parse this replaces refused. And the
+/// visitor builds only the two values it decides on: every other key's
+/// value is skipped as `IgnoredAny`.
+struct TaskProbe(bool);
+
+impl<'de> serde::Deserialize<'de> for TaskProbe {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = TaskProbe;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a frontmatter mapping")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<TaskProbe, A::Error> {
+                let mut task = false;
+                while let Some(key) = map.next_key::<serde_yaml::Value>()? {
+                    match key.as_str() {
+                        Some("type") => {
+                            let v: serde_yaml::Value = map.next_value()?;
+                            task |= v.as_str() == Some("task");
+                        }
+                        Some("tags") => {
+                            let v: serde_yaml::Value = map.next_value()?;
+                            task |= v
+                                .as_sequence()
+                                .is_some_and(|seq| seq.iter().any(|t| t.as_str() == Some("task")));
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TaskProbe(task))
+            }
+        }
+        d.deserialize_map(V)
     }
-    map.get("tags")
-        .and_then(serde_yaml::Value::as_sequence)
-        .is_some_and(|seq| seq.iter().any(|v| v.as_str() == Some("task")))
 }
 
 /// The file name a path's task falls back to for its title.
@@ -137,6 +184,8 @@ pub fn parse_task(rel_path: &str, basename: &str, raw: &str) -> Result<TaskInfo,
         date_modified: take_str(&map, "dateModified").and_then(|s| s.parse().ok()),
         created_by: take_str(&map, "createdBy"),
         created_by_name: take_str(&map, "createdByName"),
+        on_behalf_of: take_str(&map, "onBehalfOf"),
+        on_behalf_of_name: take_str(&map, "onBehalfOfName"),
         // The writer sets the body off with one blank line; take exactly
         // that one back (see [`serialize_task`]), so details round-trip.
         details: body.strip_prefix('\n').unwrap_or(body).to_string(),
@@ -326,6 +375,26 @@ pub fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_task_probe_decides_as_the_mapping_did() {
+        let fm = |body: &str| format!("---\n{body}\n---\n\nbody\n");
+        assert!(looks_like_task(&fm("type: task\ntitle: x")));
+        assert!(looks_like_task(&fm("title: x\ntags: [a, task]")));
+        assert!(looks_like_task(&fm(
+            "nested:\n  deep: [1, 2, {k: v}]\ntype: task"
+        )));
+        assert!(!looks_like_task(&fm("type: note\ntags: [a]")));
+        // Wrong shapes read as "not a task", never as an error.
+        assert!(!looks_like_task(&fm("type: 5\ntags: task")));
+        assert!(!looks_like_task(&fm("tags: {task: true}")));
+        // A sequence is not a frontmatter mapping, even one that would
+        // fill the probe's fields positionally.
+        assert!(!looks_like_task(&fm("- task\n- [task]")));
+        assert!(!looks_like_task(&fm("just a scalar")));
+        assert!(!looks_like_task("no frontmatter at all\n"));
+        assert!(!looks_like_task(&fm("type: [unclosed")));
+    }
 
     fn task(title: &str) -> TaskInfo {
         let mut t = crate::capture::capture(title);

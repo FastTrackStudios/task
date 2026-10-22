@@ -1,0 +1,279 @@
+# Headless node binaries — standalone `task-server` builds attached to the
+# GitHub Release `v<version>`, for running a Task node outside the cluster
+# and outside Nix: on a desktop, a home server, a VPS (docs/headless-node.md).
+#
+#   task-server-linux-x86_64     glibc >= 2.35 (built on Ubuntu 22.04)
+#   task-server-linux-aarch64    glibc >= 2.35
+#   task-server-macos-aarch64    macOS 14+, Apple silicon
+#   SHA256SUMS                   `sha256sum` format, over all three
+#   SHA256SUMS.minisig           minisign signature of SHA256SUMS, by the release
+#                                key, trusted comment "task-server <tag> SHA256SUMS"
+#
+# The signature is what `self-update` trusts: the binaries and SHA256SUMS
+# come from the same release, so whoever can write release assets can swap
+# both, and only a key that is not in the release proves which build it is.
+# The secret half is the TASK_RELEASE_MINISIGN_KEY Actions secret (an
+# unencrypted minisign secret key file, `minisign -G -W`); the public half
+# is RELEASE_SIGNING_KEY in apps/server/src/self_update.rs, and the publish
+# job refuses to sign with a key that is not that one. Until the secret is
+# set, releases go out unsigned with a warning, and `self-update` installs
+# none of them.
+#
+# The asset names are a contract: `task-server self-update`
+# (apps/server/src/self_update.rs) and scripts/install-node.sh look them up
+# by name, and a unit test reads this file to keep the two in step.
+#
+# WHEN: called from deploy.yml once the release is published (after
+# "Verify live" + "GitHub Release", on the release tag), so the binaries land on a
+# release production already runs. By hand: `gh workflow run
+# node-binaries.yml --ref v0.2.4` (or `-f tag=v0.2.3` to backfill a release
+# from its tag). A release that already carries SHA256SUMS is left alone
+# unless `replace` is set: a published checksum must not change under
+# anyone who verified it.
+#
+# WHERE: GitHub-hosted runners, not Task's self-hosted ones. The binaries
+# must run on hosts without Nix, so they are built against the OS's own
+# libc with rustup's toolchain (rust-toolchain.toml), not inside the Nix
+# dev shell, whose binaries link /nix/store. OpenSSL is linked statically
+# (OPENSSL_STATIC) so the only runtime dependency is the platform's libc.
+# The repo is public, so the hosted runners (incl. ubuntu-22.04-arm) cost
+# nothing; the build is cold every time (~1h), which a release can afford.
+
+name: node-binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to attach to. Empty = v<Cargo.toml version> at the ref."
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach to (v<X.Y.Z>). Empty = v<Cargo.toml version> at the ref."
+        required: false
+        default: ""
+      replace:
+        description: "Rebuild and replace binaries a release already carries."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-binaries-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Which release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REPLACE: ${{ inputs.replace && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+              || { echo "::error::no tag $tag"; exit 1; }
+            ref="$tag"
+            # The tag's own version must be the one it is named for.
+            v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
+            [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
+          else
+            # No tag input: the run must itself be on a release tag (the
+            # deploy's workflow_call, or a dispatch with the tag as its
+            # ref). A branch dispatch would read its own Cargo.toml and
+            # could swap a published release's binaries for branch-built
+            # ones.
+            case "${GITHUB_REF}" in
+              refs/tags/v*) ;;
+              *) echo "::error::run this on a v* tag (ref is ${GITHUB_REF}), or pass the tag input"; exit 1 ;;
+            esac
+            tag="${GITHUB_REF#refs/tags/}"
+            ref="${GITHUB_SHA}"
+            v="$(bash scripts/release.sh version)"
+            [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
+          fi
+          # Either way the tag is a commit of main: binaries attach to
+          # releases, not to branch builds.
+          git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$(git rev-parse "refs/tags/$tag^{commit}")" origin/main \
+            || { echo "::error::$tag is not in main's history"; exit 1; }
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::no GitHub Release $tag — the binaries attach to a published release (release.yml publishes it)"
+            exit 1
+          fi
+          build=true
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' \
+              | grep -qx SHA256SUMS && [ "$REPLACE" != true ]; then
+            echo "::notice::$tag already carries node binaries — nothing to do (dispatch with replace=true to rebuild)"
+            build=false
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "release $tag from $ref (build: $build)"
+
+  build:
+    name: ${{ matrix.asset }}
+    needs: plan
+    if: ${{ needs.plan.outputs.build == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: task-server-linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - asset: task-server-linux-aarch64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - asset: task-server-macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      # libssl.a instead of libssl.so.3 / Homebrew's dylib: the binary must
+      # not depend on a library a fresh host may not have.
+      OPENSSL_STATIC: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+
+      - name: Native build dependencies (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config libssl-dev cmake clang
+
+      - name: Native build dependencies (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          # The oldest macOS the binary promises to run on.
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+
+      # rustup reads rust-toolchain.toml: the same compiler as the dev shell.
+      - name: Toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add ${{ matrix.target }}
+          rustc --version
+
+      - name: Build
+        run: cargo build --release --locked -p task-server --target ${{ matrix.target }}
+
+      # The binary reports the release's version, and links nothing but
+      # the platform's own libraries.
+      - name: Verify
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/task-server"
+          bash scripts/check-versions.sh --bin "$bin"
+          [ "v$(bash scripts/release.sh version)" = "$TAG" ] \
+            || { echo "::error::built $(bash scripts/release.sh version), releasing $TAG"; exit 1; }
+          if [ "$RUNNER_OS" = Linux ]; then
+            ldd "$bin"
+            if ldd "$bin" | grep -E 'libssl|libcrypto|/nix/store'; then
+              echo "::error::$bin links a library a fresh host may lack"; exit 1
+            fi
+          else
+            otool -L "$bin"
+            if otool -L "$bin" | tail -n +2 | grep -vE '^\s*(/usr/lib/|/System/Library/)'; then
+              echo "::error::$bin links something outside the OS"; exit 1
+            fi
+          fi
+          # `--help` must not boot either.
+          "$bin" --help >/dev/null
+          mkdir -p dist
+          cp "$bin" "dist/${{ matrix.asset }}"
+          chmod 755 "dist/${{ matrix.asset }}"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Attach to the release
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # Only for the pinned public key the signature must verify against.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          sparse-checkout: apps/server/src/self_update.rs
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums, signature + upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          MINISIGN_KEY: ${{ secrets.TASK_RELEASE_MINISIGN_KEY }}
+        run: |
+          set -euo pipefail
+          # The const, however rustfmt wraps it: `Some("RW…")`, or empty for `None`.
+          pinned="$(awk '/^pub const RELEASE_SIGNING_KEY/{f=1} f{printf "%s", $0} f&&/;$/{exit}' \
+            apps/server/src/self_update.rs | tr -d ' ' | sed -n 's/.*=Some("\([A-Za-z0-9+\/=]*\)");$/\1/p')"
+          cd dist
+          for a in task-server-linux-x86_64 task-server-linux-aarch64 task-server-macos-aarch64; do
+            [ -f "$a" ] || { echo "::error::missing $a"; exit 1; }
+          done
+          sha256sum task-server-* > SHA256SUMS
+          cat SHA256SUMS
+          assets=(task-server-* SHA256SUMS)
+          if [ -n "$MINISIGN_KEY" ]; then
+            [ -n "$pinned" ] || { echo "::error::TASK_RELEASE_MINISIGN_KEY is set but $TAG pins no RELEASE_SIGNING_KEY: nodes could not verify this signature"; exit 1; }
+            sudo apt-get install -y -q minisign >/dev/null
+            key="$RUNNER_TEMP/release.key"
+            ( umask 077; printf '%s\n' "$MINISIGN_KEY" > "$key" )
+            minisign -S -s "$key" -m SHA256SUMS -x SHA256SUMS.minisig -t "task-server $TAG SHA256SUMS"
+            rm -f "$key"
+            # Signed by the key the binaries pin, or nothing is published.
+            minisign -V -P "$pinned" -m SHA256SUMS -x SHA256SUMS.minisig
+            assets+=(SHA256SUMS.minisig)
+          else
+            echo "::warning::TASK_RELEASE_MINISIGN_KEY is not set: $TAG's node binaries go out unsigned, and task-server self-update will not install them"
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          {
+            echo "### Node binaries attached to $TAG"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

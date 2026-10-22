@@ -1,0 +1,30 @@
+# Keeps the Task node on the newest release: once a day (task-server-update.timer)
+# `self-update` checks the GitHub releases, verifies the release's signature, the
+# binary's sha256 and that it reports the release's version, swaps it in, and only
+# then restarts the node. Root, sandboxed: it can write only the binary's directory.
+# Rendered by `task-server service write`; see https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md
+
+[Unit]
+Description=Update the Task node from GitHub Releases
+Documentation=https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/task-server self-update --then systemctl try-restart task-server.service
+TimeoutStartSec=45min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/usr/local/bin
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true

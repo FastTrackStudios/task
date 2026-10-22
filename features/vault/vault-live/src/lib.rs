@@ -42,7 +42,8 @@
 // Format-agnostic file parsers, migrated out of the old
 // `knowledge-proto` crate so vault-live owns the file-format
 // layer it loads:
-//   bases           — `.base` query DSL parser
+//   bases           — `.base` parser + evaluator (filters, formulas,
+//                      link functions, link-follow)
 //   refs            — wikilink / blockref / tag value types
 //   property_schema — frontmatter type coercion (Obsidian's
 //                      `.obsidian/types.json` shape)

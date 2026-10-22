@@ -9,6 +9,10 @@
 > (`nix/module.nix`) is an orphan — nothing in the flake imports it.
 >
 > For the real thing use:
+> - [`headless-node.md`](headless-node.md) — running `task-server` as an
+>   always-on node outside the cluster: release binaries, the systemd unit
+>   and launchd agent it renders, the NixOS module
+>   (`inputs.task.nixosModules.task-server`), pairing and updates
 > - [`../.env.example`](../.env.example) — the complete env-var inventory
 >   (`TASK_DATA_ROOT`, `TASK_SERVER_BIND`, `TASK_SERVER_VAULT_ROOT`, the
 >   per-service DB URLs, …)
@@ -149,5 +153,8 @@ Projects vault root rather than the whole Nextcloud data directory.
 
 ## Generic systemd
 
-Use `docs/systemd/task-server.service` as a starting point on non-NixOS hosts.
+Superseded: a headless node's systemd unit (and macOS launchd agent) is
+rendered by the binary itself, `task-server service write <dir>`, with the
+defaults committed under `deploy/node/`. See
+[`headless-node.md`](headless-node.md).
 Keep secrets in files readable only by the service user.

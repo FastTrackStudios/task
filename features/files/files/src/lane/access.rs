@@ -397,7 +397,7 @@ impl FilesBackend {
         granter: &Subject,
         subject: Subject,
         root_id: RootId,
-        path: RootPath,
+        path: &RootPath,
         capabilities: Vec<Capability>,
     ) -> Result<Grant, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
@@ -412,7 +412,7 @@ impl FilesBackend {
         // answers `PathNotFound` there, which is the same absence the
         // grantee would see.
         let held = resolved(self, granter, root_id, &path)?;
-        self.grant_holding(held, granter, subject, root_id, path, capabilities)
+        self.grant_holding(&held, granter, subject, root_id, path, capabilities)
     }
 
     /// The attenuation half of [`Self::grant_as`], for a granter whose
@@ -420,7 +420,7 @@ impl FilesBackend {
     /// counts as much as their grants do.
     fn grant_holding(
         &self,
-        held: Vec<Capability>,
+        held: &[Capability],
         granter: &Subject,
         subject: Subject,
         root_id: RootId,
@@ -478,7 +478,7 @@ impl AccessService for FilesBackend {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
         let (me, held) = caller_holds(self, root_id, &path).await?;
-        self.grant_holding(held, &me, subject, root_id, path, capabilities)
+        self.grant_holding(&held, &me, subject, root_id, path, capabilities)
     }
 
     // t[impl files.access.internal-sharing] — revocation binds on the next

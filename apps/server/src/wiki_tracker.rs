@@ -23,7 +23,7 @@ impl TaskTracker {
     }
 }
 
-fn err(e: TaskError) -> String {
+fn err(e: &TaskError) -> String {
     e.to_string()
 }
 
@@ -33,7 +33,7 @@ impl Tracker for TaskTracker {
         info.id = issue.id;
         info.details = issue.details;
         info.tags = task_proto_tags(issue.tags);
-        let made = self.tasks.create(info).map_err(err)?;
+        let made = self.tasks.create(info).map_err(|e| err(&e))?;
         Ok(made.id)
     }
 
@@ -47,12 +47,12 @@ impl Tracker for TaskTracker {
                     .unwrap_or(t.status),
             )),
             Err(TaskError::NotFound(_)) => Ok(None),
-            Err(e) => Err(err(e)),
+            Err(e) => Err(err(&e)),
         }
     }
 
     fn close_issue(&self, id: uuid::Uuid, status: &str, note: &str) -> Result<(), String> {
-        let mut t = self.tasks.get(id).map_err(err)?;
+        let mut t = self.tasks.get(id).map_err(|e| err(&e))?;
         t.status = status.to_owned();
         if !note.trim().is_empty() {
             if !t.details.is_empty() {
@@ -60,7 +60,7 @@ impl Tracker for TaskTracker {
             }
             t.details.push_str(note.trim());
         }
-        self.tasks.update(t).map_err(err)?;
+        self.tasks.update(t).map_err(|e| err(&e))?;
         Ok(())
     }
 }

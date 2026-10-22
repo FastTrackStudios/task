@@ -26,6 +26,8 @@ pub enum MutateError {
     AlreadyExists(String),
     #[error("invalid path: {0}")]
     InvalidPath(String),
+    #[error("invalid frontmatter: {0}")]
+    InvalidFrontmatter(String),
 }
 
 // ── Path helpers ────────────────────────────────────────────────────
@@ -230,6 +232,65 @@ pub fn prepend_to_page(
 
 // ── property:set / property:remove ──────────────────────────────────
 
+/// Set and remove frontmatter keys in a page's source, leaving the
+/// body — every byte after the closing `---` — exactly as it was.
+///
+/// `set` replaces a key's value in place (keeping its position) or
+/// appends it; `remove` drops keys, and an absent one is not an error.
+/// Returns `Ok(None)` when nothing would change, so a caller can skip
+/// the write (and the mtime churn) entirely. Removing the last key
+/// drops the `---` fences with it.
+///
+/// This is the pure core of [`set_property`] / [`remove_property`],
+/// for callers that hold the page's bytes rather than a [`Vault`] —
+/// the server's `update_properties` tool writes through the sync
+/// backend.
+///
+/// # Errors
+///
+/// [`MutateError::InvalidFrontmatter`] when the page has a frontmatter
+/// block that isn't a YAML mapping. Rewriting it would throw away what
+/// it says, so the edit is refused instead.
+pub fn edit_frontmatter(
+    raw: &str,
+    set: &[(String, serde_json::Value)],
+    remove: &[String],
+) -> Result<Option<String>, MutateError> {
+    let (mut fm, body_offset) = parse_frontmatter(raw);
+    if fm.is_empty() && body_offset > 0 && has_yaml_content(&raw[..body_offset]) {
+        return Err(MutateError::InvalidFrontmatter(
+            "the frontmatter block isn't a YAML mapping; fix it by hand first".into(),
+        ));
+    }
+    let body = &raw[body_offset..];
+    let before = fm.clone();
+    for (key, value) in set {
+        if let Some(existing) = fm.iter_mut().find(|e| &e.key == key) {
+            existing.value = value.clone();
+        } else {
+            fm.push(FrontmatterEntry {
+                key: key.clone(),
+                value: value.clone(),
+            });
+        }
+    }
+    fm.retain(|e| !remove.contains(&e.key));
+    if fm == before {
+        return Ok(None);
+    }
+    Ok(Some(format!("{}{}", serialize_frontmatter(&fm), body)))
+}
+
+/// Whether a `---`-fenced block carries anything but the fences,
+/// blank lines and comments — i.e. whether an empty parse of it lost
+/// something.
+fn has_yaml_content(block: &str) -> bool {
+    block.lines().any(|l| {
+        let t = l.trim();
+        !t.is_empty() && t != "---" && !t.starts_with('#')
+    })
+}
+
 pub fn set_property(
     vault: &mut Vault,
     rel_path: &str,
@@ -237,27 +298,7 @@ pub fn set_property(
     value: serde_json::Value,
     guard: &SelfWriteGuard,
 ) -> Result<(), MutateError> {
-    validate_rel(rel_path)?;
-    let current = vault
-        .page(rel_path)
-        .ok_or_else(|| MutateError::NotFound(rel_path.into()))?
-        .raw
-        .clone();
-    let (mut fm, body_offset) = parse_frontmatter(&current);
-    let body = &current[body_offset..];
-
-    if let Some(existing) = fm.iter_mut().find(|e| e.key == key) {
-        existing.value = value;
-    } else {
-        fm.push(FrontmatterEntry {
-            key: key.to_string(),
-            value,
-        });
-    }
-    let new_raw = format!("{}{}", serialize_frontmatter(&fm), body);
-    vault
-        .save_page(rel_path, &new_raw, guard)
-        .map_err(save_to_mutate)
+    edit_page_frontmatter(vault, rel_path, &[(key.to_string(), value)], &[], guard)
 }
 
 pub fn remove_property(
@@ -266,22 +307,27 @@ pub fn remove_property(
     key: &str,
     guard: &SelfWriteGuard,
 ) -> Result<(), MutateError> {
+    edit_page_frontmatter(vault, rel_path, &[], &[key.to_string()], guard)
+}
+
+fn edit_page_frontmatter(
+    vault: &mut Vault,
+    rel_path: &str,
+    set: &[(String, serde_json::Value)],
+    remove: &[String],
+    guard: &SelfWriteGuard,
+) -> Result<(), MutateError> {
     validate_rel(rel_path)?;
     let current = vault
         .page(rel_path)
         .ok_or_else(|| MutateError::NotFound(rel_path.into()))?
         .raw
         .clone();
-    let (mut fm, body_offset) = parse_frontmatter(&current);
-    let body = &current[body_offset..];
-
-    let before = fm.len();
-    fm.retain(|e| e.key != key);
-    if fm.len() == before {
-        // Absent — no-op, but keep file untouched to avoid spurious mtime churn.
+    // Nothing changed — keep the file untouched to avoid spurious
+    // mtime churn.
+    let Some(new_raw) = edit_frontmatter(&current, set, remove)? else {
         return Ok(());
-    }
-    let new_raw = format!("{}{}", serialize_frontmatter(&fm), body);
+    };
     vault
         .save_page(rel_path, &new_raw, guard)
         .map_err(save_to_mutate)
@@ -455,5 +501,78 @@ mod tests {
 
         // No-op for absent key.
         remove_property(&mut v, "R.md", "missing", &g).unwrap();
+    }
+
+    /// Everything after the closing fence, byte for byte — including
+    /// a body with its own `---` rule, trailing spaces, CRLF and no
+    /// final newline.
+    const AWKWARD_BODY: &str = "\n# Title  \r\n\n---\n\nnot: frontmatter\n- [ ] task ^blk\ntail";
+
+    fn body_of(raw: &str) -> &str {
+        &raw[parse_frontmatter(raw).1..]
+    }
+
+    #[test]
+    fn edit_frontmatter_set_and_remove_leave_the_body_byte_identical() {
+        let raw = format!("---\nkind: task\nstatus: todo\n---\n{AWKWARD_BODY}");
+        let set = edit_frontmatter(
+            &raw,
+            &[
+                ("status".into(), serde_json::json!("done")),
+                ("due".into(), serde_json::json!("2026-11-01")),
+            ],
+            &[],
+        )
+        .unwrap()
+        .expect("changed");
+        assert_eq!(body_of(&set), AWKWARD_BODY);
+        assert!(set.contains("status: done"), "{set}");
+        assert!(set.contains("due: 2026-11-01"), "{set}");
+
+        let removed = edit_frontmatter(&set, &[], &["due".into(), "status".into()])
+            .unwrap()
+            .expect("changed");
+        assert_eq!(body_of(&removed), AWKWARD_BODY);
+        assert_eq!(removed, format!("---\nkind: task\n---\n{AWKWARD_BODY}"));
+
+        // Removing the last key drops the fences, never the body.
+        let bare = edit_frontmatter(&removed, &[], &["kind".into()])
+            .unwrap()
+            .expect("changed");
+        assert_eq!(bare, AWKWARD_BODY);
+    }
+
+    #[test]
+    fn edit_frontmatter_adds_a_block_to_a_page_without_one() {
+        let body = "just text\n";
+        let out = edit_frontmatter(body, &[("a".into(), serde_json::json!(1))], &[])
+            .unwrap()
+            .expect("changed");
+        assert_eq!(out, "---\na: 1\n---\njust text\n");
+    }
+
+    #[test]
+    fn edit_frontmatter_reports_no_change() {
+        let raw = "---\na: 1\n---\nbody";
+        assert_eq!(
+            edit_frontmatter(raw, &[("a".into(), serde_json::json!(1))], &["zz".into()]).unwrap(),
+            None
+        );
+    }
+
+    /// An unparseable block parses as empty; writing that back would
+    /// silently delete it.
+    #[test]
+    fn edit_frontmatter_refuses_a_block_it_cannot_read() {
+        let raw = "---\na: [unclosed\n---\nbody";
+        assert!(matches!(
+            edit_frontmatter(raw, &[("b".into(), serde_json::json!(2))], &[]),
+            Err(MutateError::InvalidFrontmatter(_))
+        ));
+        // An empty block is fine to fill.
+        let out = edit_frontmatter("---\n---\nbody", &[("b".into(), serde_json::json!(2))], &[])
+            .unwrap()
+            .expect("changed");
+        assert_eq!(out, "---\nb: 2\n---\nbody");
     }
 }

@@ -1,0 +1,35 @@
+# A headless Task node: one more of your devices, always on.
+# Rendered by `task-server service write`; see https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md
+#
+# Before the first start (as root): create its user and data root, then sign it in
+# as your account (a code to approve on your phone):
+#   useradd --system --home-dir /var/lib/task-server --shell /usr/sbin/nologin task
+#   install -d -o task -g task -m 0700 /var/lib/task-server
+#   sudo -u task env TASK_DATA_ROOT=/var/lib/task-server /usr/local/bin/task-server peer sign-in
+
+[Unit]
+Description=Task node (headless)
+Documentation=https://github.com/FastTrackStudios/task/blob/main/docs/headless-node.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=task
+Group=task
+Environment=TASK_DATA_ROOT=/var/lib/task-server
+Environment=TASK_SERVER_BIND=0.0.0.0:9090
+Environment=RUST_LOG=task_server=info
+StateDirectory=task-server
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/task-server peer
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/task-server
+
+[Install]
+WantedBy=multi-user.target

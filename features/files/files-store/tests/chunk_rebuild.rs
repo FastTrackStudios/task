@@ -33,8 +33,8 @@ async fn rebuilt_store_resolves_all_file_ids_identically() {
             expected.push((file_id, src.to_vec()));
         }
         let large_id = store.write_stream(large).await.unwrap();
-        let large_bytes = store.read_to_vec(large_id).await.unwrap();
-        expected.push((large_id, large_bytes));
+        let large_bytes = store.read_bytes(large_id).await.unwrap();
+        expected.push((large_id, Vec::from(large_bytes)));
 
         store.shutdown().await.unwrap();
         // `store` (and its FsStore) is dropped here — nothing beyond
@@ -43,7 +43,7 @@ async fn rebuilt_store_resolves_all_file_ids_identically() {
 
     let rebuilt = ChunkStore::open(dir.path()).await.unwrap();
     for (file_id, bytes) in &expected {
-        let read_back = rebuilt.read_to_vec(*file_id).await.unwrap();
+        let read_back = rebuilt.read_bytes(*file_id).await.unwrap();
         assert_eq!(
             &read_back, bytes,
             "FileId {file_id} did not resolve identically after rebuild"
@@ -77,7 +77,7 @@ async fn identical_content_from_two_writes_produces_one_manifest() {
         .unwrap();
     assert_eq!(id_a, id_c);
     assert_eq!(
-        reopened.read_to_vec(id_c).await.unwrap(),
-        b"same content, twice"
+        reopened.read_bytes(id_c).await.unwrap(),
+        &b"same content, twice"[..]
     );
 }

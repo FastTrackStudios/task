@@ -1,0 +1,20 @@
+filters:
+  and:
+    - 'type == "scheduling-cal-event"'
+    - file.hasLink("Gigs/example-album-release")
+    - '!file.hasProperty("tombstone")'
+formulas:
+  role: 'if(file.hasProperty("rehearsal-for"), "rehearsal", "show")'
+views:
+  - type: calendar
+    name: Calendar
+    dateProperty: note.start
+    order:
+      - title
+      - start
+      - end
+      - location
+      - formula.role
+    sort:
+      - property: start
+        direction: ASC

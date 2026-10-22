@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Immutable, shared chunk/object bytes (zero-copy port, STA-305).
+bytes = "1"
 # chunk
 fastcdc.workspace = true
 iroh-blobs.workspace = true
@@ -29,7 +31,7 @@ tokio-util.workspace = true
 pollster.workspace = true
 # shared
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -17,6 +17,16 @@
 //! `project-crdt` crates. CRDT now lives only at the per-file
 //! editor layer (future); vault is the sole storage path.
 
+// The copy lints, denied here once the crate is clean of them
+// (zero-copy audit S7, `docs/perf/zero-copy-audit.md`). They move into
+// `[workspace.lints.clippy]` once every crate carries this.
+#![deny(
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::large_types_passed_by_value
+)]
+
 pub mod account_devices;
 pub mod activity;
 pub mod admin_cli;
@@ -60,6 +70,9 @@ pub mod device_enrollment;
 pub mod doc_guard;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live;
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub mod live_docs;
+pub mod node_cli;
 #[cfg(feature = "plugin-wiki")]
 pub mod node_homes;
 pub mod notifier;
@@ -69,7 +82,9 @@ pub mod otlp;
 pub mod peer_cli;
 pub mod permits;
 pub mod presence;
+pub mod self_update;
 pub mod server_mgmt;
+pub mod service_units;
 pub mod share;
 pub mod share_guest;
 pub mod sharing;
@@ -487,9 +502,12 @@ pub struct AppState {
     /// to satisfy axum's / tokio's `Send` bound). A `tokio::RwLock`
     /// here would only make these accessors async and infect the sync
     /// `#[architect::rpc]` backends that call them. Callers must keep
-    /// it that way: clone the `OrgAppState` (see [`AppState::org`])
+    /// it that way: take the org's `Arc` (see [`AppState::org`])
     /// rather than working under the guard.
-    pub orgs: Arc<std::sync::RwLock<std::collections::HashMap<String, OrgAppState>>>,
+    ///
+    /// Each org is held behind an `Arc` so a request takes a reference
+    /// count, not a copy of the struct (zero-copy audit S1).
+    pub orgs: Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<OrgAppState>>>>,
     /// The Files placement layer's coordinator (issue #262): the
     /// deployment's Storage Location registry, its grants, its
     /// placements, and the in-server Storage agent enrolled against
@@ -533,15 +551,20 @@ pub struct AppState {
     /// never across an `.await` (the cycle is awaited *before* the
     /// guard is taken).
     pub snapshot_status: Arc<std::sync::RwLock<snapshot::SnapshotStatus>>,
+    /// The static `TASK_MCP_TOKEN`, read once when this state is built
+    /// (zero-copy audit S3). The MCP lanes and the operator gate compare
+    /// a presented bearer against it.
+    pub static_token: operator::StaticToken,
 }
 
 impl AppState {
     /// Look up an org by slug. Convenience for routes that
-    /// have extracted the slug from the URL path. Clones the
-    /// matched [`OrgAppState`] (`Clone` is cheap — all fields
-    /// are `Arc`/`Database` handles).
+    /// have extracted the slug from the URL path. Hands out the
+    /// org's shared [`OrgAppState`]: one reference-count bump per
+    /// request, where cloning the struct copied its strings, roots
+    /// and every handle (zero-copy audit S1).
     #[must_use]
-    pub fn org(&self, slug: &str) -> Option<OrgAppState> {
+    pub fn org(&self, slug: &str) -> Option<Arc<OrgAppState>> {
         self.orgs.read().ok()?.get(slug).cloned()
     }
 
@@ -649,7 +672,7 @@ impl AppState {
         self.orgs
             .write()
             .map_err(|_| "orgs lock poisoned")?
-            .insert(slug, state);
+            .insert(slug, Arc::new(state));
         Ok(())
     }
 }
@@ -732,7 +755,7 @@ impl AppState {
                 &blob_root,
             )
             .await?;
-            orgs.insert(slug, org_state);
+            orgs.insert(slug, Arc::new(org_state));
         }
 
         let state = Self {
@@ -745,6 +768,7 @@ impl AppState {
             write_gate: snapshot::WriteGate::new(),
             snapshot_cycle: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_status: Arc::new(std::sync::RwLock::new(snapshot::SnapshotStatus::default())),
+            static_token: operator::StaticToken::from_env(),
         };
         // Per-org notifier: subscribes to the org's event hubs
         // in-process and materializes notifications by rule
@@ -774,7 +798,7 @@ impl AppState {
         let org_state =
             build_org_state(auth, &keypair, org_root, &scope, &storage, None, &blob_root).await?;
         let mut orgs = std::collections::HashMap::new();
-        orgs.insert(slug, org_state);
+        orgs.insert(slug, Arc::new(org_state));
         Ok(Self {
             keypair,
             orgs: Arc::new(std::sync::RwLock::new(orgs)),
@@ -786,6 +810,7 @@ impl AppState {
             write_gate: snapshot::WriteGate::new(),
             snapshot_cycle: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_status: Arc::new(std::sync::RwLock::new(snapshot::SnapshotStatus::default())),
+            static_token: operator::StaticToken::from_env(),
         })
     }
 
@@ -806,7 +831,7 @@ impl AppState {
         let org_state =
             build_org_state(auth, &keypair, org_root, &scope, &storage, None, &blob_root).await?;
         let mut orgs = std::collections::HashMap::new();
-        orgs.insert(slug, org_state);
+        orgs.insert(slug, Arc::new(org_state));
         Ok(Self {
             keypair,
             orgs: Arc::new(std::sync::RwLock::new(orgs)),
@@ -818,6 +843,7 @@ impl AppState {
             write_gate: snapshot::WriteGate::new(),
             snapshot_cycle: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_status: Arc::new(std::sync::RwLock::new(snapshot::SnapshotStatus::default())),
+            static_token: operator::StaticToken::from_env(),
         })
     }
 }
@@ -960,7 +986,7 @@ pub(crate) async fn build_org_state(
             org_root
                 .manifest()
                 .ok()
-                .map(|m| task_plugin::PluginChoice::Disabled(m.disabled_plugins.0.clone()))
+                .map(|m| task_plugin::PluginChoice::Disabled(m.disabled_plugins.0))
                 .as_ref(),
         );
 
@@ -1142,6 +1168,20 @@ pub(crate) async fn build_org_state(
                     // pull request (`wiki.source.editable`); the
                     // server holds the forge clients.
                     .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
+            // Who runs this org, from its membership rows: an owner or
+            // admin grants Editor (`wiki.edit.editor`) on the vox lane
+            // and the MCP lane alike, since both clone this backend.
+            // Without a home identity there are no rows, and only an
+            // Editor grants.
+            let backend = match home_identity {
+                Some(home) => {
+                    backend.with_org_roles(std::sync::Arc::new(crate::memberships::WikiRoles::new(
+                        Arc::clone(&home.memberships),
+                        org_root.slug(),
+                    )))
+                }
+                None => backend,
+            };
             // Each wiki root is a shelf like any other (`wiki:<slug>`):
             // the editor's sync / collab / graph / live-changes path
             // over the same files the `Pages` service writes. Attaching
@@ -1224,7 +1264,10 @@ pub(crate) async fn build_org_state(
                 .parent()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| org_root.path().to_path_buf());
-            let domains = wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok());
+            let domains = wiki_domains(
+                &orgs_dir,
+                std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
+            );
             let local = wiki_live::subscriptions_backend::LocalOrgs::new(
                 orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
                 domains,
@@ -1858,7 +1901,10 @@ pub(crate) async fn build_org_state(
             let root = orgs_dir.parent().unwrap_or(&orgs_dir).to_path_buf();
             links.with_homes(std::sync::Arc::new(node_homes::LocalHomes::new(
                 root,
-                wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok()),
+                wiki_domains(
+                    &orgs_dir,
+                    std::env::var("TASK_WIKI_DOMAINS").ok().as_deref(),
+                ),
                 org_root.slug(),
                 org_root.path().to_path_buf(),
             )))
@@ -2158,7 +2204,16 @@ pub(crate) async fn build_org_state(
                 sharing::GrantStore::open(&org_root.sharing_db(), org_root.slug()).await?,
             ),
             home: home_identity.cloned(),
-            subtree: Arc::new(sharing::ProjectTreeStub::new(projects.clone())),
+            // t[impl sharing.grant.subtree] — read live on every call:
+            // the preview and the grant lane resolve through this one
+            // adapter, with no snapshot taken at grant time.
+            subtree: Arc::new(
+                sharing::OwnerStore::new(projects.clone(), org_root.projects_dir())
+                    .with_tasks(tasks.clone())
+                    .with_milestones(milestones.clone())
+                    .with_workstreams(workstreams.clone())
+                    .with_files(files.clone()),
+            ),
             org_root: org_root.path().to_path_buf(),
         };
         sqlite_conns.push(sharing.store.conn().clone());
@@ -2979,12 +3034,9 @@ pub fn router(state: AppState) -> Router {
         .orgs
         .read()
         .ok()
-        .and_then(|guard| guard.values().next().cloned())
-        .map(|org| {
-            let blob_state = AttachmentRouteState {
-                service: org.attachments.clone(),
-            };
-            attachments::attachment_router().with_state(blob_state)
+        .and_then(|guard| guard.values().next().map(|org| org.attachments.clone()))
+        .map(|service| {
+            attachments::attachment_router().with_state(AttachmentRouteState { service })
         })
         .unwrap_or_default();
 
@@ -3478,7 +3530,7 @@ async fn per_org_vox_handler(
             format!("org `{slug}` not hosted"),
         ));
     };
-    serve_org_vox(org, state.write_gate.clone(), ws, &headers)
+    serve_org_vox(&org, state.write_gate, ws, &headers)
 }
 
 /// `/server/vox` — server-management WebSocket. Hosts the
@@ -3618,7 +3670,7 @@ async fn legacy_vox_handler(
             "no org hosted on this server",
         ));
     };
-    serve_org_vox(org, state.write_gate.clone(), ws, &headers)
+    serve_org_vox(&org, state.write_gate, ws, &headers)
 }
 
 /// Build the per-org [`LayerRouter`]: every service this org hosts,
@@ -3785,6 +3837,11 @@ fn build_org_permissions_gate(
 /// longer drift from each other (they used to be two hand-kept
 /// copies). `permits_cover_router` asserts it matches what
 /// [`org_layer_router`] actually mounts.
+///
+/// One entry per wire service NAME: same-named descriptors (the two
+/// `SyncService` lanes) fold into one stamp, since the well-known
+/// document is a map keyed by name — see
+/// `org_proto::schema_stamp::stamp_services`.
 #[must_use]
 pub fn schema_stamps() -> Vec<(&'static str, String)> {
     org_proto::schema_stamp::stamp_services(permits::mounted_descriptors())
@@ -3803,6 +3860,10 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
     // Unused only in a core-only build (every plugin compiled out).
     #[allow(unused_variables)]
     let on = |id: &str| org.plugins.contains(id);
+    // This connection's live access: the sets it observes rather than
+    // joined, shared by its `LiveSessions` lane and its `DocSync` (which
+    // refuses an observer's writes).
+    let live_access = LiveAccess::default();
 
     let mut router = LayerRouter::new()
         // Auth — wrapped with the server middleware that validates
@@ -4196,7 +4257,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             // The hub lives on the `WikiBackend`, so every committed
             // page write / ingest enqueue / review enqueue publishes
             // into it.
-            .merge(wiki_proto::service::events::stream_layer(wiki.clone()));
+            .merge(wiki_proto::service::events::stream_layer(wiki));
     }
 
     // Project / Goal / Milestone / Task readers (vault-backed).
@@ -4392,9 +4453,12 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             // Live sessions: a setlist played together, kept open here.
             .with(
                 live_proto::live_sessions_rpc_service_descriptor(),
-                live_proto::serve(live::LiveLane(org.live.clone())),
+                live_proto::serve(live::LiveLane::new(org.live.clone(), live_access.clone())),
             )
-            .merge(live_proto::stream_layer(live::LiveLane(org.live.clone())));
+            .merge(live_proto::stream_layer(live::LiveLane::new(
+                org.live.clone(),
+                live_access.clone(),
+            )));
     }
 
     // ── Mealplan plugin — cookbook / plan / pantry / shopping /
@@ -4516,7 +4580,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // the plain files on disk authoritative for everyone else.
         .with(
             crdt::sync::doc_sync_service_descriptor(),
-            crdt::sync::DocSyncDispatcher::new(org_doc_sync(org)),
+            crdt::sync::DocSyncDispatcher::new(org_doc_sync(org, &live_access)),
         )
         // The same documents for the org's other nodes (`offline.peers`):
         // listed and exchanged by path, gated on `docs/replica` — the
@@ -4639,17 +4703,25 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 /// The org's one `DocSync` backend: live-session docs to the live host,
 /// vault files to the vault's registry.
 #[cfg(feature = "plugin-fasttrackstudio")]
-fn org_doc_sync(org: &OrgAppState) -> live::DocSyncRouter {
+fn org_doc_sync(org: &OrgAppState, live_access: &LiveAccess) -> live::DocSyncRouter {
     live::DocSyncRouter {
         live: org.live.clone(),
         vault: vault_docs(org),
+        access: live_access.clone(),
     }
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
-fn org_doc_sync(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
+fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> doc_guard::GuardedVaultDocs {
     vault_docs(org)
 }
+
+/// One connection's live access (`live::LiveAccess`): the sets it only
+/// observes. Nothing to hold without the live sessions' plugin.
+#[cfg(feature = "plugin-fasttrackstudio")]
+type LiveAccess = live::LiveAccess;
+#[cfg(not(feature = "plugin-fasttrackstudio"))]
+type LiveAccess = ();
 
 /// Whether `ffprobe` runs here — asked once per process, not once per org.
 /// The answer is the machine's (what is on `PATH`), and spawning a
@@ -4767,7 +4839,7 @@ pub fn attach_peering(
 /// (`files_sync::serve_peer`). Only what gets wrapped differs: an org
 /// router here, one lane there.
 pub async fn serve_org_iroh(
-    org: OrgAppState,
+    org: Arc<OrgAppState>,
     gate: snapshot::WriteGate,
     endpoint: &architect::iroh_link::iroh::Endpoint,
 ) {
@@ -4786,12 +4858,12 @@ pub async fn serve_org_iroh(
 }
 
 fn serve_org_vox(
-    org: OrgAppState,
+    org: &OrgAppState,
     gate: snapshot::WriteGate,
     ws: WebSocketUpgrade,
     headers: &axum::http::HeaderMap,
 ) -> axum::response::Response {
-    let router = org_router_guarded(&org, gate, upgrade_bearer(headers));
+    let router = org_router_guarded(org, gate, upgrade_bearer(headers));
     ws.protocols([VOX_SUBPROTOCOL])
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
         .into_response()
@@ -4946,7 +5018,7 @@ pub const FIRST_PARTY_DOMAIN: &str = "fasttrackstudio.app";
 #[must_use]
 pub fn wiki_domains(
     orgs_dir: &std::path::Path,
-    configured: Option<String>,
+    configured: Option<&str>,
 ) -> std::collections::HashMap<String, String> {
     let mut domains = std::collections::HashMap::new();
     if let Ok(entries) = std::fs::read_dir(orgs_dir) {
@@ -4965,7 +5037,7 @@ pub fn wiki_domains(
             (*slug).to_owned(),
         );
     }
-    for pair in configured.as_deref().unwrap_or_default().split(',') {
+    for pair in configured.unwrap_or_default().split(',') {
         if let Some((domain, slug)) = pair.split_once('=') {
             let (domain, slug) = (domain.trim(), slug.trim());
             if !domain.is_empty() && !slug.is_empty() {
@@ -4985,7 +5057,9 @@ mod wiki_domain_tests {
         std::fs::create_dir_all(dir.path().join("codywright")).unwrap();
         let d = super::wiki_domains(
             dir.path(),
-            Some(" fasttrackstudio.app=fasttrackstudios, codywright.fasttrackstudio.app = codywright ,bad".into()),
+            Some(
+                " fasttrackstudio.app=fasttrackstudios, codywright.fasttrackstudio.app = codywright ,bad",
+            ),
         );
         assert_eq!(d["fasttrackstudios"], "fasttrackstudios");
         assert_eq!(d["fasttrackstudio.app"], "fasttrackstudios");

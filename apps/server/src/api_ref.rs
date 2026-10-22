@@ -18,7 +18,6 @@
 //! per-service schema stamp. No org data is touched.
 
 use crate::permits;
-use org_proto::schema_stamp::service_stamp;
 use task_plugin::PluginSet;
 
 /// One method of a mounted service, joined with its permit.
@@ -83,6 +82,18 @@ pub fn reference() -> Vec<ApiService> {
 /// build-static; only the flag is org-state.
 #[must_use]
 pub fn reference_for(set: &PluginSet) -> Vec<ApiService> {
+    // Stamps are per wire service NAME, not per descriptor: two
+    // descriptors can share one (`SyncService`, see
+    // `schema_stamp::stamp_services`), and both entries then carry the
+    // name's stamp — the value the well-known document serves for it.
+    let stamps = crate::schema_stamps();
+    let stamp_of = |name: &str| {
+        stamps
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default()
+    };
     permits::mounts()
         .into_iter()
         .map(|mount| {
@@ -109,7 +120,7 @@ pub fn reference_for(set: &PluginSet) -> Vec<ApiService> {
             ApiService {
                 name: d.service_name,
                 alias: mount.permits.as_ref().map(|t| t.service),
-                stamp: service_stamp(d),
+                stamp: stamp_of(d.service_name),
                 stream: !methods.is_empty() && methods.iter().all(|m| m.stream),
                 plugin: mount.plugin,
                 mounted: set.contains(mount.plugin),
@@ -176,17 +187,29 @@ pub fn reference_json_for(set: &PluginSet) -> serde_json::Value {
 mod tests {
     use super::*;
 
-    /// The reference is the registry: same count, same names, same
-    /// stamps as `schema_stamps()`.
+    /// The reference is the registry: one entry per mount, every
+    /// registry name present, and each entry's stamp the one
+    /// `schema_stamps()` publishes for its name (two mounts may share a
+    /// wire name; they share its stamp too).
     #[test]
     fn reference_matches_the_registry() {
         let services = reference();
         let stamps = crate::schema_stamps();
-        assert_eq!(services.len(), stamps.len());
-        for (s, (name, stamp)) in services.iter().zip(stamps.iter()) {
-            assert_eq!(s.name, *name);
-            assert_eq!(&s.stamp, stamp);
-            assert!(!s.methods.is_empty(), "{name} has no methods");
+        assert_eq!(services.len(), crate::permits::mounts().len());
+        for s in &services {
+            let stamp = stamps
+                .iter()
+                .find(|(n, _)| *n == s.name)
+                .map(|(_, st)| st)
+                .unwrap_or_else(|| panic!("{} has no schema stamp", s.name));
+            assert_eq!(&s.stamp, stamp, "{}", s.name);
+            assert!(!s.methods.is_empty(), "{} has no methods", s.name);
+        }
+        for (name, _) in &stamps {
+            assert!(
+                services.iter().any(|s| s.name == *name),
+                "{name} stamped but not in the reference"
+            );
         }
     }
 

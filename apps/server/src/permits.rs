@@ -825,9 +825,10 @@ table!(COLLECTION, "collection", "collections/**", [
 ]);
 // Live sessions: a setlist played together. Joining admits the set's docs
 // for sync (DocSync gates the edits themselves) and writes nothing of the
-// org's; the clock and the epochs only read.
+// org's; observing is joining read-only (the connection's DocSync then
+// refuses its edits); the clock and the epochs only read.
 #[cfg(feature = "plugin-fasttrackstudio")]
-table!(LIVE, "live-sessions", "live/**", [rd "join", rd "now"]);
+table!(LIVE, "live-sessions", "live/**", [rd "join", rd "now", rd "observe"]);
 #[cfg(feature = "plugin-fasttrackstudio")]
 table!(LIVE_STREAM, "live-sessions-stream", "live/**", [rd "epochs"]);
 table!(RESOURCES, "resources", "resources/**", [

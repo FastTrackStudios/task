@@ -115,9 +115,7 @@ impl FilesBackend {
             .find(|r| r.local_tree().is_some_and(|tree| tree == canonical))
         {
             Some(known) => known,
-            None => {
-                self.register_root(canonical.clone(), VAULT_ROOT_NAME.into(), RootFlavor::Media)?
-            }
+            None => self.register_root(&canonical, VAULT_ROOT_NAME.into(), RootFlavor::Media)?,
         };
         let root_id = RootId::new(root.id);
         vault::bind_sink(
@@ -167,7 +165,7 @@ impl FilesBackend {
             {
                 return Ok(RootId::new(known.id));
             }
-            let root = self.register_root(canonical.clone(), name, RootFlavor::Media)?;
+            let root = self.register_root(&canonical, name, RootFlavor::Media)?;
             tracing::info!(root_id = %root.id, tree = %canonical.display(), "files: org tree adopted as a root");
             Ok(RootId::new(root.id))
         })
@@ -303,7 +301,7 @@ impl FilesBackend {
             .chain(removed)
             .map(|p| p.as_str().to_owned())
             .collect();
-        if let Err(err) = self.hint_activity_inner(root.id, hinted) {
+        if let Err(err) = self.hint_activity_inner(root.id, &hinted) {
             tracing::warn!(root_id = %root.id, %err, "files: vault write not hinted to the cadence");
         }
     }

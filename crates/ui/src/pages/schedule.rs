@@ -142,6 +142,10 @@ pub fn ScheduleView() -> Element {
     // Real events — loaded from + persisted to the CalendarEvents
     // service.
     let mut state = use_signal(CalendarState::default);
+    // The stored events as loaded, by id — so a calendar edit writes
+    // back what the calendar view doesn't model (location, links,
+    // external_ref, tombstone) instead of dropping it.
+    let mut stored = use_signal(HashMap::<String, CalEvent>::new);
     let loaded_events = use_resource(move || async move {
         match slug() {
             Some(s) => crate::feeds::list_events(&s).await,
@@ -151,12 +155,15 @@ pub fn ScheduleView() -> Element {
     use_effect(move || {
         if let Some(Ok(evs)) = &*loaded_events.read() {
             let mut st = CalendarState::default();
-            for e in evs {
+            // A tombstoned event (removed upstream, kept on disk) is
+            // not on the calendar.
+            for e in evs.iter().filter(|e| e.tombstone.is_none()) {
                 if let Some(ce) = from_proto(e) {
                     st.events.insert(ce.id, ce);
                 }
             }
             state.set(st);
+            stored.set(evs.iter().map(|e| (e.id.clone(), e.clone())).collect());
         }
     });
 
@@ -174,7 +181,8 @@ pub fn ScheduleView() -> Element {
             _ => {
                 if let Some(id) = affected_id(&mu) {
                     if let Some(ev) = state.peek().events.get(&id).cloned() {
-                        let ce = to_proto(&ev);
+                        let ce = to_proto(&ev, stored.peek().get(&ev.id.to_string()));
+                        stored.write().insert(ce.id.clone(), ce.clone());
                         spawn(async move {
                             let _ = crate::feeds::upsert_event(&slug, ce).await;
                         });
@@ -826,7 +834,9 @@ fn affected_id(mu: &CalendarMutation) -> Option<EventId> {
     }
 }
 
-fn to_proto(e: &CalendarEvent) -> CalEvent {
+/// The stored form of a calendar-view event. `stored` is the event as
+/// last loaded or saved; whatever the view doesn't model rides along.
+fn to_proto(e: &CalendarEvent, stored: Option<&CalEvent>) -> CalEvent {
     CalEvent {
         id: e.id.to_string(),
         title: e.title.clone(),
@@ -836,6 +846,10 @@ fn to_proto(e: &CalendarEvent) -> CalEvent {
         color: color_name(e.color).to_string(),
         description: e.description.clone(),
         recurrence: e.recurrence.clone(),
+        location: stored.and_then(|s| s.location.clone()),
+        links: stored.map(|s| s.links.clone()).unwrap_or_default(),
+        external_ref: stored.and_then(|s| s.external_ref.clone()),
+        tombstone: stored.and_then(|s| s.tombstone.clone()),
     }
 }
 

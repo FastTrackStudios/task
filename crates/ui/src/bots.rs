@@ -197,6 +197,9 @@ fn BotRow(bot: BotInfo, entry: ServerEntry, on_revoked: EventHandler<()>) -> Ele
 fn NewBot(entry: ServerEntry, on_made: EventHandler<(String, String)>) -> Element {
     let mut name = use_signal(String::new);
     let mut library = use_signal(|| false);
+    // A personal assistant acts for you: what it makes reads "from
+    // Atlas (for you)" (`attribution.on-behalf-of`). Off: a team bot.
+    let mut personal = use_signal(|| false);
     let mut picked = use_signal(Vec::<String>::new);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
@@ -225,6 +228,11 @@ fn NewBot(entry: ServerEntry, on_made: EventHandler<(String, String)>) -> Elemen
                 label: "Notes and wikis only".to_owned(),
                 on: library(),
                 on_toggle: move |on| library.set(on),
+            }
+            SheetToggle {
+                label: "My assistant — acts for me".to_owned(),
+                on: personal(),
+                on_toggle: move |on| personal.set(on),
             }
         }
         if !orgs.is_empty() {
@@ -258,6 +266,7 @@ fn NewBot(entry: ServerEntry, on_made: EventHandler<(String, String)>) -> Elemen
                 let req_name = name.peek().trim().to_owned();
                 let orgs = picked.peek().clone();
                 let tools = if library() { BotTools::Library } else { BotTools::All };
+                let personal = personal();
                 busy.set(true);
                 error.set(None);
                 spawn(async move {
@@ -271,6 +280,7 @@ fn NewBot(entry: ServerEntry, on_made: EventHandler<(String, String)>) -> Elemen
                                 orgs,
                                 no_orgs: false,
                                 tools,
+                                personal,
                             })
                             .await
                             .map_err(|e| format!("{e:?}"))

@@ -1608,6 +1608,71 @@ mod tests {
         assert_eq!(edits2.editors("second").unwrap().editors, vec!["sam"]);
     }
 
+    /// The org's roles as a fixed list of admins.
+    struct Admins(Vec<&'static str>);
+
+    impl crate::backend::OrgRoles for Admins {
+        fn is_admin(&self, principal: &str) -> bool {
+            self.0.contains(&principal)
+        }
+    }
+
+    /// A caller as the gate and MCP lanes supply one: a principal and
+    /// nothing else, so admin comes from the org's roles or not at all.
+    struct Only(Mutex<Option<String>>);
+
+    impl Caller for Only {
+        fn principal(&self) -> Option<String> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    /// t[verify wiki.edit.editor] — an org admin who is not an Editor
+    /// grants Editor through the org's roles alone, on a wiki with
+    /// Editors and on one with none; a plain member is still refused,
+    /// and so is an in-process call, whatever the roles say.
+    #[test]
+    fn an_org_admin_by_role_grants_editor_and_a_member_does_not() {
+        let w = world();
+        let caller = Arc::new(Only(Mutex::new(Some("sam".into()))));
+        let roles: Arc<dyn crate::backend::OrgRoles> = Arc::new(Admins(vec!["olga"]));
+        let mut roots = HashMap::new();
+        roots.insert("theory".to_string(), w.root.clone());
+        let second = w.root.parent().unwrap().join("second");
+        std::fs::create_dir_all(&second).unwrap();
+        crate::config::save(&second, &WikiConfig::implicit("second")).unwrap();
+        roots.insert("second".to_string(), second);
+        let wiki = WikiBackend::with_roots(roots)
+            .with_org_roles(roles)
+            .with_caller(caller.clone());
+        let edits = EditsBackend::new(wiki, Arc::new(MemoryTracker::default()));
+        let as_ = |who: Option<&str>| *caller.0.lock().unwrap() = who.map(str::to_owned);
+
+        as_(Some("sam"));
+        let err = edits.grant_editor("theory", "sam").unwrap_err();
+        assert!(
+            matches!(err, WikiError::Refused(_)),
+            "a member granted: {err:?}"
+        );
+        let err = edits.grant_editor("second", "sam").unwrap_err();
+        assert!(
+            matches!(err, WikiError::Refused(_)),
+            "a member bootstrapped: {err:?}"
+        );
+
+        as_(Some("olga"));
+        edits.grant_editor("theory", "sam").unwrap();
+        assert_eq!(
+            edits.editors("theory").unwrap().editors,
+            vec!["alice", "sam"]
+        );
+        edits.grant_editor("second", "sam").unwrap();
+        assert_eq!(edits.editors("second").unwrap().editors, vec!["sam"]);
+
+        as_(None);
+        assert!(edits.grant_editor("theory", "nobody").is_err());
+    }
+
     /// t[verify wiki.edit.editor] — once a wiki has Editors, a direct
     /// write from anyone else is refused; the server's own in-process
     /// writes still land.

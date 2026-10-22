@@ -44,6 +44,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
+use vault::property_schema::{
+    FALLBACK_KIND, KIND_KEY, PropertySchemaRegistry, SCHEMA_PAGE_KIND, schema_from_frontmatter,
+};
 
 use crate::AppState;
 
@@ -64,6 +67,13 @@ const LATEST_PROTOCOL: &str = "2025-06-18";
 /// scarce resource — a 400-task vault must not land in one message.
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
+/// `query_base` reads at most this many notes per call (the row set
+/// and the link universe); past it the result says `capped`.
+const QUERY_BASE_MAX_NOTES: usize = 5_000;
+/// …and at most this many bytes of them, by manifest size.
+const QUERY_BASE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// The longest inline base `query_base` accepts.
+const QUERY_BASE_MAX_YAML: usize = 64 * 1024;
 
 /// Per-task body cap in `list_untriaged_tasks`. The body is where a
 /// bare title's missing context usually hides, so it's worth sending
@@ -101,16 +111,30 @@ mod code {
     pub const INTERNAL: i32 = -32603;
 }
 
+/// A JSON object from owned fields, moved in. `json!` serializes each
+/// interpolated value from a reference, so `json!({ "result": result })`
+/// deep-copies `result`; a tool's whole answer was copied once more per
+/// response that way.
+fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
+    Value::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
 fn rpc_result(id: Value, result: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+    object([("jsonrpc", json!("2.0")), ("id", id), ("result", result)])
 }
 
 fn rpc_error(id: Value, code: i32, message: impl Into<String>) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": code, "message": message.into() },
-    })
+    object([
+        ("jsonrpc", json!("2.0")),
+        ("id", id),
+        (
+            "error",
+            object([
+                ("code", json!(code)),
+                ("message", Value::String(message.into())),
+            ]),
+        ),
+    ])
 }
 
 /// A tool's answer. MCP models tool failure as a *successful*
@@ -155,12 +179,12 @@ pub struct ToolDef {
 
 /// Shorthand for a JSON Schema object.
 fn obj(props: Value, required: &[&str]) -> Value {
-    json!({
-        "type": "object",
-        "properties": props,
-        "required": required,
-        "additionalProperties": false,
-    })
+    object([
+        ("type", json!("object")),
+        ("properties", props),
+        ("required", json!(required)),
+        ("additionalProperties", json!(false)),
+    ])
 }
 
 fn s_(desc: &str) -> Value {
@@ -180,13 +204,40 @@ fn a_(desc: &str) -> Value {
     json!({ "type": "array", "items": { "type": "string" }, "description": desc })
 }
 
+/// An event's typed links to vault notes.
+#[cfg(feature = "plugin-scheduling")]
+fn links_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "Typed links to vault notes. Each relation becomes a frontmatter \
+                        property on the event (for: [[Gigs/caa-2026]]).",
+        "items": {
+            "type": "object",
+            "properties": {
+                "relation": s_("Lowercase slug, e.g. 'for', 'rehearsal-for', 'venue'."),
+                "target": s_("The note: 'Gigs/caa-2026' or '[[Gigs/caa-2026]]'."),
+            },
+            "required": ["relation", "target"],
+            "additionalProperties": false,
+        },
+    })
+}
+
 /// Every tool this server exposes, in the order the agent sees them.
 ///
 /// Descriptions are written *for the model*: they say when to reach
 /// for the tool, not merely what it does, because that's what drives
 /// correct selection.
+///
+/// Built once per process (zero-copy audit S4): `tools/list` and every
+/// `tools/call`'s plugin gate used to rebuild the whole list.
 #[must_use]
-pub fn tool_catalog() -> Vec<ToolDef> {
+pub fn tool_catalog() -> &'static [ToolDef] {
+    static CATALOG: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(build_tool_catalog)
+}
+
+fn build_tool_catalog() -> Vec<ToolDef> {
     let mut v = vec![
         ToolDef {
             name: "task_context",
@@ -210,7 +261,9 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "due_on_or_before": s_("ISO date (YYYY-MM-DD). Keeps tasks due or scheduled on/before it."),
                         "project": s_("Project UUID (from list_projects) — keeps tasks belonging to that project."),
                         "query": s_("Case-insensitive substring match on the title."),
-                        "created_by": s_("Keep tasks made by this account — a created_by ref from a listed task ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, or 'none' for tasks with no recorded creator."),
+                        "created_by": s_("Keep tasks made by this account — a created_by ref from a listed task ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, 'me', or 'none' for tasks with no recorded creator."),
+                        "on_behalf_of": s_("Keep tasks a personal assistant bot made on behalf of this person — 'me', a 'user:<uuid>' ref, a bare uuid, or 'none'."),
+                        "assignee": s_("Keep tasks assigned to this principal — 'me', 'user:<uuid>' (a person or a bot account), 'agent:NAME', or 'none' for unassigned tasks."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -314,6 +367,13 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                     json!({
                         "from": s_("ISO date (YYYY-MM-DD). Keeps events starting on/after it."),
                         "to": s_("ISO date (YYYY-MM-DD). Keeps events starting on/before it."),
+                        "external_ref": s_("Only the event an integration made with this ref, \
+                                            'system:id' (e.g. 'pco:plan_time:123'). Finds it \
+                                            even when tombstoned — re-sync looks here first."),
+                        "linked_to": s_("Only events linking to this vault note \
+                                         (e.g. 'Gigs/caa-2026' or '[[Gigs/caa-2026]]')."),
+                        "include_tombstoned": b_("Also list events marked removed upstream \
+                                                  (hidden by default)."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -325,7 +385,11 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             plugin: "scheduling",
             description: "Put something on the calendar. Times are RFC-3339 with offset \
                           (e.g. '2026-07-25T14:00:00-05:00'); for an all-day event pass \
-                          plain dates and all_day: true.",
+                          plain dates and all_day: true. `links` ties the event to vault \
+                          notes (relation 'for' → 'Gigs/caa-2026'), so the note's backlinks \
+                          and .base views find it. An integration passes `external_ref`; \
+                          creating again with the same ref returns the existing event \
+                          (existing: true) instead of a duplicate.",
             schema: || {
                 obj(
                     json!({
@@ -334,8 +398,35 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "end": s_("RFC-3339 end (exclusive), or YYYY-MM-DD when all_day."),
                         "all_day": b_("True for an all-day event."),
                         "description": s_("Optional notes on the event."),
+                        "location": s_("Optional place, free text."),
+                        "links": links_schema(),
+                        "external_ref": s_("Optional upstream id, 'system:id' \
+                                            (e.g. 'pco:plan_time:123')."),
                     }),
                     &["title", "start", "end"],
+                )
+            },
+        },
+        ToolDef {
+            name: "update_event",
+            plugin: "scheduling",
+            description: "Change an event's title, description, location or links without \
+                          moving it (use reschedule_event to move it). Only the fields you pass \
+                          change; '' clears description/location; `links` replaces the whole \
+                          set. `tombstone: true` marks an event an integration found removed \
+                          upstream — kept on disk with its links, hidden from list_events; \
+                          `false` revives it.",
+            schema: || {
+                obj(
+                    json!({
+                        "id": s_("Event id from list_events."),
+                        "title": s_("New title."),
+                        "description": s_("New description ('' clears it)."),
+                        "location": s_("New location ('' clears it)."),
+                        "links": links_schema(),
+                        "tombstone": b_("true = removed upstream (hide, keep); false = live."),
+                    }),
+                    &["id"],
                 )
             },
         },
@@ -394,7 +485,8 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 obj(
                     json!({
                         "status": s_("Show every item with this status instead of today's review queue, e.g. 'suggested', 'open'."),
-                        "created_by": s_("Keep items captured by this account — a created_by ref from a listed item ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, or 'none'. Searches every item, not only today's queue, unless status narrows it."),
+                        "created_by": s_("Keep items captured by this account — a created_by ref from a listed item ('bot:<uuid>', 'user:<uuid>'), a bare account uuid, 'me', or 'none'. Searches every item, not only today's queue, unless status narrows it."),
+                        "on_behalf_of": s_("Keep items a personal assistant bot captured on behalf of this person — 'me', a 'user:<uuid>' ref, a bare uuid, or 'none'. Searches every item, like created_by."),
                         "limit": i_("Max rows (default 50, max 200)."),
                     }),
                     &[],
@@ -443,11 +535,33 @@ pub fn tool_catalog() -> Vec<ToolDef> {
         ToolDef {
             name: "read_note",
             plugin: "core",
-            description: "Read one note's markdown by vault-relative path (from search_vault).",
+            description: "Read one note's markdown by vault-relative path (from search_vault). \
+                          Also returns its `revision`, which update_properties takes as \
+                          `expected_revision`.",
             schema: || {
                 obj(
                     json!({ "path": s_("Vault-relative path, e.g. 'Records/notes/standup.md'.") }),
                     &["path"],
+                )
+            },
+        },
+        ToolDef {
+            name: "query_base",
+            plugin: "core",
+            description: "Run an Obsidian Bases query over the vault: a `.base` file by path, or an \
+                          inline base YAML. Returns each view's rows (filtered, sorted, grouped) \
+                          with their column values and every formula's value. Filters and \
+                          formulas may use file.hasLink(), .exists(), file.links and link-follow \
+                          (`note.song.key` reads the linked note's `key`).",
+            schema: || {
+                obj(
+                    json!({
+                        "path": s_("Vault-relative path of a .base file, e.g. 'Gigs/Gigs.base'. Give this or `yaml`."),
+                        "yaml": s_("An inline base (the YAML a .base file holds). Give this or `path`."),
+                        "view": s_("Run only this view (case-insensitive name). Omit to run every view."),
+                        "limit": i_("Max rows per view (default 50, max 200)."),
+                    }),
+                    &[],
                 )
             },
         },
@@ -479,6 +593,53 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "content": s_("The note's full markdown content."),
                     }),
                     &["path", "content"],
+                )
+            },
+        },
+        ToolDef {
+            name: "update_properties",
+            plugin: "core",
+            description: "Set and/or remove a note's frontmatter properties without touching its \
+                          body. Prefer this over write_note for changing status, dates, tags or \
+                          any other property. Values are checked against the property schema \
+                          for the note's `kind:` (see read_property_schema) and normalized; an \
+                          invalid value refuses the whole call and nothing is written. Pass \
+                          `expected_revision` (from read_note) to refuse the write if the note \
+                          changed since you read it.",
+            schema: || {
+                obj(
+                    json!({
+                        "path": s_("Vault-relative path of an existing note."),
+                        "set": {
+                            "type": "object",
+                            "description": "Properties to set: key → value (string, number, \
+                                            boolean, list or object). Existing keys keep their \
+                                            position; new keys are appended.",
+                        },
+                        "remove": a_("Property keys to delete. An absent key is not an error."),
+                        "expected_revision": s_("The `revision` read_note returned. If the note \
+                                                 has changed since, nothing is written and the \
+                                                 call fails as stale."),
+                    }),
+                    &["path"],
+                )
+            },
+        },
+        ToolDef {
+            name: "read_property_schema",
+            plugin: "core",
+            description: "The typed property schemas notes are validated against: the built-in \
+                          kinds (task, project, area, person, daily, and `node`, which every \
+                          page shares) plus the org's own, declared by `kind: schema` pages in \
+                          `Schemas/`. A note's `kind:` frontmatter picks its schema. Read this \
+                          before update_properties to know which values a property accepts.",
+            schema: || {
+                obj(
+                    json!({
+                        "kind": s_("One kind to return in full, inherited properties included. \
+                                    Omit to list every kind with its own properties."),
+                    }),
+                    &[],
                 )
             },
         },
@@ -1016,6 +1177,8 @@ pub fn tool_catalog() -> Vec<ToolDef> {
     v.extend(patch_tool_catalog());
     v.extend(sample_tool_catalog());
     v.extend(lighting_tool_catalog());
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    v.extend(live_tool_catalog());
     #[cfg(feature = "plugin-wiki")]
     v.extend(wiki_tool_catalog());
     v
@@ -1348,6 +1511,94 @@ fn lighting_tool_catalog() -> Vec<ToolDef> {
     ]
 }
 
+/// The live-set tools (spec §7 S3): an agent in a live set, without
+/// speaking Loro. `live_observe` lists a set's songs with each song
+/// doc's ref and version, `doc_read` reads one as JSON, `doc_apply`
+/// edits it live — applied at once (the Captain's §11 Q2), checked
+/// against the doc's shape, attributed to the caller in the CRDT
+/// history, undoable. The rules are [`crate::live_docs`]'s.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn live_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "live_observe",
+            plugin: "fasttrackstudio",
+            description: "Watch a live set (a setlist the band plays together in Task): its \
+                          songs in order, each with the `doc_ref` of its shared doc and that \
+                          doc's current `version`, plus whether you may edit (`read_only`). \
+                          Call this FIRST — doc_read and doc_apply take a `doc_ref` from here \
+                          (`live:<setlist>/<song>`). Opens the set if nobody is in it.",
+            schema: || {
+                obj(
+                    json!({
+                        "setlist": s_("The setlist's id: a song list or set list of this org."),
+                    }),
+                    &["setlist"],
+                )
+            },
+        },
+        ToolDef {
+            name: "doc_read",
+            plugin: "fasttrackstudio",
+            description: "Read a live song's doc as JSON, with its `version` and the latest \
+                          applies (who made each, and its apply id for undo). Read before \
+                          writing: pass the `version` you read as doc_apply's \
+                          `expected_version`, so an edit made over a newer doc is refused \
+                          rather than applied blind.",
+            schema: || {
+                obj(
+                    json!({
+                        "doc_ref": s_("live:<setlist>/<song>, from live_observe (a song \
+                                       doc's bare id works too)."),
+                    }),
+                    &["doc_ref"],
+                )
+            },
+        },
+        ToolDef {
+            name: "doc_apply",
+            plugin: "fasttrackstudio",
+            description: "Edit a live song's doc. APPLIES AT ONCE: every peer in the set sees \
+                          it live, attributed to you. `ops` is a list, checked as a batch \
+                          against the doc's current shape (one bad op refuses all, nothing \
+                          changes): \
+                          {\"op\":\"set\",\"path\":[\"song\",\"tempo\"],\"value\":78} sets a field \
+                          (a field keeps its kind: set it to null first to change it); \
+                          {\"op\":\"insert\",\"path\":[\"song\",\"sections\"],\"index\":1,\"value\":\"bridge\"} \
+                          inserts into a list (no index: append); \
+                          {\"op\":\"delete\",\"path\":[\"song\",\"sections\",2]} deletes a field \
+                          or item; {\"op\":\"splice\",\"path\":[\"song\",\"lyrics\"],\"index\":0,\
+                          \"delete\":5,\"insert\":\"Grace\"} edits a text; \
+                          {\"op\":\"undo\",\"apply\":\"<id>\"} (alone) reverts an earlier apply, \
+                          newest first. Pass `expected_version` from doc_read: a doc that \
+                          moved on since is refused as stale. `mode: \"propose\"` checks and \
+                          previews without applying. Observers (read-only keys) are refused.",
+            schema: || {
+                obj(
+                    json!({
+                        "doc_ref": s_("live:<setlist>/<song>, from live_observe."),
+                        "ops": {
+                            "type": "array",
+                            "items": { "type": "object" },
+                            "description": "The ops, in order (set, insert, delete, splice; \
+                                            or one undo).",
+                        },
+                        "expected_version": s_("The `version` you read. Omit to apply \
+                                                whatever the doc is now."),
+                        "mode": {
+                            "type": "string",
+                            "enum": ["apply", "propose"],
+                            "description": "apply (the default) edits live; propose only \
+                                            checks and shows what the doc would become.",
+                        },
+                    }),
+                    &["doc_ref", "ops"],
+                )
+            },
+        },
+    ]
+}
+
 /// The wiki tools. A wiki is one *subject* — a curated set of markdown
 /// pages with frontmatter, governed by two documents at its root:
 /// `purpose.md` (why it exists, who reads it, what questions it should
@@ -1609,16 +1860,30 @@ fn wiki_tool_catalog() -> Vec<ToolDef> {
             name: "subscribe_wiki",
             plugin: "wiki",
             description: "Subscribe the org's vault (or one of its wikis) to a source by its \
-                          qualified id `domain/slug`, e.g. 'fasttrackstudio.app/bible'. Only \
-                          public or referenced-unlisted sources admit outsiders; a private \
-                          one is refused. Subscribing twice is an error — check \
+                          qualified id `domain/slug`, e.g. 'fasttrackstudio.app/bible'. \
+                          `kind` says which tier the source is on: a wiki (default), a \
+                          read-only resource such as scripture, an asset shelf such as \
+                          another org's song library ('acme.test/songs', kind 'assets'), \
+                          or a project (its slug may be a path, 'acme.test/album/track-two'). \
+                          Once held, `[[domain/slug::Page]]` references resolve into that \
+                          kind. Public and referenced-unlisted sources admit outsiders; \
+                          shelves and projects are private unless the owner granted this \
+                          org, and a private source is refused. Subscribing twice is an error — check \
                           list_wiki_subscriptions first.",
             schema: || {
                 obj(
                     json!({
                         "qualified_id": s_("`domain/slug` of the source."),
-                        "resource": b_("Subscribe as a read-only resource rather than an \
-                                        editable wiki copy (default false)."),
+                        "kind": {
+                            "type": "string",
+                            "enum": SUBSCRIBE_KINDS,
+                            "description": "The source's tier: `wiki` (default), \
+                                            `resource`, `assets` (an asset shelf, its slug \
+                                            is the shelf kind such as `songs`) or \
+                                            `projects`.",
+                        },
+                        "resource": b_("Legacy alias for `kind: \"resource\"` (default \
+                                        false). Prefer `kind`."),
                         "wiki": s_("Optional wiki slug: subscribe that wiki instead of the \
                                     org vault."),
                     }),
@@ -1653,7 +1918,7 @@ fn tools_list_payload(plugins: &task_plugin::PluginSet) -> Value {
 ///   model reads — the tool exists in the build, this org turned it off);
 /// - enabled → `Ok(())`.
 fn plugin_gate(name: &str, plugins: &task_plugin::PluginSet) -> Result<(), Option<String>> {
-    let Some(def) = tool_catalog().into_iter().find(|t| t.name == name) else {
+    let Some(def) = tool_catalog().iter().find(|t| t.name == name) else {
         return Err(None);
     };
     if plugins.contains(def.plugin) {
@@ -1691,7 +1956,8 @@ projects, priority, and dates the same way the app's quick-add does.\n\
 `capture_inbox`, not in a task. Captures arrive as suggestions the user accepts with one \
 tap, so err on the side of capturing.\n\
 - Rescheduling means `list_events` for the window, then one `reschedule_event` per move. \
-Say what you're about to move before you move it.\n\
+Say what you're about to move before you move it. Renaming or relinking an event is \
+`update_event` — it never moves it.\n\
 - Read before you write: `search_vault` then `read_note`. The user's notes are usually \
 better context than your assumptions.\n\
 - Taking on a task yourself? `claim_task` it first — claims are atomic, so parallel \
@@ -1726,9 +1992,9 @@ don't need a confirmation round-trip.",
 pub async fn mcp_account_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
-    mcp_dispatch(state, None, headers, body).await
+    mcp_dispatch(state, None, headers, &body).await
 }
 
 /// `POST /org/{slug}/mcp` — the org-scoped lane, unchanged.
@@ -1736,9 +2002,68 @@ pub async fn mcp_handler(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     headers: HeaderMap,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
-    mcp_dispatch(state, Some(slug), headers, body).await
+    mcp_dispatch(state, Some(slug), headers, &body).await
+}
+
+/// One JSON-RPC request, its parts moved out of the parsed body rather
+/// than copied (zero-copy audit S2): the `id` and `params` are the very
+/// values the parser built.
+#[derive(Debug, PartialEq)]
+struct RpcRequest {
+    /// `Null` when absent — a notification.
+    id: Value,
+    /// `None` when `method` is missing or not a string; the request is
+    /// then refused with `id` still echoed.
+    method: Option<String>,
+    /// `{}` when absent.
+    params: Value,
+}
+
+/// Parse a request body. `Err` is the error response to send: a body
+/// that isn't JSON, or a batch (the current MCP revision dropped
+/// JSON-RPC batching).
+fn parse_request(body: &[u8]) -> Result<RpcRequest, Value> {
+    let request: Value = serde_json::from_slice(body)
+        .map_err(|e| rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}")))?;
+    let mut fields = match request {
+        Value::Object(fields) => fields,
+        Value::Array(_) => {
+            return Err(rpc_error(
+                Value::Null,
+                code::INVALID_REQUEST,
+                "batched requests are not supported",
+            ));
+        }
+        // A bare scalar has no id and no method; it is refused below
+        // as a request missing its `method`.
+        _ => serde_json::Map::new(),
+    };
+    let method = match fields.remove("method") {
+        Some(Value::String(m)) => Some(m),
+        _ => None,
+    };
+    Ok(RpcRequest {
+        id: fields.remove("id").unwrap_or(Value::Null),
+        method,
+        params: fields.remove("params").unwrap_or_else(|| json!({})),
+    })
+}
+
+/// A `tools/call`'s parameters, moved out of `params`: the tool's name
+/// and its arguments (`{}` when absent). Params that aren't an object
+/// name no tool.
+fn split_tool_call(params: Value) -> (Option<String>, Value) {
+    let Value::Object(mut fields) = params else {
+        return (None, json!({}));
+    };
+    let name = match fields.remove("name") {
+        Some(Value::String(n)) => Some(n),
+        _ => None,
+    };
+    let args = fields.remove("arguments").unwrap_or_else(|| json!({}));
+    (name, args)
 }
 
 /// Shared JSON-RPC dispatch. `pinned` is `Some(slug)` on the org lane
@@ -1748,33 +2073,15 @@ async fn mcp_dispatch(
     state: AppState,
     pinned: Option<String>,
     headers: HeaderMap,
-    body: String,
+    body: &[u8],
 ) -> Response {
-    let request: Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            return Json(rpc_error(
-                Value::Null,
-                code::PARSE,
-                format!("invalid JSON: {e}"),
-            ))
-            .into_response();
-        }
+    let RpcRequest { id, method, params } = match parse_request(body) {
+        Ok(request) => request,
+        Err(refusal) => return Json(refusal).into_response(),
     };
-    // The current MCP revision dropped JSON-RPC batching.
-    if request.is_array() {
-        return Json(rpc_error(
-            Value::Null,
-            code::INVALID_REQUEST,
-            "batched requests are not supported",
-        ))
-        .into_response();
-    }
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let Some(method) = request.get("method").and_then(Value::as_str) else {
+    let Some(method) = method.as_deref() else {
         return Json(rpc_error(id, code::INVALID_REQUEST, "missing `method`")).into_response();
     };
-    let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
     // Notifications carry no id and take no response body.
     if id.is_null() && method.starts_with("notifications/") {
@@ -1849,27 +2156,31 @@ async fn mcp_dispatch(
             }
         }
         "tools/call" => {
-            if let Some(name) = params.get("name").and_then(Value::as_str)
+            let (name, args) = split_tool_call(params);
+            if let Some(name) = name.as_deref()
                 && let Some(tools) = bot_tools(&state, &headers).await
                 && !tools.allows(name)
             {
-                return Json(rpc_result(
-                    id,
-                    tool_err(&format!(
+                // t[impl mcp.live.observer]
+                // A key that may watch a live set but not edit it is an
+                // observer (spec §7 S1): say so, not "notes and wikis".
+                let refusal = if tools.allows("doc_read") && LIVE_WRITE_TOOLS.contains(&name) {
+                    format!(
+                        "`{name}` is refused: this bot's key only observes live sets \
+                         (live_observe, doc_read). Editing one needs a key with every tool."
+                    )
+                } else {
+                    format!(
                         "`{name}` is not offered to this bot — its key is for notes and wikis. \
                          Call `tools/list` for what it may use."
-                    )),
-                ))
-                .into_response();
+                    )
+                };
+                return Json(rpc_result(id, tool_err(refusal))).into_response();
             }
-            let args_peek = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
             // Account lane: the call names its org, else the default.
             let target = match &pinned {
                 Some(s) => s.clone(),
-                None => match arg_str(&args_peek, "org") {
+                None => match arg_str(&args, "org") {
                     Some(s) => s,
                     None => match default_slug(&state, &pinned, &headers).await {
                         Some(s) => s,
@@ -1883,7 +2194,7 @@ async fn mcp_dispatch(
                             // `list_orgs`: a bot made with no orgs asks
                             // exactly this before it is granted one.
                             if matches!(caller, Caller::Known)
-                                && params.get("name").and_then(Value::as_str) == Some("list_orgs")
+                                && name.as_deref() == Some("list_orgs")
                             {
                                 return Json(rpc_result(
                                     id,
@@ -1912,7 +2223,7 @@ async fn mcp_dispatch(
             };
             // `list_orgs` is account-lane only and spans orgs, so it
             // answers before any single-org authentication.
-            if pinned.is_none() && params.get("name").and_then(Value::as_str) == Some("list_orgs") {
+            if pinned.is_none() && name.as_deref() == Some("list_orgs") {
                 let orgs = reachable_orgs(&state, &headers).await;
                 let home = state.home_slug();
                 let out: Vec<Value> = orgs
@@ -1935,10 +2246,10 @@ async fn mcp_dispatch(
             // has its own operator check rather than a per-org session,
             // and is method-not-found when no backend is configured.
             if pinned.is_none()
-                && let Some(name) = params.get("name").and_then(Value::as_str)
+                && let Some(name) = name.as_deref()
                 && TELEMETRY_TOOLS.contains(&name)
             {
-                return match telemetry_call(&state, &headers, name, &args_peek).await {
+                return match telemetry_call(&state, &headers, name, &args).await {
                     Some(payload) => Json(rpc_result(id, payload)).into_response(),
                     None => Json(rpc_error(
                         id,
@@ -1952,18 +2263,14 @@ async fn mcp_dispatch(
                 Ok(org) => org,
                 Err(e) => return Json(rpc_error(id, code::INVALID_REQUEST, e)).into_response(),
             };
-            let Some(name) = params.get("name").and_then(Value::as_str) else {
+            let Some(name) = name else {
                 return Json(rpc_error(id, code::INVALID_PARAMS, "missing tool `name`"))
                     .into_response();
             };
-            let args = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
             // Plugin gate FIRST — a disabled plugin's tool must fail
             // the same way whether or not its backend would have
             // answered, and before any backend work happens.
-            match plugin_gate(name, &org.plugins) {
+            match plugin_gate(&name, &org.plugins) {
                 Ok(()) => {}
                 Err(None) => {
                     return Json(rpc_error(
@@ -1991,7 +2298,7 @@ async fn mcp_dispatch(
             // task-local can't be set from here (`spawn_blocking`
             // would lose it anyway), so the principal rides as a
             // value instead.
-            let principal = mcp_principal(&org, &headers).await;
+            let principal = mcp_principal(&state.static_token, &org, &headers).await;
             // …and who that is, for the records a tool creates
             // (`created_by`, `crate::attribution`): a bot key's bot, a
             // session's person. Never from the tool's arguments.
@@ -1999,7 +2306,8 @@ async fn mcp_dispatch(
                 Some(id) => Some(org.creators.resolve(id).await),
                 None => None,
             };
-            let called = name.to_string();
+            let tools = bot_tools(&state, &headers).await;
+            let called = name.clone();
             // Email links live in the person's own org, never in the org
             // being acted on. That is what keeps them private: a project
             // can live in a shared org while the links pointing at it sit
@@ -2009,7 +2317,7 @@ async fn mcp_dispatch(
             let links_org = state
                 .home_slug()
                 .and_then(|slug| state.org(&slug))
-                .unwrap_or_else(|| org.clone());
+                .unwrap_or_else(|| std::sync::Arc::clone(&org));
             let dispatched = tokio::task::spawn_blocking(move || {
                 call_tool(
                     &org,
@@ -2017,6 +2325,7 @@ async fn mcp_dispatch(
                     ToolCaller {
                         principal: principal.as_deref(),
                         creator: creator.as_ref(),
+                        tools,
                     },
                     &called,
                     &args,
@@ -2080,20 +2389,14 @@ async fn default_slug(
 /// Rewrite a per-org tools payload for the account lane: every tool
 /// gains `org`, and `list_orgs` is prepended so a client can discover
 /// the topology before it guesses at slugs.
-fn account_tools_payload(payload: Value, default_slug: &str) -> Value {
-    let mut tools: Vec<Value> = payload
-        .get("tools")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|mut t| {
-            if let Some(schema) = t.get("inputSchema").cloned() {
-                t["inputSchema"] = with_org_param(schema, default_slug);
-            }
-            t
-        })
-        .collect();
+fn account_tools_payload(mut payload: Value, default_slug: &str) -> Value {
+    let mut tools: Vec<Value> = match payload.get_mut("tools").map(Value::take) {
+        Some(Value::Array(tools)) => tools,
+        _ => Vec::new(),
+    };
+    for schema in tools.iter_mut().filter_map(|t| t.get_mut("inputSchema")) {
+        *schema = with_org_param(schema.take(), default_slug);
+    }
     tools.insert(
         0,
         json!({
@@ -2318,8 +2621,7 @@ pub async fn reachable_orgs(state: &AppState, headers: &HeaderMap) -> Vec<String
         return Vec::new();
     };
     let hosted = state.org_slugs();
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if state.static_token.matches(&token) {
         return hosted;
     }
     let mut reachable = Vec::new();
@@ -2466,7 +2768,7 @@ async fn linked_slugs(state: &AppState, token: &str) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let Some(store) = home.identity else {
+    let Some(store) = &home.identity else {
         return Vec::new();
     };
     store
@@ -2486,14 +2788,13 @@ async fn authenticate_for(
     state: &AppState,
     slug: &str,
     headers: &HeaderMap,
-) -> Result<crate::OrgAppState, String> {
+) -> Result<std::sync::Arc<crate::OrgAppState>, String> {
     let token = crate::watch_bridge::bearer(headers).ok_or("missing bearer token")?;
     let org = state
         .org(slug)
         .ok_or_else(|| format!("org `{slug}` not hosted"))?;
 
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if state.static_token.matches(&token) {
         return Ok(org);
     }
     if org
@@ -2517,7 +2818,7 @@ async fn authenticate_for(
                 token: token.clone(),
             })
             .await
-        && let Some(store) = home.identity
+        && let Some(store) = &home.identity
         && let Ok(links) = store.list_links(bundle.user.id).await
         && let Some(link) = links.into_iter().find(|l| l.remote_slug == slug)
         && let Some(linked) = link.token
@@ -2548,10 +2849,13 @@ async fn authenticate_for(
 /// Caller-sensitive backends treat that as "no person" — the wiki
 /// lane, for one, then writes as the server does when it plants a
 /// seed, and records no Editor on a wiki it creates.
-async fn mcp_principal(org: &crate::OrgAppState, headers: &HeaderMap) -> Option<String> {
+async fn mcp_principal(
+    static_token: &crate::operator::StaticToken,
+    org: &crate::OrgAppState,
+    headers: &HeaderMap,
+) -> Option<String> {
     let token = crate::watch_bridge::bearer(headers)?;
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if static_token.matches(&token) {
         return None;
     }
     match org
@@ -2786,6 +3090,121 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
     ToolFailure::Message(msg)
 }
 
+// ── Notes: revisions, frontmatter and the property schema ───────
+
+/// Where an org declares its own kinds: `kind: schema` pages in this
+/// vault folder. A fixed folder keeps schema loading to a manifest
+/// filter instead of a parse of every note on every write.
+const SCHEMA_FOLDER: &str = "Schemas/";
+
+/// A note's revision: the lowercase hex sha256 of its bytes — the same
+/// value the vault manifest and `IfMatch::Sha` use.
+fn note_revision(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+fn stale_note(path: &str, expected: &str, actual: &str) -> ToolFailure {
+    ToolFailure::Message(format!(
+        "Stale: `{path}` changed since revision {expected} (it is now {actual}). Nothing was \
+         written. Call read_note again, re-apply your change to what it says now, and pass \
+         the new revision."
+    ))
+}
+
+/// A note's frontmatter as a JSON object. Empty when it has none (or
+/// one that isn't a YAML mapping).
+fn frontmatter_map(text: &str) -> serde_json::Map<String, Value> {
+    vault::obsidian::obsidian_parse::parse_frontmatter(text)
+        .0
+        .into_iter()
+        .map(|e| (e.key, e.value))
+        .collect()
+}
+
+/// The `kind:` a note declares, if any.
+fn page_kind(fm: &serde_json::Map<String, Value>) -> Option<&str> {
+    fm.get(KIND_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+}
+
+/// The registry a write is validated against: the built-in kinds plus
+/// the org's schema pages, with what each page declared (or why it
+/// couldn't be read).
+struct PropertySchemas {
+    registry: PropertySchemaRegistry,
+    /// (path, kind) per schema page that loaded.
+    org: Vec<(String, String)>,
+    /// (path, reason) per `kind: schema` page that didn't.
+    errors: Vec<(String, String)>,
+}
+
+fn load_property_schemas(org: &crate::OrgAppState) -> Result<PropertySchemas, ToolFailure> {
+    use vault_proto::VaultSync as _;
+    let mut schemas = PropertySchemas {
+        registry: PropertySchemaRegistry::with_builtins(),
+        org: Vec::new(),
+        errors: Vec::new(),
+    };
+    let manifest = org
+        .vault_sync
+        .manifest(VAULT_ID)
+        .map_err(|e| ToolFailure::Message(format!("couldn't list the vault: {e:?}")))?;
+    let mut paths: Vec<&str> = manifest
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .filter(|p| p.starts_with(SCHEMA_FOLDER) && p.ends_with(".md"))
+        .collect();
+    paths.sort_unstable();
+    for path in paths {
+        let Ok(bytes) = org.vault_sync.get_file(VAULT_ID, path) else {
+            continue;
+        };
+        let fm = frontmatter_map(&String::from_utf8_lossy(&bytes.0));
+        if page_kind(&fm) != Some(SCHEMA_PAGE_KIND) {
+            continue;
+        }
+        match schema_from_frontmatter(&fm) {
+            Ok(schema) => {
+                schemas.org.push((path.to_string(), schema.kind.clone()));
+                schemas.registry.insert(schema);
+            }
+            Err(e) => schemas.errors.push((path.to_string(), e)),
+        }
+    }
+    Ok(schemas)
+}
+
+/// Validate (and normalize) every value against the schema for
+/// `kind`. All violations are reported together, so one round trip
+/// fixes them all.
+fn validate_properties(
+    registry: &PropertySchemaRegistry,
+    kind: Option<&str>,
+    values: Vec<(String, Value)>,
+) -> Result<Vec<(String, Value)>, ToolFailure> {
+    let mut ok = Vec::with_capacity(values.len());
+    let mut refused = Vec::new();
+    for (key, value) in values {
+        match registry.validate(kind, &key, value) {
+            Ok(v) => ok.push((key, v)),
+            Err(violation) => refused.push(violation.to_string()),
+        }
+    }
+    if refused.is_empty() {
+        Ok(ok)
+    } else {
+        Err(ToolFailure::Message(format!(
+            "refused by the property schema, nothing was written: {}. Call \
+             read_property_schema to see what each property accepts.",
+            refused.join("; ")
+        )))
+    }
+}
+
 // ── Tool implementations ─────────────────────────────────────────
 
 /// Who a tool call is from: the principal's account id (the wiki lane
@@ -2795,6 +3214,10 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
 struct ToolCaller<'a> {
     principal: Option<&'a str>,
     creator: Option<&'a crate::attribution::Creator>,
+    /// The tool scope of the bot behind the key, when it is one — what
+    /// tells a live set's observer from an editor (`live_observe`).
+    #[cfg_attr(not(feature = "plugin-fasttrackstudio"), allow(dead_code))]
+    tools: Option<crate::bots::Tools>,
 }
 
 /// Dispatch one tool call. Synchronous on purpose — the backends
@@ -2808,7 +3231,22 @@ fn call_tool(
     name: &str,
     args: &Value,
 ) -> Result<Value, ToolFailure> {
-    let ToolCaller { principal, creator } = caller;
+    let ToolCaller {
+        principal, creator, ..
+    } = caller;
+    // Who the activity feed names for this call's task writes
+    // (`activity.actor`) — an assignment above all: the router lane
+    // notes its gate caller, and this is the same note for MCP.
+    note_task_writer(org, principal, name, args);
+    // A filter's `me`: the caller's own ref.
+    let who = |key: &str| -> Option<String> {
+        let raw = arg_str(args, key)?;
+        if raw.trim().eq_ignore_ascii_case("me") {
+            Some(creator.map_or_else(|| "none".to_owned(), |c| c.r#ref.clone()))
+        } else {
+            Some(raw)
+        }
+    };
     // Only the wiki lane is caller-sensitive today; a build without it
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
@@ -2854,7 +3292,11 @@ fn call_tool(
             let events_today = if org.plugins.contains("scheduling") {
                 org.scheduling
                     .list_events()
-                    .map(|evs| evs.iter().filter(|e| date_of(&e.start) == today).count())
+                    .map(|evs| {
+                        evs.iter()
+                            .filter(|e| e.tombstone.is_none() && date_of(&e.start) == today)
+                            .count()
+                    })
                     .unwrap_or(0)
             } else {
                 0
@@ -2877,7 +3319,13 @@ fn call_tool(
                 "inbox_awaiting_review": inbox_open,
                 // The caller's own creator ref — what `created_by`
                 // filters take to mean "what I made".
-                "you": creator.map(|c| json!({ "created_by": c.r#ref, "name": c.name })),
+                "you": creator.map(|c| json!({
+                    "created_by": c.r#ref,
+                    "name": c.name,
+                    // A personal assistant's person: what it makes is
+                    // stamped on behalf of them.
+                    "acting_for": c.on_behalf_of.as_ref().map(|p| json!({ "ref": p.r#ref, "name": p.name })),
+                })),
             }))
         }
 
@@ -2894,7 +3342,9 @@ fn call_tool(
                 status,
                 project,
                 due_on_or_before: arg_str(args, "due_on_or_before"),
-                created_by: arg_str(args, "created_by"),
+                created_by: who("created_by"),
+                on_behalf_of: who("on_behalf_of"),
+                assignee: who("assignee"),
                 ..Default::default()
             };
             let query = arg_str(args, "query").map(|q| q.to_lowercase());
@@ -3145,16 +3595,29 @@ fn call_tool(
             })
         }
 
+        // t[impl scheduling.event.external-ref]
+        // t[impl scheduling.event.links.note-side]
         "list_events" => {
             let from = arg_str(args, "from");
             let to = arg_str(args, "to");
+            let external_ref = arg_external_ref(args)?;
+            let linked_to = arg_str(args, "linked_to");
+            // A ref lookup is how a re-sync finds what it made, so it
+            // sees tombstoned events too.
+            let include_tombstoned = arg_bool(args, "include_tombstoned") || external_ref.is_some();
             let mut rows = org
                 .scheduling
                 .list_events()
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
             rows.retain(|e| {
                 let day = date_of(&e.start);
-                from.as_deref().is_none_or(|f| day >= f) && to.as_deref().is_none_or(|t| day <= t)
+                from.as_deref().is_none_or(|f| day >= f)
+                    && to.as_deref().is_none_or(|t| day <= t)
+                    && external_ref
+                        .as_ref()
+                        .is_none_or(|r| e.external_ref.as_ref() == Some(r))
+                    && linked_to.as_deref().is_none_or(|n| e.links_to(n))
+                    && (include_tombstoned || e.tombstone.is_none())
             });
             rows.sort_by(|a, b| a.start.cmp(&b.start));
             let out: Vec<Value> = rows.iter().take(arg_limit(args)).map(event_json).collect();
@@ -3162,21 +3625,89 @@ fn call_tool(
         }
 
         #[cfg(feature = "plugin-scheduling")]
+        // t[impl scheduling.event.external-ref.idempotent]
         "create_event" => {
-            let event = scheduling_proto::CalEvent {
-                id: uuid::Uuid::new_v4().to_string(),
-                title: required_str(args, "title")?,
-                start: required_str(args, "start")?,
-                end: required_str(args, "end")?,
-                all_day: arg_bool(args, "all_day"),
-                color: "primary".to_string(),
-                description: arg_str(args, "description"),
-                recurrence: None,
-            };
+            let external_ref = arg_external_ref(args)?;
+            if let Some(r) = &external_ref {
+                // Idempotent re-sync: the ref already has an event.
+                let existing = org
+                    .scheduling
+                    .list_events()
+                    .map_err(|e| ToolFailure::Message(format!("{e:?}")))?
+                    .into_iter()
+                    .find(|e| e.external_ref.as_ref() == Some(r));
+                if let Some(e) = existing {
+                    let mut out = event_json(&e);
+                    out["existing"] = json!(true);
+                    return Ok(out);
+                }
+            }
+            let mut event = scheduling_proto::CalEvent::new(
+                uuid::Uuid::new_v4().to_string(),
+                required_str(args, "title")?,
+                required_str(args, "start")?,
+                required_str(args, "end")?,
+            );
+            event.all_day = arg_bool(args, "all_day");
+            event.description = arg_str(args, "description");
+            event.location = arg_str(args, "location");
+            event.links = arg_event_links(args)?.unwrap_or_default();
+            event.external_ref = external_ref;
             org.scheduling
                 .upsert_event(&event)
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
             Ok(event_json(&event))
+        }
+
+        #[cfg(feature = "plugin-scheduling")]
+        // t[impl scheduling.event.update]
+        // t[impl scheduling.event.tombstone]
+        "update_event" => {
+            let id = required_str(args, "id")?;
+            let mut event = org
+                .scheduling
+                .list_events()
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?
+                .into_iter()
+                .find(|e| e.id == id)
+                .ok_or_else(|| ToolFailure::Message(format!("no event with id `{id}`")))?;
+            let mut changed: Vec<&str> = Vec::new();
+            if let Some(title) = arg_str(args, "title") {
+                event.title = title;
+                changed.push("title");
+            }
+            if let Some(d) = optional_field(args, "description") {
+                event.description = d;
+                changed.push("description");
+            }
+            if let Some(l) = optional_field(args, "location") {
+                event.location = l;
+                changed.push("location");
+            }
+            if let Some(links) = arg_event_links(args)? {
+                event.links = links;
+                changed.push("links");
+            }
+            if let Some(t) = args.get("tombstone").and_then(Value::as_bool) {
+                match (t, event.tombstone.is_some()) {
+                    (true, false) => event.tombstone = Some(chrono::Utc::now().to_rfc3339()),
+                    (false, true) => event.tombstone = None,
+                    _ => {}
+                }
+                changed.push("tombstone");
+            }
+            if changed.is_empty() {
+                return Err(ToolFailure::Message(
+                    "nothing to change: pass title, description, location, links or tombstone"
+                        .into(),
+                ));
+            }
+            org.scheduling
+                .upsert_event(&event)
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
+            let mut out = event_json(&event);
+            out["changed"] = json!(changed);
+            Ok(out)
         }
 
         #[cfg(feature = "plugin-scheduling")]
@@ -3246,8 +3777,10 @@ fn call_tool(
             // design excludes suggestions — so an agent couldn't see
             // its own captures. `status` opens the full list, and so
             // does `created_by` (whose captures, whatever their state).
-            let created_by = arg_str(args, "created_by");
-            let rows: Vec<inbox_proto::InboxItem> = match (arg_str(args, "status"), &created_by) {
+            let created_by = who("created_by");
+            let on_behalf_of = who("on_behalf_of");
+            let narrowed = created_by.is_some() || on_behalf_of.is_some();
+            let rows: Vec<inbox_proto::InboxItem> = match (arg_str(args, "status"), narrowed) {
                 (Some(status), _) => {
                     let all = org
                         .inbox
@@ -3257,11 +3790,11 @@ fn call_tool(
                         .filter(|i| i.status.eq_ignore_ascii_case(&status))
                         .collect()
                 }
-                (None, Some(_)) => org
+                (None, true) => org
                     .inbox
                     .list_inbox()
                     .map_err(|e| ToolFailure::Message(format!("{e:?}")))?,
-                (None, None) => {
+                (None, false) => {
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                     org.inbox
                         .review_queue(today)
@@ -3274,6 +3807,9 @@ fn call_tool(
                     created_by
                         .as_deref()
                         .is_none_or(|who| i.created_by_matches(who))
+                        && on_behalf_of
+                            .as_deref()
+                            .is_none_or(|who| i.on_behalf_of_matches(who))
                 })
                 .take(arg_limit(args))
                 .map(|i| {
@@ -3286,6 +3822,8 @@ fn call_tool(
                         "source": i.source,
                         "created_by": i.created_by,
                         "created_by_name": i.created_by_name,
+                        "on_behalf_of": i.on_behalf_of,
+                        "on_behalf_of_name": i.on_behalf_of_name,
                     })
                 })
                 .collect();
@@ -3334,14 +3872,16 @@ fn call_tool(
 
         "search_vault" => {
             let query = required_str(args, "query")?.to_lowercase();
-            let manifest = org
+            // Names only: `paths` walks the vault without reading a
+            // file, where the manifest would hash every one of them to
+            // match on a path.
+            let paths = org
                 .vault_sync
-                .manifest(VAULT_ID)
+                .paths(VAULT_ID)
                 .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
-            let mut hits: Vec<&str> = manifest
-                .files
+            let mut hits: Vec<&str> = paths
                 .iter()
-                .map(|f| f.path.as_str())
+                .map(String::as_str)
                 .filter(|p| p.to_lowercase().contains(&query))
                 .collect();
             hits.sort_unstable();
@@ -3361,8 +3901,126 @@ fn call_tool(
                 .vault_sync
                 .get_file(VAULT_ID, &path)
                 .map_err(|e| backend_err("note", &path, &e))?;
+            let revision = note_revision(&bytes.0);
             let text = String::from_utf8_lossy(&bytes.0).to_string();
-            Ok(json!({ "path": path, "content": text }))
+            Ok(json!({ "path": path, "content": text, "revision": revision }))
+        }
+
+        // t[impl vault.bases.query]
+        "query_base" => {
+            let (source, text) = match (arg_str(args, "path"), arg_str(args, "yaml")) {
+                (Some(path), None) => {
+                    let bytes = org
+                        .vault_sync
+                        .get_file(VAULT_ID, &path)
+                        .map_err(|e| backend_err("base", &path, &e))?;
+                    (path, String::from_utf8_lossy(&bytes.0).into_owned())
+                }
+                (None, Some(yaml)) if yaml.len() > QUERY_BASE_MAX_YAML => {
+                    return Err(ToolFailure::Message(format!(
+                        "an inline base may be at most {QUERY_BASE_MAX_YAML} bytes; this one is {}",
+                        yaml.len()
+                    )));
+                }
+                (None, Some(yaml)) => ("(inline)".to_owned(), yaml),
+                _ => {
+                    return Err(ToolFailure::Message(
+                        "pass exactly one of `path` (a .base file in the vault) or `yaml` (an inline base)"
+                            .into(),
+                    ));
+                }
+            };
+            let base = vault::bases::parse(&text).map_err(|e| {
+                ToolFailure::Message(format!("`{source}` is not a valid base: {e}"))
+            })?;
+            // Every note in THIS org's vault is the row set (and the
+            // link-resolution universe) — read through the same
+            // VaultSync backend read_note uses, so nothing outside the
+            // org the caller was admitted to is ever visible.
+            let manifest = org
+                .vault_sync
+                .manifest(VAULT_ID)
+                .map_err(|e| ToolFailure::Message(format!("{e:?}")))?;
+            // Bounded: at most QUERY_BASE_MAX_NOTES notes and
+            // QUERY_BASE_MAX_BYTES bytes, in path order so a capped
+            // result is the same on every call. Notes that fail to
+            // read are logged and reported, not silently dropped.
+            let mut md: Vec<_> = manifest
+                .files
+                .iter()
+                .filter(|f| f.path.ends_with(".md"))
+                .collect();
+            md.sort_by(|a, b| a.path.cmp(&b.path));
+            let md_total = md.len();
+            let mut notes: Vec<(String, String)> = Vec::new();
+            let mut unreadable: Vec<String> = Vec::new();
+            let mut bytes_read: u64 = 0;
+            let mut capped = false;
+            for f in md {
+                if notes.len() >= QUERY_BASE_MAX_NOTES
+                    || bytes_read.saturating_add(f.size) > QUERY_BASE_MAX_BYTES
+                {
+                    capped = true;
+                    break;
+                }
+                match org.vault_sync.get_file(VAULT_ID, &f.path) {
+                    Ok(bytes) => {
+                        bytes_read = bytes_read.saturating_add(bytes.0.len() as u64);
+                        notes.push((
+                            f.path.clone(),
+                            String::from_utf8_lossy(&bytes.0).into_owned(),
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = %f.path, error = ?e, "query_base: note unreadable, skipped");
+                        unreadable.push(f.path.clone());
+                    }
+                }
+            }
+            let rows = vault::obsidian::rows_from_markdown(
+                notes.iter().map(|(p, s)| (p.as_str(), s.as_str())),
+            );
+            let view = arg_str(args, "view");
+            let tables = vault::obsidian::run_base(&base, &rows, view.as_deref()).map_err(|e| {
+                let names: Vec<String> =
+                    base.views.iter().map(|v| format!("`{}`", v.name)).collect();
+                ToolFailure::Message(format!("{e}; the base's views are: {}", names.join(", ")))
+            })?;
+            let limit = arg_limit(args);
+            let views: Vec<Value> = tables
+                .into_iter()
+                .map(|mut t| {
+                    let total: usize = t.groups.iter().map(|g| g.rows.len()).sum();
+                    // Spend one row budget across the groups in order:
+                    // truncate first, then subtract what was kept, so
+                    // `budget` never underflows and later groups get
+                    // what is left (possibly nothing).
+                    let mut budget = limit;
+                    for g in &mut t.groups {
+                        g.rows.truncate(budget);
+                        budget -= g.rows.len();
+                    }
+                    t.groups.retain(|g| !g.rows.is_empty() || total == 0);
+                    json!({
+                        "name": t.name,
+                        "type": t.kind,
+                        "columns": t.columns,
+                        "total": total,
+                        "truncated": total > limit,
+                        "groups": t.groups,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "base": source,
+                "views": views,
+                "notes": {
+                    "total": md_total,
+                    "read": notes.len(),
+                    "unreadable": unreadable,
+                    "capped": capped,
+                },
+            }))
         }
 
         "append_note" => {
@@ -3393,7 +4051,24 @@ fn call_tool(
         "write_note" => {
             let path = required_str(args, "path")?;
             let content = required_str(args, "content")?;
-            let existed = org.vault_sync.get_file(VAULT_ID, &path).is_ok();
+            let previous = org.vault_sync.get_file(VAULT_ID, &path).ok();
+            let existed = previous.is_some();
+            // Validate what this write changes in the frontmatter — a
+            // note that already carried an off-schema value can still be
+            // rewritten, but a write can't introduce one.
+            let before = previous
+                .map(|b| frontmatter_map(&String::from_utf8_lossy(&b.0)))
+                .unwrap_or_default();
+            let after = frontmatter_map(&content);
+            let changed: Vec<(String, Value)> = after
+                .iter()
+                .filter(|(k, v)| before.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !changed.is_empty() {
+                let schemas = load_property_schemas(org)?;
+                validate_properties(&schemas.registry, page_kind(&after), changed)?;
+            }
             org.vault_sync
                 .put_file(
                     VAULT_ID,
@@ -3406,6 +4081,149 @@ fn call_tool(
                 "path": path,
                 "written": true,
                 "replaced_existing": existed,
+            }))
+        }
+
+        "update_properties" => {
+            let path = required_str(args, "path")?;
+            let set: Vec<(String, Value)> = match args.get("set") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                Some(_) => {
+                    return Err(ToolFailure::Message(
+                        "`set` must be an object of property → value".into(),
+                    ));
+                }
+            };
+            let remove = arg_str_list(args, "remove")?.unwrap_or_default();
+            if set.is_empty() && remove.is_empty() {
+                return Err(ToolFailure::Message(
+                    "nothing to do: pass `set` and/or `remove`".into(),
+                ));
+            }
+            if let Some((k, _)) = set.iter().find(|(k, _)| k.trim().is_empty()) {
+                return Err(ToolFailure::Message(format!(
+                    "`{k}` is not a property name"
+                )));
+            }
+            if let Some((k, _)) = set.iter().find(|(k, _)| remove.contains(k)) {
+                return Err(ToolFailure::Message(format!(
+                    "`{k}` is in both `set` and `remove`; pick one"
+                )));
+            }
+            let existing = org
+                .vault_sync
+                .get_file(VAULT_ID, &path)
+                .map_err(|e| backend_err("note", &path, &e))?;
+            let revision = note_revision(&existing.0);
+            if let Some(expected) = arg_str(args, "expected_revision")
+                && expected != revision
+            {
+                return Err(stale_note(&path, &expected, &revision));
+            }
+            let raw = String::from_utf8(existing.0).map_err(|_| {
+                ToolFailure::Message(format!("`{path}` is not UTF-8 text; it has no properties"))
+            })?;
+
+            // The kind the note will have after this call picks the
+            // schema its values are checked against.
+            let current = frontmatter_map(&raw);
+            let kind = match set.iter().find(|(k, _)| k == KIND_KEY) {
+                Some((_, Value::String(k))) => Some(k.trim().to_string()),
+                Some((_, other)) => {
+                    return Err(ToolFailure::Message(format!(
+                        "`{KIND_KEY}` must be a string naming a kind, got {other}"
+                    )));
+                }
+                None if remove.iter().any(|k| k == KIND_KEY) => None,
+                None => page_kind(&current).map(str::to_owned),
+            };
+            let schemas = load_property_schemas(org)?;
+            let set = validate_properties(&schemas.registry, kind.as_deref(), set)?;
+
+            let Some(updated) = vault::obsidian::edit_frontmatter(&raw, &set, &remove)
+                .map_err(|e| ToolFailure::Message(format!("couldn't edit `{path}`: {e}")))?
+            else {
+                return Ok(json!({ "path": path, "changed": false, "revision": revision }));
+            };
+            // Write against the revision just read, so a change landing
+            // between the read and this write is refused, not clobbered.
+            let ack = org
+                .vault_sync
+                .put_file(
+                    VAULT_ID,
+                    &path,
+                    updated.into_bytes(),
+                    vault_proto::IfMatch::Sha(revision.clone()),
+                )
+                .map_err(|e| match e {
+                    vault_proto::VaultSyncError::Conflict { server_sha, .. } => {
+                        stale_note(&path, &revision, &server_sha)
+                    }
+                    other => backend_err("note", &path, &other),
+                })?;
+            Ok(json!({
+                "path": path,
+                "changed": true,
+                "revision": ack.sha256,
+                "set": set.into_iter().collect::<serde_json::Map<String, Value>>(),
+                "removed": remove,
+            }))
+        }
+
+        "read_property_schema" => {
+            let schemas = load_property_schemas(org)?;
+            let registry = &schemas.registry;
+            let source = |kind: &str| {
+                schemas
+                    .org
+                    .iter()
+                    .find(|(_, k)| k == kind)
+                    .map_or_else(|| json!("builtin"), |(path, _)| json!(path))
+            };
+            let errors: Vec<Value> = schemas
+                .errors
+                .iter()
+                .map(|(path, error)| json!({ "path": path, "error": error }))
+                .collect();
+            if let Some(kind) = arg_str(args, "kind") {
+                let Some(resolved) = registry.get(&kind) else {
+                    return Err(ToolFailure::Message(format!(
+                        "no schema for kind `{kind}`. Known kinds: {}. A page with an unknown \
+                         kind is checked against `{FALLBACK_KIND}`.",
+                        registry.kinds().join(", ")
+                    )));
+                };
+                return Ok(json!({
+                    "kind": kind,
+                    "source": source(&kind),
+                    "extends": registry.declared(&kind).and_then(|s| s.extends.clone()),
+                    "properties": resolved.properties,
+                    "errors": errors,
+                }));
+            }
+            let kinds: Vec<Value> = registry
+                .kinds()
+                .iter()
+                .filter_map(|k| registry.declared(k))
+                .map(|s| {
+                    json!({
+                        "kind": s.kind,
+                        "source": source(&s.kind),
+                        "extends": s.extends,
+                        "properties": s.properties,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "applies_by": format!(
+                    "A note's `{KIND_KEY}:` frontmatter picks its schema; a note without one \
+                     (or with a kind listed nowhere here) is checked against \
+                     `{FALLBACK_KIND}`. Properties a schema doesn't declare are free-form."
+                ),
+                "org_schema_folder": SCHEMA_FOLDER,
+                "kinds": kinds,
+                "errors": errors,
             }))
         }
 
@@ -3797,7 +4615,7 @@ fn call_tool(
 
         // ── Email (read + draft; no send by design) ──────────────
         "list_email_accounts" => {
-            let accounts = org.email.accounts().map_err(email_err)?;
+            let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
             let out: Vec<Value> = accounts
                 .iter()
                 .map(|a| {
@@ -3838,7 +4656,7 @@ fn call_tool(
                     &folder,
                     email_proto::SeqRange::Recent(limit as u32),
                 )
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             // Newest first for the model, whatever the backend's order.
             rows.sort_by(|a, b| b.date_ms.cmp(&a.date_ms));
             let out: Vec<Value> = rows.iter().take(limit).map(envelope_json).collect();
@@ -3851,7 +4669,7 @@ fn call_tool(
             let msg = links
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let body = msg
                 .body_text
                 .clone()
@@ -3892,7 +4710,10 @@ fn call_tool(
                 references: Vec::new(),
                 attachments: Vec::new(),
             };
-            let id = org.email.append_draft(&account, draft).map_err(email_err)?;
+            let id = org
+                .email
+                .append_draft(&account, draft)
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "draft_id": id,
                 "note": "saved to Drafts — the user reviews and sends it from their mail client",
@@ -3905,7 +4726,7 @@ fn call_tool(
             let original = org
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let env = &original.envelope;
             let subject = if env.subject.to_lowercase().starts_with("re:") {
                 env.subject.clone()
@@ -3930,7 +4751,10 @@ fn call_tool(
                 references,
                 attachments: Vec::new(),
             };
-            let id = org.email.append_draft(&account, draft).map_err(email_err)?;
+            let id = org
+                .email
+                .append_draft(&account, draft)
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "draft_id": id,
                 "in_reply_to": message_id,
@@ -3945,7 +4769,7 @@ fn call_tool(
             let link = links
                 .email_links
                 .link(&message_id, target, principal.unwrap_or("agent"))
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(link_json(&link))
         }
 
@@ -3955,7 +4779,7 @@ fn call_tool(
             links
                 .email_links
                 .unlink(&message_id, target)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({ "unlinked": true, "message_id": message_id }))
         }
 
@@ -3964,7 +4788,7 @@ fn call_tool(
             let rows = links
                 .email_links
                 .links_for_message(&message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let out: Vec<Value> = rows.iter().map(link_json).collect();
             Ok(json!({ "message_id": message_id, "count": out.len(), "links": out }))
         }
@@ -3974,7 +4798,7 @@ fn call_tool(
             let rows = links
                 .email_links
                 .links_for_target(target)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             // Bare ids are useless to a reader; with an account we can
             // say what each message actually is. A missing message is
             // not an error — the link outlives the mailbox.
@@ -4014,7 +4838,7 @@ fn call_tool(
             let msg = links
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let title = arg_str(args, "title")
                 .unwrap_or_else(|| msg.envelope.subject.clone())
                 .trim()
@@ -4120,7 +4944,7 @@ fn call_tool(
             links
                 .email
                 .move_message(&account, &message_id, &folder)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({ "moved": true, "message_id": message_id, "folder": folder }))
         }
 
@@ -4145,7 +4969,7 @@ fn call_tool(
             links
                 .email
                 .set_flags(&account, &message_id, delta)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "message_id": message_id,
                 "added": added,
@@ -4235,10 +5059,128 @@ fn call_tool(
         n if PATCH_TOOLS.contains(&n) => patch_tool(org, n, args),
         n if SAMPLE_TOOLS.contains(&n) => sample_tool(org, n, args),
         n if LIGHTING_TOOLS.contains(&n) => lighting_tool(org, n, args),
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        n if LIVE_TOOLS.contains(&n) => live_tool(org, caller, n, args),
 
         #[cfg(feature = "plugin-wiki")]
         n if WIKI_TOOLS.contains(&n) => wiki_tool(org, principal, n, args),
 
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+// ── Live-set tools ───────────────────────────────────────────────
+
+/// The live-set tools that edit — what an observer's key is refused.
+/// Not behind the plugin's feature: the dispatcher names them either way.
+const LIVE_WRITE_TOOLS: &[&str] = &["doc_apply"];
+
+/// The tools [`live_tool`] answers; must match [`live_tool_catalog`].
+#[cfg(feature = "plugin-fasttrackstudio")]
+const LIVE_TOOLS: &[&str] = &["live_observe", "doc_read", "doc_apply"];
+
+/// Whether this caller may `action` (`read` / `write`) live set
+/// `setlist`: the org's permission engine — its roles, and the grants
+/// the engine carries — asked about `live/<setlist>`. Asked here, not
+/// left to the gate: the MCP lane has no vox gate in front of it, and
+/// the gate is observe-only until enforcement is switched on, while a
+/// live edit is refused for real. No principal is the static MCP token
+/// (the server acting as itself), which may.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn live_permit(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    setlist: &str,
+    action: &str,
+) -> Result<(), ToolFailure> {
+    use architect_permissions::{Action, Decision, Principal, Resource};
+    let Some(user_id) = principal else {
+        return Ok(());
+    };
+    let who = Principal::User {
+        user_id: user_id.to_owned(),
+    };
+    match org.permissions.engine().check(
+        &who,
+        &Resource::new(format!("live/{setlist}")),
+        &Action::new(action),
+    ) {
+        Decision::Allow => Ok(()),
+        Decision::Deny { reason } => Err(ToolFailure::Message(format!(
+            "not allowed to {action} live set `{setlist}`: {reason}"
+        ))),
+    }
+}
+
+/// One live-set tool call, onto the org's live host — the same served
+/// docs every peer's `DocSync` reaches, so an apply is live the moment
+/// it returns. The rules are [`crate::live_docs`]'s; this is argument
+/// decoding, the permission check and attribution.
+///
+/// An observer — a key that only watches live sets — never gets here
+/// for `doc_apply`: the dispatcher refuses a bot the tool its key
+/// doesn't offer ([`crate::bots::Tools::allows`]).
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn live_tool(
+    org: &crate::OrgAppState,
+    caller: ToolCaller<'_>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, ToolFailure> {
+    use crate::live_docs;
+    let host = &org.live;
+    match name {
+        "live_observe" => {
+            let setlist = required_str(args, "setlist")?;
+            live_permit(org, caller.principal, &setlist, "read")?;
+            // An observer's key watches: it may not apply, whatever its role.
+            let can_apply = live_permit(org, caller.principal, &setlist, "write").is_ok()
+                && caller
+                    .tools
+                    .is_none_or(|t| LIVE_WRITE_TOOLS.iter().all(|w| t.allows(w)));
+            Ok(live_docs::observe(host, &setlist, can_apply)?)
+        }
+        "doc_read" => {
+            let doc_ref = required_str(args, "doc_ref")?;
+            let setlist = live_docs::setlist_of(host, &doc_ref)?;
+            live_permit(org, caller.principal, &setlist, "read")?;
+            Ok(live_docs::read(host, &doc_ref)?)
+        }
+        "doc_apply" => {
+            let doc_ref = required_str(args, "doc_ref")?;
+            let setlist = live_docs::setlist_of(host, &doc_ref)?;
+            live_permit(org, caller.principal, &setlist, "write")?;
+            let propose = match arg_str(args, "mode").as_deref() {
+                None | Some("apply") => false,
+                Some("propose") => true,
+                Some(other) => {
+                    return Err(ToolFailure::Message(format!(
+                        "`mode` is apply or propose, not `{other}`"
+                    )));
+                }
+            };
+            let ops = args.get("ops").cloned().unwrap_or(Value::Null);
+            let expected = arg_str(args, "expected_version");
+            // Who it is from: the authenticated caller, never the
+            // arguments. Whom an assistant acts for rides with its
+            // creator once bot keys say so; until then it stays empty
+            // rather than guessed.
+            let by = live_docs::Attribution {
+                created_by: caller.creator.map(|c| c.r#ref.clone()),
+                created_by_name: caller.creator.and_then(|c| c.name.clone()),
+                on_behalf_of: None,
+            };
+            Ok(live_docs::apply(
+                host,
+                &doc_ref,
+                &live_docs::ApplyRequest {
+                    ops: &ops,
+                    expected_version: expected.as_deref(),
+                    propose,
+                    by,
+                },
+            )?)
+        }
         _ => Err(ToolFailure::Unknown),
     }
 }
@@ -4741,8 +5683,98 @@ const WIKI_TOOLS: &[&str] = &[
     "subscribe_wiki",
 ];
 
+/// The values `subscribe_wiki`'s `kind` takes, in the wire spelling
+/// `SourceKind` serializes to.
+#[cfg(feature = "plugin-wiki")]
+const SUBSCRIBE_KINDS: [&str; 4] = ["wiki", "resource", "assets", "projects"];
+
+/// The wire name of a kind — what `subscribe_wiki` takes and answers.
+#[cfg(feature = "plugin-wiki")]
+const fn subscribe_kind_name(kind: wiki_proto::SourceKind) -> &'static str {
+    match kind {
+        wiki_proto::SourceKind::Wiki => "wiki",
+        wiki_proto::SourceKind::Resource => "resource",
+        wiki_proto::SourceKind::Assets => "assets",
+        wiki_proto::SourceKind::Projects => "projects",
+    }
+}
+
+/// `subscribe_wiki`'s source kind: `kind` when given, `wiki` when not.
+///
+/// The older `resource: true` flag stays as an alias for
+/// `kind: "resource"`, so a client written against the boolean keeps
+/// working. Both at once must agree: `resource: true` beside
+/// `kind: "assets"` is a caller that meant two different things, and
+/// picking either would subscribe to something it did not ask for.
+#[cfg(feature = "plugin-wiki")]
+fn subscribe_kind(args: &Value) -> Result<wiki_proto::SourceKind, ToolFailure> {
+    use wiki_proto::SourceKind;
+    let named = match arg_str(args, "kind") {
+        None => None,
+        Some(k) => Some(match k.to_ascii_lowercase().as_str() {
+            "wiki" => SourceKind::Wiki,
+            "resource" => SourceKind::Resource,
+            "assets" => SourceKind::Assets,
+            "projects" => SourceKind::Projects,
+            _ => {
+                return Err(ToolFailure::Message(format!(
+                    "`kind` must be one of {} (got `{k}`)",
+                    SUBSCRIBE_KINDS.join(", ")
+                )));
+            }
+        }),
+    };
+    match (named, arg_bool(args, "resource")) {
+        (None, false) => Ok(SourceKind::Wiki),
+        (None, true) | (Some(SourceKind::Resource), true) => Ok(SourceKind::Resource),
+        (Some(kind), false) => Ok(kind),
+        (Some(kind), true) => Err(ToolFailure::Message(format!(
+            "`resource: true` means `kind: \"resource\"`, which contradicts `kind: \"{}\"`; \
+             pass `kind` alone",
+            subscribe_kind_name(kind)
+        ))),
+    }
+}
+
+/// Split `domain/slug` for a source of `kind`.
+///
+/// A project's slug is a tier-relative **path** (`album/track-two`),
+/// because projects nest; every other tier is flat and a slash in its
+/// slug is refused here, before any backend work. The backend confines
+/// each segment again (`LocalOrgs::source_root`) — this is the early,
+/// legible refusal, not the safety.
+#[cfg(feature = "plugin-wiki")]
+fn split_qualified(
+    qualified: &str,
+    kind: wiki_proto::SourceKind,
+) -> Result<(String, String), ToolFailure> {
+    let malformed = || {
+        let shape = if kind == wiki_proto::SourceKind::Projects {
+            "`domain/slug` (a project's slug may be a path, `domain/album/track`)"
+        } else {
+            "`domain/slug`"
+        };
+        ToolFailure::Message(format!(
+            "`qualified_id` must be {shape} (got `{qualified}`)"
+        ))
+    };
+    let (domain, slug) = qualified.split_once('/').ok_or_else(malformed)?;
+    let segments_ok = if kind == wiki_proto::SourceKind::Projects {
+        slug.split('/').all(|s| !s.is_empty())
+    } else {
+        !slug.is_empty() && !slug.contains('/')
+    };
+    if domain.is_empty() || !segments_ok {
+        return Err(malformed());
+    }
+    Ok((domain.to_owned(), slug.to_owned()))
+}
+
 /// The account an MCP call carries, handed to the wiki backend in
-/// place of the gate's task-local (see [`mcp_principal`]).
+/// place of the gate's task-local (see [`mcp_principal`]). Whether that
+/// account is an org admin is not this caller's to say: the backend's
+/// org roles (`memberships::WikiRoles`) answer for the principal, so a
+/// bot is an admin only when its own membership row says so.
 #[cfg(feature = "plugin-wiki")]
 struct McpCaller(Option<String>);
 
@@ -5075,25 +6107,12 @@ fn wiki_tool(
 
         "subscribe_wiki" => {
             let qualified = required_str(args, "qualified_id")?;
-            let Some((domain, source_slug)) = qualified.split_once('/') else {
-                return Err(ToolFailure::Message(format!(
-                    "`qualified_id` must be `domain/slug` (got `{qualified}`)"
-                )));
-            };
-            if domain.is_empty() || source_slug.is_empty() || source_slug.contains('/') {
-                return Err(ToolFailure::Message(format!(
-                    "`qualified_id` must be `domain/slug` (got `{qualified}`)"
-                )));
-            }
+            let kind = subscribe_kind(args)?;
+            let (domain, source_slug) = split_qualified(&qualified, kind)?;
             let who = subscriber(args);
-            let kind = if arg_bool(args, "resource") {
-                wiki_proto::SourceKind::Resource
-            } else {
-                wiki_proto::SourceKind::Wiki
-            };
             let subscription = wiki_proto::Subscription {
-                domain: domain.to_owned(),
-                slug: source_slug.to_owned(),
+                domain,
+                slug: source_slug.clone(),
                 kind,
                 title: source_slug.replace('-', " "),
                 core: false,
@@ -5106,6 +6125,7 @@ fn wiki_tool(
             Ok(json!({
                 "subscriber": who.key(),
                 "qualified_id": qualified,
+                "kind": subscribe_kind_name(kind),
                 "subscribed": true,
             }))
         }
@@ -5139,7 +6159,7 @@ fn wiki_summary_json(w: &wiki_proto::WikiSummary) -> Value {
 /// The sender identity for a draft: the account's own address.
 fn account_addr(org: &crate::OrgAppState, account: &str) -> Result<email_proto::Addr, ToolFailure> {
     use email_proto::EmailSync as _;
-    let accounts = org.email.accounts().map_err(email_err)?;
+    let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
     let acct = accounts.iter().find(|a| a.id.0 == account).ok_or_else(|| {
         ToolFailure::Message(format!(
             "no mail account `{account}` — call list_email_accounts first"
@@ -5195,7 +6215,7 @@ fn link_json(l: &email_proto::MessageLink) -> Value {
 
 /// Email backend errors, with the one common capability gap named
 /// instead of debug-dumped.
-fn email_err(e: email_proto::EmailSyncError) -> ToolFailure {
+fn email_err(e: &email_proto::EmailSyncError) -> ToolFailure {
     let raw = format!("{e:?}");
     if raw.starts_with("Unsupported") {
         ToolFailure::Message(format!(
@@ -5236,7 +6256,28 @@ fn task_json(t: &task::TaskInfo) -> Value {
         // Who made it (`user:<uuid>` / `bot:<uuid>`), and their name.
         "created_by": t.created_by,
         "created_by_name": t.created_by_name,
+        // Whom a personal assistant made it for (`user:<uuid>`), if one did.
+        "on_behalf_of": t.on_behalf_of,
+        "on_behalf_of_name": t.on_behalf_of_name,
     })
+}
+
+/// Note the caller of a task-writing tool in the org's actor ledger,
+/// the way [`crate::activity::AttributedTasks`] does on the router: the
+/// feed's entry for the write — "Cody assigned Priya" — names who made
+/// it rather than guessing from the task's assignee.
+// t[impl attribution.assignee.logged]
+fn note_task_writer(org: &crate::OrgAppState, principal: Option<&str>, tool: &str, args: &Value) {
+    let Some(user) = principal else { return };
+    let key = match tool {
+        "update_task" | "file_task" | "claim_task" => match arg_str(args, "id") {
+            Some(id) => format!("task:{}", id.trim()),
+            None => return,
+        },
+        "create_task" | "email_to_task" | "process_inbox_item" => "task:new".to_owned(),
+        _ => return,
+    };
+    org.actors.note(key, Some(user.to_owned()));
 }
 
 #[cfg(feature = "plugin-scheduling")]
@@ -5248,7 +6289,90 @@ fn event_json(e: &scheduling_proto::CalEvent) -> Value {
         "end": e.end,
         "all_day": e.all_day,
         "description": e.description,
+        "location": e.location,
+        "links": e.links.iter().map(|l| json!({
+            "relation": l.relation,
+            "target": l.target,
+        })).collect::<Vec<_>>(),
+        "external_ref": e.external_ref.as_ref().map(|r| json!({
+            "system": r.system,
+            "id": r.id,
+        })),
+        "tombstone": e.tombstone,
     })
+}
+
+/// `external_ref` as `'system:id'` or `{system, id}`. Absent → `None`.
+#[cfg(feature = "plugin-scheduling")]
+fn arg_external_ref(args: &Value) -> Result<Option<scheduling_proto::ExternalRef>, ToolFailure> {
+    let bad = || {
+        ToolFailure::Message(
+            "`external_ref` must be 'system:id' (e.g. 'pco:plan_time:123') or {system, id}".into(),
+        )
+    };
+    match args.get("external_ref") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) => scheduling_proto::ExternalRef::parse(s)
+            .map(Some)
+            .ok_or_else(bad),
+        Some(Value::Object(o)) => {
+            let part = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("")
+            };
+            let (system, id) = (part("system"), part("id"));
+            if system.is_empty() || id.is_empty() || system.contains(':') {
+                return Err(bad());
+            }
+            Ok(Some(scheduling_proto::ExternalRef {
+                system: system.to_owned(),
+                id: id.to_owned(),
+            }))
+        }
+        Some(_) => Err(bad()),
+    }
+}
+
+/// `links` as `[{relation, target}]`. Absent → `None`; present (even
+/// empty) → the set, so "remove every link" is expressible.
+#[cfg(feature = "plugin-scheduling")]
+fn arg_event_links(args: &Value) -> Result<Option<scheduling_proto::EventLinks>, ToolFailure> {
+    let Some(v) = args.get("links").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let items = v.as_array().ok_or_else(|| {
+        ToolFailure::Message("`links` must be an array of {relation, target}".into())
+    })?;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let relation = item
+            .get("relation")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let target = item
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !scheduling_proto::EventLink::valid_relation(relation) {
+            return Err(ToolFailure::Message(format!(
+                "link relation `{relation}` must be a lowercase slug (e.g. 'for') and not one of \
+                 the event's own fields ({})",
+                scheduling_proto::CalEvent::RESERVED_KEYS.join(", ")
+            )));
+        }
+        if target.trim_matches(|c| c == '[' || c == ']').is_empty() {
+            return Err(ToolFailure::Message(format!(
+                "link `{relation}` needs a target note, e.g. 'Gigs/caa-2026'"
+            )));
+        }
+        out.push(scheduling_proto::EventLink::new(relation, target));
+    }
+    Ok(Some(out.into()))
 }
 
 fn project_json(p: &project::ProjectInfo) -> Value {
@@ -5347,12 +6471,122 @@ fn envelope_json(e: &email_proto::Envelope) -> Value {
 mod tests {
     use super::*;
 
+    /// The request's parts as the old dispatch read them (`get` +
+    /// `cloned` on the parsed value) — the reading `parse_request`
+    /// replaced. Pinned against it so moving the parts out decides
+    /// exactly as copying them did.
+    fn copied_reading(body: &str) -> Result<RpcRequest, Value> {
+        let request: Value = serde_json::from_str(body)
+            .map_err(|e| rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}")))?;
+        if request.is_array() {
+            return Err(rpc_error(
+                Value::Null,
+                code::INVALID_REQUEST,
+                "batched requests are not supported",
+            ));
+        }
+        Ok(RpcRequest {
+            id: request.get("id").cloned().unwrap_or(Value::Null),
+            method: request
+                .get("method")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            params: request.get("params").cloned().unwrap_or_else(|| json!({})),
+        })
+    }
+
+    #[test]
+    fn parse_request_moves_what_the_copying_reading_copied() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":"a-b","method":"tools/call","params":{"name":"list_tasks","arguments":{"status":"open"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":null,"method":"tools/list","params":[]}"#,
+            r#"{"jsonrpc":"2.0","id":7}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":42}"#,
+            r#"{"id":{"nested":[1,2]},"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+            r#"42"#,
+            r#""ping""#,
+            r#"null"#,
+            r#"{"id":1,"method":"ping""#,
+            "",
+        ] {
+            assert_eq!(
+                parse_request(body.as_bytes()),
+                copied_reading(body),
+                "body {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_that_is_not_utf8_is_a_parse_error() {
+        let refusal = parse_request(b"{\"id\":1,\"method\":\"\xff\"}").unwrap_err();
+        assert_eq!(refusal["error"]["code"], code::PARSE);
+        assert_eq!(refusal["id"], Value::Null);
+    }
+
+    #[test]
+    fn split_tool_call_matches_the_copying_reading() {
+        for params in [
+            json!({ "name": "list_tasks", "arguments": { "org": "alpha" } }),
+            json!({ "name": "list_tasks" }),
+            json!({ "arguments": { "org": "alpha" } }),
+            json!({ "name": 3, "arguments": [] }),
+            json!([]),
+            json!("list_tasks"),
+            json!({}),
+        ] {
+            let copied = (
+                params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            );
+            assert_eq!(split_tool_call(params.clone()), copied, "params {params}");
+        }
+    }
+
+    #[test]
+    fn account_tools_payload_adds_org_to_every_schema() {
+        let payload = json!({ "tools": [
+            { "name": "a", "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "b" },
+        ]});
+        let out = account_tools_payload(payload, "home");
+        let tools = out["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["name"], "list_orgs");
+        assert_eq!(tools[1]["name"], "a");
+        assert_eq!(
+            tools[1]["inputSchema"]["properties"]["org"]["type"],
+            "string"
+        );
+        assert_eq!(tools[2], json!({ "name": "b" }));
+        assert_eq!(
+            account_tools_payload(json!({}), "home")["tools"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_catalog_is_built_once() {
+        assert!(std::ptr::eq(tool_catalog(), tool_catalog()));
+    }
+
     #[test]
     fn catalog_entries_are_well_formed() {
         let catalog = tool_catalog();
         assert!(catalog.len() >= 15, "catalog shrank unexpectedly");
         let mut seen = std::collections::HashSet::new();
-        for tool in &catalog {
+        for tool in catalog {
             assert!(seen.insert(tool.name), "duplicate tool `{}`", tool.name);
             // A typo'd plugin id would silently hide the tool for
             // every org (unknown ids are never in a resolved set).
@@ -5367,6 +6601,7 @@ mod tests {
                 "`{}` needs a description the model can select on",
                 tool.name
             );
+
             let schema = (tool.schema)();
             assert_eq!(schema["type"], "object", "`{}` schema", tool.name);
             assert!(schema["properties"].is_object(), "`{}` schema", tool.name);
@@ -5479,6 +6714,32 @@ mod tests {
         }
     }
 
+    /// The same agreement for the live-set tools, and that an observer's
+    /// refusal names every tool that edits.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    #[test]
+    fn live_tools_match_their_dispatch_list() {
+        let listed: Vec<&str> = live_tool_catalog().iter().map(|t| t.name).collect();
+        assert_eq!(listed, LIVE_TOOLS);
+        assert!(
+            live_tool_catalog()
+                .iter()
+                .all(|t| t.plugin == "fasttrackstudio"),
+            "live sets are the fasttrackstudio plugin's"
+        );
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for tool in LIVE_TOOLS {
+            assert!(names.contains(tool), "`{tool}` missing from the catalog");
+        }
+        for tool in LIVE_WRITE_TOOLS {
+            assert!(LIVE_TOOLS.contains(tool));
+            assert!(
+                !crate::bots::Tools::Library.allows(tool),
+                "an observer can't edit"
+            );
+        }
+    }
+
     /// The same agreement for ADR 0003's other three asset lanes, and
     /// the same reason. Checked together because they are one shape
     /// repeated: a lane that drifts from the pattern shows up here.
@@ -5532,6 +6793,138 @@ mod tests {
         let text = server_instructions("acme", chrono::Local::now());
         assert!(text.contains("list_wikis"));
         assert!(text.contains("read_wiki_page"));
+    }
+
+    /// The message a refused `subscribe_wiki` argument carries.
+    #[cfg(feature = "plugin-wiki")]
+    fn refusal<T>(r: Result<T, ToolFailure>) -> String {
+        match r {
+            Err(ToolFailure::Message(m)) => m,
+            Err(ToolFailure::Unknown) => panic!("expected a refusal, got method-not-found"),
+            Ok(_) => panic!("expected a refusal, got a kind"),
+        }
+    }
+
+    /// B1 (1/6): no `kind` and no `resource` is a wiki, which is what
+    /// every caller written before `kind` existed meant.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn subscribe_kind_defaults_to_wiki() {
+        use wiki_proto::SourceKind;
+        assert_eq!(subscribe_kind(&json!({})).ok(), Some(SourceKind::Wiki));
+        assert_eq!(
+            subscribe_kind(&json!({ "resource": false })).ok(),
+            Some(SourceKind::Wiki)
+        );
+        // A blank kind is an absent one (`arg_str` trims and drops it).
+        assert_eq!(
+            subscribe_kind(&json!({ "kind": "  " })).ok(),
+            Some(SourceKind::Wiki)
+        );
+    }
+
+    /// B1 (2/6): each of the four wire names picks its kind, and the
+    /// name the tool answers with round-trips to the same kind — the
+    /// list the schema advertises is the list the parser accepts.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn subscribe_kind_takes_every_advertised_name() {
+        use wiki_proto::SourceKind;
+        for (name, kind) in [
+            ("wiki", SourceKind::Wiki),
+            ("resource", SourceKind::Resource),
+            ("assets", SourceKind::Assets),
+            ("projects", SourceKind::Projects),
+        ] {
+            assert_eq!(subscribe_kind(&json!({ "kind": name })).ok(), Some(kind));
+            assert_eq!(subscribe_kind_name(kind), name);
+            // And the spelling `SourceKind` itself serializes to.
+            assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
+        }
+        assert_eq!(
+            subscribe_kind(&json!({ "kind": "Assets" })).ok(),
+            Some(SourceKind::Assets),
+            "case is not a different kind"
+        );
+        let schema = wiki_tool_catalog()
+            .into_iter()
+            .find(|t| t.name == "subscribe_wiki")
+            .map(|t| (t.schema)())
+            .expect("subscribe_wiki is in the catalog");
+        assert_eq!(schema["properties"]["kind"]["enum"], json!(SUBSCRIBE_KINDS));
+    }
+
+    /// B1 (3/6): `resource: true` is still `kind: "resource"`, alone or
+    /// beside the same kind spelled out.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn the_resource_flag_is_an_alias_for_the_resource_kind() {
+        use wiki_proto::SourceKind;
+        assert_eq!(
+            subscribe_kind(&json!({ "resource": true })).ok(),
+            Some(SourceKind::Resource)
+        );
+        assert_eq!(
+            subscribe_kind(&json!({ "resource": true, "kind": "resource" })).ok(),
+            Some(SourceKind::Resource)
+        );
+    }
+
+    /// B1 (4/6): `resource: true` beside a different kind is refused
+    /// rather than resolved either way, and the refusal names both.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn the_resource_flag_contradicting_kind_is_refused() {
+        for kind in ["wiki", "assets", "projects"] {
+            let m = refusal(subscribe_kind(&json!({ "resource": true, "kind": kind })));
+            assert!(m.contains("resource") && m.contains(kind), "{m}");
+        }
+    }
+
+    /// B1 (5/6): an unknown kind is refused with the four it could have
+    /// been, so the model can correct itself from the message alone.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn an_unknown_kind_is_refused_naming_the_valid_ones() {
+        for bad in ["shelf", "vault", "song", "asset"] {
+            let m = refusal(subscribe_kind(&json!({ "kind": bad })));
+            assert!(m.contains(bad), "{m}");
+            for valid in SUBSCRIBE_KINDS {
+                assert!(m.contains(valid), "{m} must name `{valid}`");
+            }
+        }
+    }
+
+    /// B1 (6/6): the qualified id follows the kind. Flat tiers take one
+    /// slug segment; a project's slug may be a path; a malformed id is
+    /// refused for every kind before any backend work.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn the_qualified_id_shape_follows_the_kind() {
+        use wiki_proto::SourceKind;
+        assert_eq!(
+            split_qualified("acme.test/songs", SourceKind::Assets).ok(),
+            Some(("acme.test".to_owned(), "songs".to_owned()))
+        );
+        assert_eq!(
+            split_qualified("acme.test/album/track-two", SourceKind::Projects).ok(),
+            Some(("acme.test".to_owned(), "album/track-two".to_owned()))
+        );
+        for flat in [SourceKind::Wiki, SourceKind::Resource, SourceKind::Assets] {
+            let m = refusal(split_qualified("acme.test/songs/extra", flat));
+            assert!(m.contains("domain/slug"), "{m}");
+        }
+        for kind in [
+            SourceKind::Wiki,
+            SourceKind::Resource,
+            SourceKind::Assets,
+            SourceKind::Projects,
+        ] {
+            for bad in ["no-domain", "/songs", "acme.test/", "acme.test/album//x"] {
+                let m = refusal(split_qualified(bad, kind));
+                assert!(m.contains("domain/slug"), "{bad} as {kind:?}: {m}");
+            }
+        }
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub fn walk_vault(root: &Path) -> Vec<VaultEntry> {
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !is_skip(e.path(), root))
+        .filter_entry(|e| !is_skip(e, root))
     {
         let entry = match entry {
             Ok(e) => e,
@@ -49,32 +49,58 @@ pub fn walk_vault(root: &Path) -> Vec<VaultEntry> {
         if entry.file_type().is_dir() {
             continue;
         }
-        let abs = entry.path().to_path_buf();
-        let ext = abs
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase);
-        let kind = match ext.as_deref() {
-            Some("md" | "markdown") => VaultEntryKind::Markdown,
-            Some("base") => VaultEntryKind::Base,
-            _ => continue,
-        };
-        let Ok(rel) = abs.strip_prefix(root) else {
+        // Classified on the borrowed path: every file in the vault
+        // (attachments included) passes through here and only pages
+        // are kept, so nothing is allocated until one is.
+        let Some(kind) = classify(entry.path()) else {
             continue;
         };
+        let Ok(rel) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        let rel_path = rel_string(rel);
         out.push(VaultEntry {
-            abs_path: abs.clone(),
-            rel_path: rel.to_string_lossy().replace('\\', "/"),
+            // `into_path` moves walkdir's own buffer out of the entry,
+            // where this used to copy it and then clone the copy.
+            abs_path: entry.into_path(),
+            rel_path,
             kind,
         });
     }
     out
 }
 
+/// A page's kind by its extension, case-insensitively and without
+/// lowering a copy of it. `None` for every file the vault does not load.
+fn classify(path: &Path) -> Option<VaultEntryKind> {
+    let ext = path.extension()?.to_str()?;
+    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") {
+        Some(VaultEntryKind::Markdown)
+    } else if ext.eq_ignore_ascii_case("base") {
+        Some(VaultEntryKind::Base)
+    } else {
+        None
+    }
+}
+
+/// A vault-relative path as the forward-slash string the vault keys on,
+/// in one allocation: the separator rewrite only runs when there is a
+/// backslash to rewrite (never, on Unix).
+#[must_use]
+pub fn rel_string(rel: &Path) -> String {
+    let s = rel.to_string_lossy();
+    if s.contains('\\') {
+        s.replace('\\', "/")
+    } else {
+        s.into_owned()
+    }
+}
+
 /// Filter applied during the walk so we don't descend into
 /// directories we know to skip (`.git`, `.obsidian`, …), hidden
 /// files, or a **nested shelf**.
-fn is_skip(path: &Path, root: &Path) -> bool {
+fn is_skip(entry: &walkdir::DirEntry, root: &Path) -> bool {
+    let path = entry.path();
     if path == root {
         return false;
     }
@@ -85,13 +111,19 @@ fn is_skip(path: &Path, root: &Path) -> bool {
     if name.starts_with('.') {
         return true;
     }
+    // Only directories are pruned below, and walkdir already knows
+    // which entries are directories: asking it is free, where
+    // `path.is_dir()` was a `stat` per check (three per entry).
+    if !entry.file_type().is_dir() {
+        return false;
+    }
     // A node-private directory is never a page source, whatever it is
     // called (`vault.private.node-only`).
-    if path.is_dir() && files_proto::consts::is_private_dir(path) {
+    if files_proto::consts::is_private_dir(path) {
         return true;
     }
     // Conventional vault-trash directory.
-    if path.is_dir() && matches!(name, "trash" | "Trash") {
+    if matches!(name, "trash" | "Trash") {
         return true;
     }
     // A directory that declares itself a root of its own belongs to
@@ -99,7 +131,7 @@ fn is_skip(path: &Path, root: &Path) -> bool {
     // why a file in two roots at once is the worst outcome available.
     // `filter_entry` does not descend into a rejected directory, so one
     // check at the boundary prunes the whole subtree.
-    if path.is_dir() && crate::shelf_boundary::is_nested_shelf(root, path) {
+    if crate::shelf_boundary::is_nested_shelf(root, path) {
         return true;
     }
     false

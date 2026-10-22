@@ -10,10 +10,13 @@
 //! - `formula.<name>` → [`Expr::FormulaRef`]
 //! - bare `<name>` → [`Expr::NoteProp`]
 //!
-//! Function calls (`recv.fn(arg, …)`) are parsed generically; the
-//! evaluator (in `knowledge-ui::bases`) maps `hasTag` / `hasLink` /
-//! `inFolder` / `contains` / `startsWith` / `endsWith` semantics on
-//! top of [`FilterNode::Call`].
+//! Function calls (`recv.fn(arg, …)`) are parsed generically. The
+//! evaluator is [`BaseEval`] (below; driven by [`execute_view`] and
+//! [`view_table`]): it runs `formulas:`, maps `hasTag` / `hasLink` /
+//! `exists` / `hasProperty` / `inFolder` / `contains` / `startsWith` /
+//! `endsWith` on top of [`FilterNode::Call`], exposes `file.links`, and
+//! follows link values (`note.song.key` reads the linked note's `key`).
+//! Unknown functions evaluate to `null` rather than failing the view.
 
 use serde::{Deserialize, Serialize};
 
@@ -944,6 +947,22 @@ pub mod expr_parser {
         Ok(node)
     }
 
+    /// Parse one value expression — a `formulas:` entry such as
+    /// `if(fee > 0, fee * 0.1, 0)` or `note.song.key + " major"`.
+    pub fn parse_expression(src: &str) -> Result<Expr, BaseParseError> {
+        let mut p = Parser::new(src);
+        let expr = p.parse_expr()?;
+        p.skip_ws();
+        if p.pos < p.src.len() {
+            return Err(BaseParseError::Expr(format!(
+                "trailing input at byte {}: {:?}",
+                p.pos,
+                &p.src[p.pos..]
+            )));
+        }
+        Ok(expr)
+    }
+
     struct Parser<'a> {
         src: &'a [u8],
         pos: usize,
@@ -1743,6 +1762,11 @@ pub struct BaseRow {
     /// by `file.tags` lookups so `.contains("chart")` works the
     /// way Obsidian does.
     pub tags: Vec<String>,
+    /// Outgoing wikilink targets, as written (`Songs/Song A`, no
+    /// brackets, alias or heading). Frontmatter links are collected
+    /// by the constructors; body links are added with
+    /// [`BaseRow::with_links`]. Backs `file.links` / `file.hasLink()`.
+    pub links: Vec<String>,
     /// Top-level frontmatter map. Empty if the page has no
     /// frontmatter or it failed to decode.
     pub frontmatter: indexmap::IndexMap<String, serde_json::Value>,
@@ -1751,7 +1775,8 @@ pub struct BaseRow {
 impl BaseRow {
     /// Build from a `(page_id, basename, frontmatter_json)` triple.
     /// Path/folder/ext default to empty; tags are inferred from the
-    /// frontmatter `tags` (or `tag`) key when present.
+    /// frontmatter `tags` (or `tag`) key when present, links from any
+    /// `[[wikilink]]` string in the frontmatter.
     pub fn from_parts(
         page_id: uuid::Uuid,
         basename: impl Into<String>,
@@ -1760,6 +1785,7 @@ impl BaseRow {
         let frontmatter: indexmap::IndexMap<String, serde_json::Value> =
             serde_json::from_str(frontmatter_json).unwrap_or_default();
         let tags = tags_from_frontmatter(&frontmatter);
+        let links = links_from_frontmatter(&frontmatter);
         Self {
             page_id,
             basename: basename.into(),
@@ -1767,6 +1793,7 @@ impl BaseRow {
             folder: String::new(),
             ext: String::new(),
             tags,
+            links,
             frontmatter,
         }
     }
@@ -1793,6 +1820,7 @@ impl BaseRow {
                 tags.push(t.clone());
             }
         }
+        let links = links_from_frontmatter(&frontmatter);
         Self {
             page_id,
             basename: basename.into(),
@@ -1800,12 +1828,23 @@ impl BaseRow {
             folder: folder.into(),
             ext: ext.into(),
             tags,
+            links,
             frontmatter,
         }
     }
 
-    fn lookup(&self, expr: &Expr) -> serde_json::Value {
-        eval_expr(expr, self)
+    /// Merge body wikilink targets into [`BaseRow::links`] (dedup,
+    /// order-preserving). Targets are taken as written; brackets,
+    /// `|alias` and `#heading` are stripped.
+    #[must_use]
+    pub fn with_links<S: AsRef<str>>(mut self, links: impl IntoIterator<Item = S>) -> Self {
+        for l in links {
+            let t = normalize_link_target(l.as_ref());
+            if !t.is_empty() && !self.links.iter().any(|x| x == &t) {
+                self.links.push(t);
+            }
+        }
+        self
     }
 }
 
@@ -1837,6 +1876,81 @@ fn tags_from_frontmatter(fm: &indexmap::IndexMap<String, serde_json::Value>) -> 
     out
 }
 
+/// Every `[[wikilink]]` anywhere in the frontmatter (strings, lists,
+/// nested maps, and YAML's unquoted `[[x]]` nested-list form).
+fn links_from_frontmatter(fm: &indexmap::IndexMap<String, serde_json::Value>) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(t) = link_of(v) {
+            if !out.iter().any(|x| x == &t) {
+                out.push(t);
+            }
+            return;
+        }
+        match v {
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for v in fm.values() {
+        walk(v, &mut out);
+    }
+    out
+}
+
+/// `[[Target|alias]]`, `[[Target#Heading]]`, `Target.md` → `Target`.
+/// Brackets are optional, so plain names and paths normalize too.
+#[must_use]
+pub fn normalize_link_target(raw: &str) -> String {
+    let s = raw.trim();
+    let s = s
+        .strip_prefix("[[")
+        .and_then(|r| r.strip_suffix("]]"))
+        .unwrap_or(s);
+    let s = s.split('|').next().unwrap_or("");
+    let s = s.split('#').next().unwrap_or("");
+    let s = s.trim().trim_start_matches('/');
+    s.strip_suffix(".md").unwrap_or(s).to_string()
+}
+
+/// The link a value carries, if it is one: a `"[[Target]]"` string,
+/// or the `[["Target"]]` nested list YAML makes of an unquoted
+/// wikilink. Plain strings are not links.
+fn link_of(v: &serde_json::Value) -> Option<String> {
+    use serde_json::Value as V;
+    match v {
+        V::String(s) => {
+            let t = s.trim();
+            (t.starts_with("[[") && t.ends_with("]]") && t.len() > 4)
+                .then(|| normalize_link_target(t))
+                .filter(|t| !t.is_empty())
+        }
+        V::Array(outer) if outer.len() == 1 => match &outer[0] {
+            V::Array(inner) if inner.len() == 1 => inner[0]
+                .as_str()
+                .map(normalize_link_target)
+                .filter(|t| !t.is_empty()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A link value or a plain string, as a link target — what
+/// `hasLink(...)` / `.exists()` accept as their subject.
+fn target_of(v: &serde_json::Value) -> Option<String> {
+    link_of(v).or_else(|| {
+        v.as_str()
+            .map(normalize_link_target)
+            .filter(|t| !t.is_empty())
+    })
+}
+
+fn link_value(target: &str) -> serde_json::Value {
+    serde_json::Value::String(format!("[[{target}]]"))
+}
+
 /// Result of running a view: rows grouped (or one bucket when no
 /// `group_by`), in the order they should render.
 #[derive(Clone, Debug, PartialEq)]
@@ -1849,59 +1963,97 @@ pub struct ExecutedView {
 /// Run one `ViewSpec` over `rows`. Applies (in order):
 /// 1. Global filter (AND-ed with view-scoped filter, if present).
 /// 2. Sort by the view's `sort` keys, falling back to `basename`.
-/// 3. Group by `group_by` (frontmatter key). When `None`, one
-///    bucket labelled `""`.
+/// 3. Group by `group_by` (any column: frontmatter key, `file.*`,
+///    `formula.*`). When `None`, one bucket labelled `""`.
 /// 4. Limit (per-bucket).
+///
+/// Every row in `rows` is also the link-resolution universe, so
+/// `note.song.key` can read a note the filter drops.
 pub fn execute_view<I: IntoIterator<Item = BaseRow>>(
     base: &ParsedBase,
     view: &ViewSpec,
     rows: I,
 ) -> ExecutedView {
-    let combined: FilterNode = match &view.filter {
-        Some(view_filter) if !matches!(base.global_filter, FilterNode::None) => FilterNode::And {
-            args: vec![base.global_filter.clone(), view_filter.clone()],
-        },
-        Some(view_filter) => view_filter.clone(),
-        None => base.global_filter.clone(),
-    };
-
-    let mut filtered: Vec<BaseRow> = rows
+    let all: Vec<BaseRow> = rows.into_iter().collect();
+    let cx = BaseEval::new(base, &all);
+    let groups = cx
+        .run(view)
         .into_iter()
-        .filter(|r| filter_matches(&combined, r))
+        .map(|(label, idx)| (label, idx.into_iter().map(|i| all[i].clone()).collect()))
         .collect();
+    ExecutedView { groups }
+}
 
-    filtered.sort_by(|a, b| compare_rows(a, b, &view.sort));
+/// One view run and projected for a reader (an agent, a CLI): each
+/// row's visible columns plus every formula's value.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewTable {
+    pub name: String,
+    pub kind: String,
+    /// The columns `values` carries, in order (the view's `order`,
+    /// or `file.name` when it names none).
+    pub columns: Vec<String>,
+    pub groups: Vec<TableGroup>,
+}
 
-    let groups: Vec<(String, Vec<BaseRow>)> = if let Some(key) = view.group_by.as_deref() {
-        let mut buckets: indexmap::IndexMap<String, Vec<BaseRow>> = indexmap::IndexMap::new();
-        for r in filtered {
-            let label = r
-                .frontmatter
-                .get(key)
-                .map(value_to_label)
-                .unwrap_or_default();
-            buckets.entry(label).or_default().push(r);
-        }
-        // Stable: insertion order is the order labels were first
-        // observed. Caller can reorder via post-processing.
-        buckets.into_iter().collect()
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TableGroup {
+    /// `""` when the view has no `group_by`.
+    pub label: String,
+    pub rows: Vec<TableRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TableRow {
+    pub path: String,
+    pub name: String,
+    /// Column → value, for every entry in [`ViewTable::columns`].
+    pub values: indexmap::IndexMap<String, serde_json::Value>,
+    /// Formula name → value, for every formula the base declares.
+    pub formulas: indexmap::IndexMap<String, serde_json::Value>,
+}
+
+/// Run `view` over `rows` and project it into a [`ViewTable`].
+#[must_use]
+pub fn view_table(base: &ParsedBase, view: &ViewSpec, rows: &[BaseRow]) -> ViewTable {
+    let cx = BaseEval::new(base, rows);
+    let columns = if view.order.is_empty() {
+        vec!["file.name".to_string()]
     } else {
-        vec![(String::new(), filtered)]
+        view.order.clone()
     };
-
-    let limited = if let Some(limit) = view.limit {
-        groups
-            .into_iter()
-            .map(|(k, mut v)| {
-                v.truncate(limit as usize);
-                (k, v)
-            })
-            .collect()
-    } else {
-        groups
-    };
-
-    ExecutedView { groups: limited }
+    let groups = cx
+        .run(view)
+        .into_iter()
+        .map(|(label, idx)| TableGroup {
+            label,
+            rows: idx
+                .into_iter()
+                .map(|i| {
+                    let row = &rows[i];
+                    TableRow {
+                        path: row.path.clone(),
+                        name: row.basename.clone(),
+                        values: columns
+                            .iter()
+                            .map(|c| (c.clone(), cx.column(row, c)))
+                            .collect(),
+                        formulas: base
+                            .formulas
+                            .iter()
+                            .map(|f| (f.name.clone(), cx.formula(&f.name, row)))
+                            .collect(),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    ViewTable {
+        name: view.name.clone(),
+        kind: view.kind.as_str().to_string(),
+        columns,
+        groups,
+    }
 }
 
 fn value_to_label(v: &serde_json::Value) -> String {
@@ -1911,37 +2063,6 @@ fn value_to_label(v: &serde_json::Value) -> String {
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Null => String::new(),
         other => other.to_string(),
-    }
-}
-
-fn filter_matches(node: &FilterNode, row: &BaseRow) -> bool {
-    match node {
-        FilterNode::None => true,
-        FilterNode::And { args } => args.iter().all(|n| filter_matches(n, row)),
-        FilterNode::Or { args } => args.iter().any(|n| filter_matches(n, row)),
-        FilterNode::Not { arg } => !filter_matches(arg, row),
-        FilterNode::Truthy { expr } => is_truthy(&eval_expr(expr, row)),
-        FilterNode::Cmp { left, op, right } => {
-            let l = eval_expr(left, row);
-            let r = eval_expr(right, row);
-            cmp_values(&l, *op, &r)
-        }
-        // Unified dispatch — wrap into `Expr::Call` and reuse the
-        // expression evaluator so `contains` / `hasTag` /
-        // `startsWith` / … behave identically whether they appear
-        // as a filter root or inside a nested expression.
-        FilterNode::Call {
-            receiver,
-            name,
-            args,
-        } => {
-            let call = Expr::Call {
-                receiver: Some(Box::new(receiver.clone())),
-                name: name.clone(),
-                args: args.clone(),
-            };
-            is_truthy(&eval_expr(&call, row))
-        }
     }
 }
 
@@ -2028,112 +2149,648 @@ fn value_contains(haystack: &serde_json::Value, needle: &serde_json::Value) -> b
 // names / unsupported constructs return `Value::Null` (never panic)
 // — the bases language is open-ended via plugin extensions and we
 // don't want one stray identifier to drop a whole view to zero rows.
+//
+// Evaluation runs against a [`BaseEval`]: the base's formulas plus the
+// whole row set, indexed by path and basename so a link value
+// (`"[[Song A]]"`) can be followed to the note it names.
 
-fn eval_expr(expr: &Expr, row: &BaseRow) -> serde_json::Value {
-    use serde_json::Value as V;
-    match expr {
-        Expr::Literal { value } => value.clone(),
-        // `this` — full templated bases (Project Hierarchy, etc.)
-        // aren't wired up yet. Returning Null lets `this.up == foo`
-        // style predicates parse-and-degrade-to-empty cleanly.
-        // FUTURE: thread "current page" into BaseRow and resolve.
-        Expr::This => V::Null,
-        Expr::FileProp { name } => eval_file_prop(name, row),
-        Expr::NoteProp { name } => eval_note_prop(name, row),
-        // FUTURE: formula support — needs a second pass that parses
-        // `formula.expression` strings into Exprs and evaluates them
-        // with the surrounding row. Returning Null keeps comparisons
-        // false rather than panicking.
-        Expr::FormulaRef { .. } => V::Null,
-        Expr::Unary { op, arg } => {
-            let v = eval_expr(arg, row);
-            match op {
-                UnaryOp::Neg => match v.as_f64() {
-                    Some(f) => json_num(-f),
-                    None => V::Null,
-                },
-                UnaryOp::Not => V::Bool(!is_truthy(&v)),
+/// How deep formula references (and the link hops inside them) may
+/// nest before the evaluator gives up with `null`. Cycles are caught
+/// earlier by the in-progress marker in [`BaseEval::formula`]; this
+/// bounds long link-follow chains and the stack.
+const MAX_EVAL_DEPTH: u8 = 16;
+
+/// One memoized formula value for one row.
+enum FormulaSlot {
+    /// Being evaluated right now: a reference back to it is a cycle.
+    InProgress,
+    Done(serde_json::Value),
+}
+
+/// Evaluation context for one base over one row set.
+// t[impl vault.bases.links]
+pub struct BaseEval<'a> {
+    rows: &'a [BaseRow],
+    /// Lower-cased vault path without `.md` → row index.
+    by_path: std::collections::HashMap<String, usize>,
+    /// Lower-cased basename → row index, or `None` when two notes
+    /// share the basename (an ambiguous `[[Name]]` resolves to nothing).
+    by_name: std::collections::HashMap<String, Option<usize>>,
+    /// Formula name → parsed expression (or its parse error).
+    formulas: std::collections::HashMap<String, Result<Expr, String>>,
+    /// The base's top-level `filters:`; [`FilterNode::None`] without a base.
+    global_filter: FilterNode,
+    depth: std::cell::Cell<u8>,
+    /// `(formula, row index)` → value, so each formula is evaluated at
+    /// most once per row however often it is referenced: evaluation is
+    /// linear in formulas × rows, even for a caller-written base whose
+    /// formulas fan out (`a: b + b`, `b: c + c`, …).
+    memo: std::cell::RefCell<std::collections::HashMap<(String, usize), FormulaSlot>>,
+    /// Formula evaluations actually run (memo misses); a cost probe
+    /// for the tests.
+    formula_evals: std::cell::Cell<u64>,
+}
+
+impl<'a> BaseEval<'a> {
+    /// Index `rows` for link resolution and parse `base`'s formulas.
+    #[must_use]
+    pub fn new(base: &ParsedBase, rows: &'a [BaseRow]) -> Self {
+        let mut cx = Self::over(rows);
+        cx.global_filter = base.global_filter.clone();
+        cx.formulas = base
+            .formulas
+            .iter()
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    expr_parser::parse_expression(&f.expression).map_err(|e| e.to_string()),
+                )
+            })
+            .collect();
+        cx
+    }
+
+    /// A context with rows but no formulas.
+    #[must_use]
+    pub fn over(rows: &'a [BaseRow]) -> Self {
+        let mut by_path = std::collections::HashMap::new();
+        let mut by_name = std::collections::HashMap::new();
+        for (i, r) in rows.iter().enumerate() {
+            if !r.path.is_empty() {
+                by_path
+                    .entry(normalize_link_target(&r.path).to_lowercase())
+                    .or_insert(i);
+            }
+            by_name
+                .entry(r.basename.to_lowercase())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(i));
+        }
+        Self {
+            rows,
+            by_path,
+            by_name,
+            formulas: std::collections::HashMap::new(),
+            global_filter: FilterNode::None,
+            depth: std::cell::Cell::new(0),
+            memo: std::cell::RefCell::new(std::collections::HashMap::new()),
+            formula_evals: std::cell::Cell::new(0),
+        }
+    }
+
+    /// The row a link target names: an exact vault path first, then
+    /// the basename (Obsidian's shortest-unique-name links).
+    #[must_use]
+    pub fn resolve(&self, target: &str) -> Option<&'a BaseRow> {
+        let key = normalize_link_target(target).to_lowercase();
+        if key.is_empty() {
+            return None;
+        }
+        self.by_path
+            .get(&key)
+            .or_else(|| {
+                if key.contains('/') {
+                    None
+                } else {
+                    self.by_name.get(&key).and_then(Option::as_ref)
+                }
+            })
+            .map(|&i| &self.rows[i])
+    }
+
+    /// `row`'s index when it is one of this context's rows (by
+    /// address, O(1)); `None` for a row from elsewhere.
+    fn slot_of(&self, row: &BaseRow) -> Option<usize> {
+        let size = std::mem::size_of::<BaseRow>();
+        let start = self.rows.as_ptr() as usize;
+        let at = std::ptr::from_ref(row) as usize;
+        let off = at.checked_sub(start)?;
+        (size > 0 && off % size == 0 && off / size < self.rows.len()).then_some(off / size)
+    }
+
+    /// Filter, sort, group and limit `view` (AND-ed with the base's
+    /// global filter). Returns row indices into the row set.
+    fn run(&self, view: &ViewSpec) -> Vec<(String, Vec<usize>)> {
+        let base_filter = self.global_filter.clone();
+        let combined = match &view.filter {
+            Some(vf) if !matches!(base_filter, FilterNode::None) => FilterNode::And {
+                args: vec![base_filter, vf.clone()],
+            },
+            Some(vf) => vf.clone(),
+            None => base_filter,
+        };
+        let mut keep: Vec<usize> = (0..self.rows.len())
+            .filter(|&i| self.filter_matches(&combined, &self.rows[i]))
+            .collect();
+        keep.sort_by(|&a, &b| self.compare_rows(&self.rows[a], &self.rows[b], &view.sort));
+
+        let mut groups: Vec<(String, Vec<usize>)> = if let Some(key) = view.group_by.as_deref() {
+            let mut buckets: indexmap::IndexMap<String, Vec<usize>> = indexmap::IndexMap::new();
+            for i in keep {
+                let label = value_to_label(&self.column(&self.rows[i], key));
+                buckets.entry(label).or_default().push(i);
+            }
+            // Stable: insertion order is the order labels were first
+            // observed. Caller can reorder via post-processing.
+            buckets.into_iter().collect()
+        } else {
+            vec![(String::new(), keep)]
+        };
+        if let Some(limit) = view.limit {
+            for (_, v) in &mut groups {
+                v.truncate(limit as usize);
             }
         }
-        Expr::Binary { op, left, right } => match op {
-            BinOp::And => {
-                let l = eval_expr(left, row);
-                if !is_truthy(&l) {
-                    return V::Bool(false);
-                }
-                V::Bool(is_truthy(&eval_expr(right, row)))
+        groups
+    }
+
+    /// Whether `node` holds for `row`.
+    #[must_use]
+    pub fn filter_matches(&self, node: &FilterNode, row: &BaseRow) -> bool {
+        match node {
+            FilterNode::None => true,
+            FilterNode::And { args } => args.iter().all(|n| self.filter_matches(n, row)),
+            FilterNode::Or { args } => args.iter().any(|n| self.filter_matches(n, row)),
+            FilterNode::Not { arg } => !self.filter_matches(arg, row),
+            FilterNode::Truthy { expr } => is_truthy(&self.eval(expr, row)),
+            FilterNode::Cmp { left, op, right } => {
+                cmp_values(&self.eval(left, row), *op, &self.eval(right, row))
             }
-            BinOp::Or => {
-                let l = eval_expr(left, row);
-                if is_truthy(&l) {
-                    return V::Bool(true);
-                }
-                V::Bool(is_truthy(&eval_expr(right, row)))
+            // Unified dispatch — wrap into `Expr::Call` and reuse the
+            // expression evaluator so `contains` / `hasTag` /
+            // `startsWith` / … behave identically whether they appear
+            // as a filter root or inside a nested expression.
+            FilterNode::Call {
+                receiver,
+                name,
+                args,
+            } => {
+                let call = Expr::Call {
+                    receiver: Some(Box::new(receiver.clone())),
+                    name: name.clone(),
+                    args: args.clone(),
+                };
+                is_truthy(&self.eval(&call, row))
             }
-            BinOp::Eq => V::Bool(cmp_values(
-                &eval_expr(left, row),
-                CmpOp::Eq,
-                &eval_expr(right, row),
-            )),
-            BinOp::Neq => V::Bool(cmp_values(
-                &eval_expr(left, row),
-                CmpOp::Neq,
-                &eval_expr(right, row),
-            )),
-            BinOp::Lt => V::Bool(cmp_values(
-                &eval_expr(left, row),
-                CmpOp::Lt,
-                &eval_expr(right, row),
-            )),
-            BinOp::Le => V::Bool(cmp_values(
-                &eval_expr(left, row),
-                CmpOp::Le,
-                &eval_expr(right, row),
-            )),
-            BinOp::Gt => V::Bool(cmp_values(
-                &eval_expr(left, row),
-                CmpOp::Gt,
-                &eval_expr(right, row),
-            )),
-            BinOp::Ge => V::Bool(cmp_values(
-                &eval_expr(left, row),
-                CmpOp::Ge,
-                &eval_expr(right, row),
-            )),
-            BinOp::Add => {
-                let l = eval_expr(left, row);
-                let r = eval_expr(right, row);
-                // String concat if either side is a string (matches
-                // JS/Obsidian); otherwise numeric addition.
-                if matches!(l, V::String(_)) || matches!(r, V::String(_)) {
-                    V::String(format!("{}{}", value_to_string(&l), value_to_string(&r)))
+        }
+    }
+
+    /// The value of one view column (`file.*`, `formula.*`, `note.*`
+    /// or a bare frontmatter key) for `row`.
+    #[must_use]
+    pub fn column(&self, row: &BaseRow, column: &str) -> serde_json::Value {
+        if column == "basename" {
+            return serde_json::Value::String(row.basename.clone());
+        }
+        let expr = if let Some(name) = column.strip_prefix("file.") {
+            Expr::FileProp { name: name.into() }
+        } else if let Some(name) = column.strip_prefix("formula.") {
+            Expr::FormulaRef { name: name.into() }
+        } else {
+            Expr::NoteProp {
+                name: column.strip_prefix("note.").unwrap_or(column).into(),
+            }
+        };
+        self.eval(&expr, row)
+    }
+
+    /// One formula's value for `row`; `null` for an unknown or
+    /// unparseable formula, one that refers back to itself (directly
+    /// or through others), or one nested deeper than [`MAX_EVAL_DEPTH`].
+    ///
+    /// Values are memoized per `(formula, row)`, so a formula runs at
+    /// most once per row. A formula met again while it is still being
+    /// evaluated is a cycle and reads as `null`.
+    #[must_use]
+    pub fn formula(&self, name: &str, row: &BaseRow) -> serde_json::Value {
+        let Some(Ok(expr)) = self.formulas.get(name) else {
+            return serde_json::Value::Null;
+        };
+        let Some(i) = self.slot_of(row) else {
+            // Not one of our rows (a caller-built row): no memo key.
+            // Still bounded by the depth guard.
+            self.formula_evals.set(self.formula_evals.get() + 1);
+            return self.nested(|| self.eval(expr, row));
+        };
+        let key = (name.to_owned(), i);
+        match self.memo.borrow().get(&key) {
+            Some(FormulaSlot::Done(v)) => return v.clone(),
+            Some(FormulaSlot::InProgress) => return serde_json::Value::Null,
+            None => {}
+        }
+        self.memo
+            .borrow_mut()
+            .insert(key.clone(), FormulaSlot::InProgress);
+        self.formula_evals.set(self.formula_evals.get() + 1);
+        let v = self.nested(|| self.eval(expr, row));
+        self.memo
+            .borrow_mut()
+            .insert(key, FormulaSlot::Done(v.clone()));
+        v
+    }
+
+    /// Run `f` one level deeper; `null` past [`MAX_EVAL_DEPTH`].
+    fn nested(&self, f: impl FnOnce() -> serde_json::Value) -> serde_json::Value {
+        let d = self.depth.get();
+        if d >= MAX_EVAL_DEPTH {
+            return serde_json::Value::Null;
+        }
+        self.depth.set(d + 1);
+        let v = f();
+        self.depth.set(d);
+        v
+    }
+
+    /// Evaluate `expr` against `row`.
+    #[must_use]
+    pub fn eval(&self, expr: &Expr, row: &BaseRow) -> serde_json::Value {
+        use serde_json::Value as V;
+        match expr {
+            Expr::Literal { value } => value.clone(),
+            // `this` — full templated bases (Project Hierarchy, etc.)
+            // aren't wired up yet. Returning Null lets `this.up == foo`
+            // style predicates parse-and-degrade-to-empty cleanly.
+            // FUTURE: thread "current page" into the context and resolve.
+            Expr::This => V::Null,
+            Expr::FileProp { name } => self.file_prop(name, row),
+            Expr::NoteProp { name } => self.note_prop(name, row),
+            Expr::FormulaRef { name } => {
+                let mut parts = name.split('.');
+                let head = parts.next().unwrap_or("");
+                if head.is_empty() {
+                    return V::Null;
+                }
+                let v = self.formula(head, row);
+                self.walk(v, parts)
+            }
+            Expr::Unary { op, arg } => {
+                let v = self.eval(arg, row);
+                match op {
+                    UnaryOp::Neg => match v.as_f64() {
+                        Some(f) => json_num(-f),
+                        None => V::Null,
+                    },
+                    UnaryOp::Not => V::Bool(!is_truthy(&v)),
+                }
+            }
+            Expr::Binary { op, left, right } => {
+                let cmp = |op: CmpOp| {
+                    V::Bool(cmp_values(
+                        &self.eval(left, row),
+                        op,
+                        &self.eval(right, row),
+                    ))
+                };
+                let arith = |f: fn(f64, f64) -> f64| {
+                    arith_vals(&self.eval(left, row), &self.eval(right, row), f)
+                };
+                match op {
+                    BinOp::And => {
+                        if !is_truthy(&self.eval(left, row)) {
+                            return V::Bool(false);
+                        }
+                        V::Bool(is_truthy(&self.eval(right, row)))
+                    }
+                    BinOp::Or => {
+                        if is_truthy(&self.eval(left, row)) {
+                            return V::Bool(true);
+                        }
+                        V::Bool(is_truthy(&self.eval(right, row)))
+                    }
+                    BinOp::Eq => cmp(CmpOp::Eq),
+                    BinOp::Neq => cmp(CmpOp::Neq),
+                    BinOp::Lt => cmp(CmpOp::Lt),
+                    BinOp::Le => cmp(CmpOp::Le),
+                    BinOp::Gt => cmp(CmpOp::Gt),
+                    BinOp::Ge => cmp(CmpOp::Ge),
+                    BinOp::Add => {
+                        let l = self.eval(left, row);
+                        let r = self.eval(right, row);
+                        // String concat if either side is a string (matches
+                        // JS/Obsidian); otherwise numeric addition.
+                        if matches!(l, V::String(_)) || matches!(r, V::String(_)) {
+                            V::String(format!("{}{}", value_to_string(&l), value_to_string(&r)))
+                        } else {
+                            arith_vals(&l, &r, |a, b| a + b)
+                        }
+                    }
+                    BinOp::Sub => arith(|a, b| a - b),
+                    BinOp::Mul => arith(|a, b| a * b),
+                    BinOp::Div => arith(|a, b| a / b),
+                    BinOp::Rem => arith(|a, b| a % b),
+                }
+            }
+            Expr::Call {
+                receiver,
+                name,
+                args,
+            } => self.call(receiver.as_deref(), name, args, row),
+        }
+    }
+
+    /// Walk the remaining `.seg` path segments from `v`.
+    fn walk<'s>(
+        &self,
+        mut v: serde_json::Value,
+        segs: impl Iterator<Item = &'s str>,
+    ) -> serde_json::Value {
+        for seg in segs {
+            v = self.member(&v, seg);
+        }
+        v
+    }
+
+    /// `v.seg`: a map key, a list/string `length`, a property of the
+    /// note a link names (link-follow), or — on a plain list — the
+    /// member of each element.
+    fn member(&self, v: &serde_json::Value, seg: &str) -> serde_json::Value {
+        use serde_json::Value as V;
+        if let Some(target) = link_of(v) {
+            return match self.resolve(&target) {
+                Some(linked) => self.nested(|| self.note_prop(seg, linked)),
+                None => V::Null,
+            };
+        }
+        match v {
+            V::Object(map) => map.get(seg).cloned().unwrap_or(V::Null),
+            V::String(s) if seg == "length" => json_num(s.chars().count() as f64),
+            V::Array(items) if seg == "length" => json_num(items.len() as f64),
+            V::Array(items) => V::Array(items.iter().map(|i| self.member(i, seg)).collect()),
+            _ => V::Null,
+        }
+    }
+
+    fn file_prop(&self, name: &str, row: &BaseRow) -> serde_json::Value {
+        use serde_json::Value as V;
+        let mut parts = name.split('.');
+        let head = parts.next().unwrap_or("");
+        let v = match head {
+            // `file` itself with no member access — used only as a
+            // receiver for method calls; return Null so a bare `file`
+            // doesn't accidentally pass a Truthy filter.
+            "" => V::Null,
+            "name" | "basename" => V::String(row.basename.clone()),
+            "path" => {
+                if row.path.is_empty() {
+                    V::Null
                 } else {
-                    arith(&l, &r, |a, b| a + b)
+                    V::String(row.path.clone())
                 }
             }
-            BinOp::Sub => arith_eval(left, right, row, |a, b| a - b),
-            BinOp::Mul => arith_eval(left, right, row, |a, b| a * b),
-            BinOp::Div => arith_eval(left, right, row, |a, b| a / b),
-            BinOp::Rem => arith_eval(left, right, row, |a, b| a % b),
-        },
-        Expr::Call {
-            receiver,
-            name,
-            args,
-        } => eval_call(receiver.as_deref(), name, args, row),
+            "folder" => V::String(row.folder.clone()),
+            "ext" => {
+                if row.ext.is_empty() {
+                    V::Null
+                } else {
+                    V::String(row.ext.clone())
+                }
+            }
+            "tags" => V::Array(row.tags.iter().map(|t| V::String(t.clone())).collect()),
+            // Each outgoing link as a link value, so `file.links` can be
+            // followed (`file.links.status`) or counted.
+            "links" => V::Array(
+                row.links
+                    .iter()
+                    .map(String::as_str)
+                    .map(link_value)
+                    .collect(),
+            ),
+            // FUTURE: file.size / file.mtime / file.ctime /
+            // file.embeds — we don't carry that data on `BaseRow` yet.
+            _ => V::Null,
+        };
+        self.walk(v, parts)
+    }
+
+    fn note_prop(&self, name: &str, row: &BaseRow) -> serde_json::Value {
+        if name.is_empty() {
+            // bare `note` — used as a method receiver; not a value on
+            // its own.
+            return serde_json::Value::Null;
+        }
+        // Dotted paths walk maps and follow links (`note.song.key`).
+        let mut parts = name.split('.');
+        let head = parts.next().unwrap_or("");
+        let v = row
+            .frontmatter
+            .get(head)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        self.walk(v, parts)
+    }
+
+    /// Whether link targets `a` and `b` name the same note: the same
+    /// resolved row, or (unresolved) the same normalized text.
+    fn same_target(&self, a: &str, b: &str) -> bool {
+        match (self.resolve(a), self.resolve(b)) {
+            (Some(x), Some(y)) => std::ptr::eq(x, y),
+            _ => normalize_link_target(a).eq_ignore_ascii_case(&normalize_link_target(b)),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn call(
+        &self,
+        receiver: Option<&Expr>,
+        name: &str,
+        args: &[Expr],
+        row: &BaseRow,
+    ) -> serde_json::Value {
+        use serde_json::Value as V;
+        if receiver.is_none() && name == "if" && args.len() == 3 {
+            // Lazy: only evaluate the chosen branch.
+            return if is_truthy(&self.eval(&args[0], row)) {
+                self.eval(&args[1], row)
+            } else {
+                self.eval(&args[2], row)
+            };
+        }
+        let arg_vals: Vec<V> = args.iter().map(|a| self.eval(a, row)).collect();
+        if let Some(recv) = receiver {
+            let recv_v = self.eval(recv, row);
+            match name {
+                "contains" if arg_vals.len() == 1 => V::Bool(value_contains(&recv_v, &arg_vals[0])),
+                "startsWith" if arg_vals.len() == 1 => {
+                    match (recv_v.as_str(), arg_vals[0].as_str()) {
+                        (Some(a), Some(b)) => V::Bool(a.starts_with(b)),
+                        _ => V::Bool(false),
+                    }
+                }
+                "endsWith" if arg_vals.len() == 1 => {
+                    match (recv_v.as_str(), arg_vals[0].as_str()) {
+                        (Some(a), Some(b)) => V::Bool(a.ends_with(b)),
+                        _ => V::Bool(false),
+                    }
+                }
+                "isEmpty" => V::Bool(match &recv_v {
+                    V::Null => true,
+                    V::String(s) => s.is_empty(),
+                    V::Array(a) => a.is_empty(),
+                    V::Object(m) => m.is_empty(),
+                    _ => false,
+                }),
+                "length" => match &recv_v {
+                    V::String(s) => json_num(s.chars().count() as f64),
+                    V::Array(a) => json_num(a.len() as f64),
+                    _ => V::Null,
+                },
+                "hasTag" if arg_vals.len() == 1 => {
+                    // Receiver is typically `file` / `note` /
+                    // `file.tags`. Normalize to an array of strings
+                    // and contains-check the needle, stripping any
+                    // leading `#` on either side.
+                    let tags = receiver_tags(&recv_v, row);
+                    let needle = match arg_vals[0].as_str() {
+                        Some(s) => s.trim_start_matches('#').to_string(),
+                        None => return V::Bool(false),
+                    };
+                    V::Bool(tags.iter().any(|t| t == &needle))
+                }
+                // `file.hasLink(x)` — the note links to `x` (a link
+                // value, a name or a path), in its body or frontmatter.
+                // On a link receiver it asks the linked note.
+                "hasLink" if arg_vals.len() == 1 => {
+                    let Some(needle) = target_of(&arg_vals[0]) else {
+                        return V::Bool(false);
+                    };
+                    match self.subject_of(recv, &recv_v, row) {
+                        Some(subject) => {
+                            V::Bool(subject.links.iter().any(|l| self.same_target(l, &needle)))
+                        }
+                        None => V::Bool(false),
+                    }
+                }
+                // `file.exists()` is always true for the row itself;
+                // `note.song.exists()` asks whether the link resolves.
+                "exists" if arg_vals.is_empty() => {
+                    V::Bool(self.subject_of(recv, &recv_v, row).is_some())
+                }
+                "hasProperty" if arg_vals.len() == 1 => match arg_vals[0].as_str() {
+                    Some(key) => V::Bool(
+                        self.subject_of(recv, &recv_v, row)
+                            .is_some_and(|s| s.frontmatter.contains_key(key)),
+                    ),
+                    None => V::Bool(false),
+                },
+                "asLink" if arg_vals.is_empty() => match self.subject_of(recv, &recv_v, row) {
+                    Some(s) => link_value(&s.basename),
+                    None => V::Null,
+                },
+                // Obsidian `file.inFolder("Path")` — the note's path is under
+                // the given folder (or a subfolder of it).
+                "inFolder" if arg_vals.len() == 1 => {
+                    let needle = arg_vals[0].as_str().unwrap_or("").trim_matches('/');
+                    let path = row.path.trim_start_matches('/');
+                    V::Bool(
+                        needle.is_empty()
+                            || path == needle
+                            || path.starts_with(&format!("{needle}/")),
+                    )
+                }
+                "floor" => recv_v.as_f64().map_or(V::Null, |f| json_num(f.floor())),
+                "round" => recv_v.as_f64().map_or(V::Null, |f| json_num(f.round())),
+                "ceil" => recv_v.as_f64().map_or(V::Null, |f| json_num(f.ceil())),
+                // FUTURE: real date/number formatting via chrono +
+                // a locale-aware number formatter. v1 = pass-through
+                // stringification.
+                "format" => V::String(value_to_string(&recv_v)),
+                // FUTURE: proper date truncation / coercion.
+                "date" => recv_v,
+                // FUTURE: lambda-style higher-order calls. Args are
+                // mini-expressions referencing an implicit element;
+                // we'd need a scoped row binding to evaluate them.
+                "filter" | "map" | "reduce" => V::Null,
+                // `link("X").key` parses as a zero-arg call named `key`
+                // on a non-path receiver: treat it as member access.
+                _ if args.is_empty() => self.member(&recv_v, name),
+                _ => V::Null,
+            }
+        } else {
+            match name {
+                "today" | "now" => {
+                    // ISO-8601 UTC. Tests that need determinism can
+                    // avoid these by sticking to scalar filters.
+                    // FUTURE: inject a `Clock` trait for deterministic
+                    // tests.
+                    V::String(chrono::Utc::now().to_rfc3339())
+                }
+                "date" if arg_vals.len() == 1 => arg_vals.into_iter().next().unwrap(),
+                "number" if arg_vals.len() == 1 => match &arg_vals[0] {
+                    V::Number(_) => arg_vals.into_iter().next().unwrap(),
+                    V::String(s) => s.parse::<f64>().map(json_num).unwrap_or(V::Null),
+                    V::Bool(b) => json_num(if *b { 1.0 } else { 0.0 }),
+                    _ => V::Null,
+                },
+                // `link("Songs/Song A")` → a link value.
+                "link" if !arg_vals.is_empty() => {
+                    target_of(&arg_vals[0]).map_or(V::Null, |t| link_value(&t))
+                }
+                "list" => match arg_vals.as_slice() {
+                    [V::Array(_)] => arg_vals.into_iter().next().unwrap(),
+                    _ => V::Array(arg_vals),
+                },
+                "min" if arg_vals.len() == 2 => num_pair(&arg_vals[0], &arg_vals[1])
+                    .map_or(V::Null, |(a, b)| json_num(a.min(b))),
+                "max" if arg_vals.len() == 2 => num_pair(&arg_vals[0], &arg_vals[1])
+                    .map_or(V::Null, |(a, b)| json_num(a.max(b))),
+                "hasTag" if arg_vals.len() == 1 => {
+                    let needle = match arg_vals[0].as_str() {
+                        Some(s) => s.trim_start_matches('#').to_string(),
+                        None => return V::Bool(false),
+                    };
+                    V::Bool(row.tags.iter().any(|t| t == &needle))
+                }
+                // `transpose_key(key, offset)` — a key name moved by
+                // semitones (`4`, `"+4"`, `"-4"`) in its own spelling, or
+                // replaced by an absolute key (`"D"`). See `music_key`.
+                "transpose_key" if arg_vals.len() == 2 => {
+                    transpose_key_value(&arg_vals[0], &arg_vals[1])
+                }
+                _ => V::Null,
+            }
+        }
+    }
+
+    /// The note a receiver names, if it exists: the row itself for bare
+    /// `file` / `note`, else the note a link value resolves to.
+    fn subject_of<'r>(
+        &'r self,
+        recv: &Expr,
+        recv_v: &serde_json::Value,
+        row: &'r BaseRow,
+    ) -> Option<&'r BaseRow> {
+        if matches!(recv, Expr::FileProp { name } | Expr::NoteProp { name } if name.is_empty()) {
+            return Some(row);
+        }
+        target_of(recv_v).and_then(|t| self.resolve(&t))
+    }
+
+    fn compare_rows(&self, a: &BaseRow, b: &BaseRow, sort: &[SortKey]) -> std::cmp::Ordering {
+        for key in sort {
+            let ord = compare_values(
+                &self.column(a, &key.property),
+                &self.column(b, &key.property),
+            );
+            let ord = match key.direction {
+                SortDir::Asc => ord,
+                SortDir::Desc => ord.reverse(),
+            };
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        a.basename.cmp(&b.basename)
     }
 }
 
-fn arith_eval(
-    left: &Expr,
-    right: &Expr,
-    row: &BaseRow,
-    op: impl FnOnce(f64, f64) -> f64,
-) -> serde_json::Value {
-    arith(&eval_expr(left, row), &eval_expr(right, row), op)
+/// Context-free evaluation (no formulas, no link universe) — what the
+/// executor did before [`BaseEval`]; kept for the unit tests.
+#[cfg(test)]
+fn eval_expr(expr: &Expr, row: &BaseRow) -> serde_json::Value {
+    BaseEval::over(&[]).eval(expr, row)
 }
 
-fn arith(
+fn arith_vals(
     l: &serde_json::Value,
     r: &serde_json::Value,
     op: impl FnOnce(f64, f64) -> f64,
@@ -2157,20 +2814,11 @@ fn value_to_string(v: &serde_json::Value) -> String {
 }
 
 /// Display string for one `order` column of a row — resolves `file.*`
-/// props, `formula.*` (null for now), and bare / `note.` frontmatter
-/// keys, then stringifies (arrays comma-joined). The base renderer uses
-/// this to project a [`BaseRow`] onto a view's columns.
+/// props and bare / `note.` frontmatter keys, then stringifies (arrays comma-joined). `formula.*` needs
+/// the base: use [`BaseEval::column`] for that.
 #[must_use]
 pub fn cell_value(row: &BaseRow, column: &str) -> String {
-    let v = if let Some(name) = column.strip_prefix("file.") {
-        eval_file_prop(name, row)
-    } else if let Some(name) = column.strip_prefix("note.") {
-        eval_note_prop(name, row)
-    } else if column.starts_with("formula.") {
-        serde_json::Value::Null
-    } else {
-        eval_note_prop(column, row)
-    };
+    let v = BaseEval::over(std::slice::from_ref(row)).column(row, column);
     match &v {
         serde_json::Value::Array(items) => items
             .iter()
@@ -2178,185 +2826,6 @@ pub fn cell_value(row: &BaseRow, column: &str) -> String {
             .collect::<Vec<_>>()
             .join(", "),
         _ => value_to_string(&v),
-    }
-}
-
-fn eval_file_prop(name: &str, row: &BaseRow) -> serde_json::Value {
-    use serde_json::Value as V;
-    match name {
-        // `file` itself with no member access — used only as a
-        // receiver for method calls; return Null so a bare `file`
-        // doesn't accidentally pass a Truthy filter.
-        "" => V::Null,
-        "name" | "basename" => V::String(row.basename.clone()),
-        "path" => {
-            if row.path.is_empty() {
-                V::Null
-            } else {
-                V::String(row.path.clone())
-            }
-        }
-        "folder" => V::String(row.folder.clone()),
-        "ext" => {
-            if row.ext.is_empty() {
-                V::Null
-            } else {
-                V::String(row.ext.clone())
-            }
-        }
-        "tags" => V::Array(row.tags.iter().map(|t| V::String(t.clone())).collect()),
-        // FUTURE: file.size / file.mtime / file.ctime / file.links /
-        // file.embeds — we don't carry that data on `BaseRow` yet.
-        _ => V::Null,
-    }
-}
-
-fn eval_note_prop(name: &str, row: &BaseRow) -> serde_json::Value {
-    if name.is_empty() {
-        // bare `note` — used as a method receiver; not a value on
-        // its own.
-        return serde_json::Value::Null;
-    }
-    // Support dotted paths (`note.foo.bar` → walk Object).
-    let mut parts = name.split('.');
-    let head = match parts.next() {
-        Some(h) => h,
-        None => return serde_json::Value::Null,
-    };
-    let mut cur = row
-        .frontmatter
-        .get(head)
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    for seg in parts {
-        cur = match cur {
-            serde_json::Value::Object(map) => {
-                map.get(seg).cloned().unwrap_or(serde_json::Value::Null)
-            }
-            _ => return serde_json::Value::Null,
-        };
-    }
-    cur
-}
-
-fn eval_call(
-    receiver: Option<&Expr>,
-    name: &str,
-    args: &[Expr],
-    row: &BaseRow,
-) -> serde_json::Value {
-    use serde_json::Value as V;
-    if let Some(recv) = receiver {
-        let recv_v = eval_expr(recv, row);
-        let arg_vals: Vec<V> = args.iter().map(|a| eval_expr(a, row)).collect();
-        match name {
-            "contains" if arg_vals.len() == 1 => V::Bool(value_contains(&recv_v, &arg_vals[0])),
-            "startsWith" if arg_vals.len() == 1 => match (recv_v.as_str(), arg_vals[0].as_str()) {
-                (Some(a), Some(b)) => V::Bool(a.starts_with(b)),
-                _ => V::Bool(false),
-            },
-            "endsWith" if arg_vals.len() == 1 => match (recv_v.as_str(), arg_vals[0].as_str()) {
-                (Some(a), Some(b)) => V::Bool(a.ends_with(b)),
-                _ => V::Bool(false),
-            },
-            "isEmpty" => V::Bool(match &recv_v {
-                V::Null => true,
-                V::String(s) => s.is_empty(),
-                V::Array(a) => a.is_empty(),
-                V::Object(m) => m.is_empty(),
-                _ => false,
-            }),
-            "length" => match &recv_v {
-                V::String(s) => json_num(s.chars().count() as f64),
-                V::Array(a) => json_num(a.len() as f64),
-                _ => V::Null,
-            },
-            "hasTag" if arg_vals.len() == 1 => {
-                // Receiver is typically `file` / `note` /
-                // `file.tags`. Normalize to an array of strings
-                // and contains-check the needle, stripping any
-                // leading `#` on either side.
-                let tags = receiver_tags(&recv_v, row);
-                let needle = match arg_vals[0].as_str() {
-                    Some(s) => s.trim_start_matches('#').to_string(),
-                    None => return V::Bool(false),
-                };
-                V::Bool(tags.iter().any(|t| t == &needle))
-            }
-            // Obsidian `file.inFolder("Path")` — the note's path is under
-            // the given folder (or a subfolder of it).
-            "inFolder" if arg_vals.len() == 1 => {
-                let needle = arg_vals[0].as_str().unwrap_or("").trim_matches('/');
-                let path = row.path.trim_start_matches('/');
-                V::Bool(
-                    needle.is_empty() || path == needle || path.starts_with(&format!("{needle}/")),
-                )
-            }
-            "floor" => recv_v.as_f64().map_or(V::Null, |f| json_num(f.floor())),
-            "round" => recv_v.as_f64().map_or(V::Null, |f| json_num(f.round())),
-            "ceil" => recv_v.as_f64().map_or(V::Null, |f| json_num(f.ceil())),
-            // FUTURE: real date/number formatting via chrono +
-            // a locale-aware number formatter. v1 = pass-through
-            // stringification.
-            "format" => V::String(value_to_string(&recv_v)),
-            // FUTURE: proper date truncation / coercion.
-            "date" => recv_v,
-            // FUTURE: lambda-style higher-order calls. Args are
-            // mini-expressions referencing an implicit element;
-            // we'd need a scoped row binding to evaluate them.
-            "filter" | "map" | "reduce" => V::Null,
-            _ => V::Null,
-        }
-    } else {
-        let arg_vals: Vec<V> = args.iter().map(|a| eval_expr(a, row)).collect();
-        match name {
-            "today" | "now" => {
-                // ISO-8601 UTC. Tests that need determinism can
-                // avoid these by sticking to scalar filters.
-                // FUTURE: inject a `Clock` trait for deterministic
-                // tests if/when formula support lands.
-                V::String(chrono::Utc::now().to_rfc3339())
-            }
-            "date" if arg_vals.len() == 1 => arg_vals.into_iter().next().unwrap(),
-            "number" if arg_vals.len() == 1 => match &arg_vals[0] {
-                V::Number(_) => arg_vals.into_iter().next().unwrap(),
-                V::String(s) => s.parse::<f64>().map(json_num).unwrap_or(V::Null),
-                V::Bool(b) => json_num(if *b { 1.0 } else { 0.0 }),
-                _ => V::Null,
-            },
-            "list" => match arg_vals.as_slice() {
-                [V::Array(_)] => arg_vals.into_iter().next().unwrap(),
-                _ => V::Array(arg_vals),
-            },
-            "min" if arg_vals.len() == 2 => {
-                num_pair(&arg_vals[0], &arg_vals[1]).map_or(V::Null, |(a, b)| json_num(a.min(b)))
-            }
-            "max" if arg_vals.len() == 2 => {
-                num_pair(&arg_vals[0], &arg_vals[1]).map_or(V::Null, |(a, b)| json_num(a.max(b)))
-            }
-            "if" if args.len() == 3 => {
-                // Lazy: only evaluate the chosen branch.
-                if is_truthy(&eval_expr(&args[0], row)) {
-                    eval_expr(&args[1], row)
-                } else {
-                    eval_expr(&args[2], row)
-                }
-            }
-            "hasTag" if arg_vals.len() == 1 => {
-                let needle = match arg_vals[0].as_str() {
-                    Some(s) => s.trim_start_matches('#').to_string(),
-                    None => return V::Bool(false),
-                };
-                V::Bool(row.tags.iter().any(|t| t == &needle))
-            }
-            // `transpose_key(key, offset)` — a key name moved by
-            // semitones (`4`, `"+4"`, `"-4"`) in its own spelling, or
-            // replaced by an absolute key (`"D"`). See `music_key`.
-            "transpose_key" if arg_vals.len() == 2 => {
-                transpose_key_value(&arg_vals[0], &arg_vals[1])
-            }
-            _ => V::Null,
-        }
     }
 }
 
@@ -2401,37 +2870,6 @@ fn receiver_tags(recv: &serde_json::Value, row: &BaseRow) -> Vec<String> {
         V::String(s) => vec![s.trim_start_matches('#').to_string()],
         _ => Vec::new(),
     }
-}
-
-fn compare_rows(a: &BaseRow, b: &BaseRow, sort: &[SortKey]) -> std::cmp::Ordering {
-    for key in sort {
-        // `basename` (or `file.name`) is on the row itself, not in
-        // frontmatter. Everything else is a frontmatter lookup.
-        let (av, bv) = if key.property == "basename" || key.property == "file.name" {
-            (
-                serde_json::Value::String(a.basename.clone()),
-                serde_json::Value::String(b.basename.clone()),
-            )
-        } else {
-            (
-                a.lookup(&Expr::NoteProp {
-                    name: key.property.clone(),
-                }),
-                b.lookup(&Expr::NoteProp {
-                    name: key.property.clone(),
-                }),
-            )
-        };
-        let ord = compare_values(&av, &bv);
-        let ord = match key.direction {
-            SortDir::Asc => ord,
-            SortDir::Desc => ord.reverse(),
-        };
-        if ord != std::cmp::Ordering::Equal {
-            return ord;
-        }
-    }
-    a.basename.cmp(&b.basename)
 }
 
 fn compare_values(a: &serde_json::Value, b: &serde_json::Value) -> std::cmp::Ordering {
@@ -2758,15 +3196,405 @@ mod executor_tests {
         let f = expr_parser::parse_filter(r#"transpose_key(key, key_offset) == "F#""#).unwrap();
         let hits: Vec<_> = rows
             .iter()
-            .filter(|r| filter_matches(&f, r))
+            .filter(|r| BaseEval::over(&[]).filter_matches(&f, r))
             .map(|r| r.basename.clone())
             .collect();
         assert_eq!(hits, vec!["1 Opener", "4 Default"]);
 
         let f = expr_parser::parse_filter(r#"transpose_key(note.key, note.key_offset) == "g#m""#)
             .unwrap();
-        assert!(filter_matches(&f, &rows[2]));
+        assert!(BaseEval::over(&[]).filter_matches(&f, &rows[2]));
         let f = expr_parser::parse_filter(r#"transpose_key(key, key_offset) == "D""#).unwrap();
-        assert!(filter_matches(&f, &rows[1]));
+        assert!(BaseEval::over(&[]).filter_matches(&f, &rows[1]));
+
+        // With link-follow: the use links its song, the key lives there.
+        let song = page("Songs/Night Drive.md", json!({ "key": "D" }), &[]);
+        let usage = page(
+            "Gigs/1 Opener.md",
+            json!({ "song": "[[Night Drive]]", "key_offset": 4 }),
+            &[],
+        );
+        let all = vec![song, usage.clone()];
+        let f = expr_parser::parse_filter(r#"transpose_key(note.song.key, key_offset) == "F#""#)
+            .unwrap();
+        assert!(BaseEval::over(&all).filter_matches(&f, &usage));
+    }
+
+    // ── Link functions, link-follow and formulas ─────────────────
+
+    /// A row at a vault path, with frontmatter and body links.
+    fn page(path: &str, fm: serde_json::Value, body_links: &[&str]) -> BaseRow {
+        let basename = path
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .trim_end_matches(".md")
+            .to_string();
+        let folder = path.rsplit_once('/').map_or("", |(f, _)| f).to_string();
+        BaseRow::from_parts_full(
+            Uuid::new_v4(),
+            basename,
+            path,
+            folder,
+            "md",
+            &fm.to_string(),
+            &[],
+        )
+        .with_links(body_links.iter().copied())
+    }
+
+    /// The gigs recipe: songs carry `key`, a gig links its song in
+    /// frontmatter and its venue in the body.
+    fn gig_vault() -> Vec<BaseRow> {
+        vec![
+            page(
+                "Songs/Song A.md",
+                serde_json::json!({ "key": "G", "bpm": 120 }),
+                &[],
+            ),
+            page(
+                "Songs/Song B.md",
+                serde_json::json!({ "key": "D", "bpm": 90 }),
+                &[],
+            ),
+            page(
+                "Venues/The Hall.md",
+                serde_json::json!({ "city": "Austin" }),
+                &[],
+            ),
+            page(
+                "Gigs/Friday.md",
+                serde_json::json!({ "song": "[[Song A]]", "fee": 400, "setlist": ["[[Song A]]", "[[Songs/Song B|B]]"] }),
+                &["[[The Hall#Load-in]]"],
+            ),
+            page(
+                "Gigs/Saturday.md",
+                // Unquoted YAML wikilink → nested list; still a link.
+                serde_json::json!({ "song": [["Song B"]], "fee": 250 }),
+                &[],
+            ),
+            page(
+                "Gigs/Sunday.md",
+                serde_json::json!({ "song": "[[Song Nobody Wrote]]", "fee": 0 }),
+                &[],
+            ),
+        ]
+    }
+
+    fn eval_src(cx: &BaseEval<'_>, src: &str, row: &BaseRow) -> serde_json::Value {
+        let expr = expr_parser::parse_expression(src).unwrap();
+        cx.eval(&expr, row)
+    }
+
+    fn filter_src(cx: &BaseEval<'_>, src: &str, row: &BaseRow) -> bool {
+        let f = expr_parser::parse_filter(src).unwrap();
+        cx.filter_matches(&f, row)
+    }
+
+    #[test]
+    fn link_targets_normalize() {
+        assert_eq!(normalize_link_target("[[Songs/Song A|A]]"), "Songs/Song A");
+        assert_eq!(normalize_link_target("[[Song A#Bridge]]"), "Song A");
+        assert_eq!(normalize_link_target("Songs/Song A.md"), "Songs/Song A");
+        assert_eq!(normalize_link_target("  Song A "), "Song A");
+    }
+
+    #[test]
+    fn file_links_lists_frontmatter_and_body_links() {
+        let rows = gig_vault();
+        let cx = BaseEval::over(&rows);
+        let friday = &rows[3];
+        assert_eq!(
+            eval_src(&cx, "file.links", friday),
+            serde_json::json!(["[[Song A]]", "[[Songs/Song B]]", "[[The Hall]]"])
+        );
+        assert_eq!(
+            eval_src(&cx, "file.links.length", friday),
+            serde_json::json!(3.0)
+        );
+        // Nested-list YAML links count as links too.
+        assert_eq!(
+            eval_src(&cx, "file.links", &rows[4]),
+            serde_json::json!(["[[Song B]]"])
+        );
+        // A note with no links has an empty list, not null.
+        assert_eq!(eval_src(&cx, "file.links", &rows[0]), serde_json::json!([]));
+    }
+
+    #[test]
+    // t[verify vault.bases.links]
+    fn has_link_matches_by_name_path_and_link_value() {
+        let rows = gig_vault();
+        let cx = BaseEval::over(&rows);
+        let friday = &rows[3];
+        // Frontmatter link, by bare name, by link value, by full path.
+        assert!(filter_src(&cx, r#"file.hasLink("Song A")"#, friday));
+        assert!(filter_src(&cx, r#"file.hasLink(link("Song A"))"#, friday));
+        assert!(filter_src(
+            &cx,
+            r#"file.hasLink("Songs/Song A.md")"#,
+            friday
+        ));
+        // Aliased + path-qualified link resolves to the same note as a
+        // bare-name needle.
+        assert!(filter_src(&cx, r#"file.hasLink("Song B")"#, friday));
+        // Body link with a heading.
+        assert!(filter_src(&cx, r#"file.hasLink("The Hall")"#, friday));
+        assert!(!filter_src(&cx, r#"file.hasLink("Song A")"#, &rows[4]));
+        assert!(!filter_src(&cx, r#"file.hasLink("Elsewhere")"#, friday));
+        // Unresolved links still match by their text.
+        assert!(filter_src(
+            &cx,
+            r#"file.hasLink("Song Nobody Wrote")"#,
+            &rows[5]
+        ));
+        // `not` composes.
+        assert!(filter_src(&cx, r#"!file.hasLink("Song B")"#, &rows[5]));
+    }
+
+    #[test]
+    fn exists_resolves_links() {
+        let rows = gig_vault();
+        let cx = BaseEval::over(&rows);
+        assert!(filter_src(&cx, "file.exists()", &rows[0]));
+        assert!(filter_src(&cx, "note.song.exists()", &rows[3]));
+        assert!(filter_src(&cx, "song.exists()", &rows[4]));
+        assert!(!filter_src(&cx, "note.song.exists()", &rows[5]));
+        // No such property → nothing to resolve.
+        assert!(!filter_src(&cx, "note.venue.exists()", &rows[3]));
+        assert!(filter_src(&cx, r#"file.hasProperty("fee")"#, &rows[3]));
+        assert!(!filter_src(&cx, r#"file.hasProperty("key")"#, &rows[3]));
+        assert_eq!(
+            eval_src(&cx, "note.song.asLink()", &rows[3]),
+            serde_json::json!("[[Song A]]")
+        );
+    }
+
+    #[test]
+    fn link_follow_reads_the_linked_notes_property() {
+        let rows = gig_vault();
+        let cx = BaseEval::over(&rows);
+        assert_eq!(
+            eval_src(&cx, "note.song.key", &rows[3]),
+            serde_json::json!("G")
+        );
+        assert_eq!(eval_src(&cx, "song.bpm", &rows[4]), serde_json::json!(90));
+        // Broken link → null, never a panic.
+        assert_eq!(
+            eval_src(&cx, "note.song.key", &rows[5]),
+            serde_json::Value::Null
+        );
+        // A list of links maps member access over each.
+        assert_eq!(
+            eval_src(&cx, "note.setlist.key", &rows[3]),
+            serde_json::json!(["G", "D"])
+        );
+        assert_eq!(
+            eval_src(&cx, r#"link("Song B").key"#, &rows[0]),
+            serde_json::json!("D")
+        );
+        // …and in filters.
+        assert!(filter_src(&cx, r#"note.song.key == "G""#, &rows[3]));
+        assert!(!filter_src(&cx, r#"note.song.key == "G""#, &rows[4]));
+        assert!(filter_src(&cx, "song.bpm > 100", &rows[3]));
+    }
+
+    #[test]
+    fn link_follow_chains_and_terminates_on_cycles() {
+        // A path is finite, so a link cycle can only be walked as far as
+        // the expression says — each hop is one more `.next`.
+        let rows = vec![
+            page(
+                "A.md",
+                serde_json::json!({ "next": "[[B]]", "name": "a" }),
+                &[],
+            ),
+            page(
+                "B.md",
+                serde_json::json!({ "next": "[[A]]", "name": "b" }),
+                &[],
+            ),
+        ];
+        let cx = BaseEval::over(&rows);
+        assert_eq!(eval_src(&cx, "next.name", &rows[0]), serde_json::json!("b"));
+        assert_eq!(
+            eval_src(&cx, "next.next.name", &rows[0]),
+            serde_json::json!("a")
+        );
+        let deep = std::iter::repeat_n("next", 40)
+            .collect::<Vec<_>>()
+            .join(".");
+        assert_eq!(eval_src(&cx, &deep, &rows[0]), serde_json::json!("[[A]]"));
+    }
+
+    const GIGS_BASE: &str = r#"
+filters:
+  and:
+    - file.inFolder("Gigs")
+formulas:
+  cut: "fee * 0.1"
+  net: "fee - formula.cut"
+  song_key: "note.song.key"
+  label: "file.name + ' in ' + if(note.song.exists(), note.song.key, '?')"
+  loop_a: "formula.loop_b + 1"
+  loop_b: "formula.loop_a + 1"
+views:
+  - type: table
+    name: Gigs in G
+    filters:
+      and:
+        - 'note.song.key == "G"'
+    order:
+      - file.name
+      - fee
+      - formula.net
+  - type: table
+    name: By net
+    order:
+      - file.name
+      - formula.song_key
+    sort:
+      - property: formula.net
+        direction: ASC
+  - type: board
+    name: By key
+    groupBy:
+      property: formula.song_key
+"#;
+
+    #[test]
+    fn fanned_out_formulas_run_once_per_row() {
+        // f0 = f1 + f1, f1 = f2 + f2, … f14 = f15 + f15, f15 = 1.
+        // Without a memo that is 2^16 - 1 evaluations per row; with
+        // it, one per formula per row.
+        let mut yaml = String::from("formulas:\n");
+        for i in 0..15 {
+            yaml.push_str(&format!(
+                "  f{i}: \"formula.f{n} + formula.f{n}\"\n",
+                n = i + 1
+            ));
+        }
+        yaml.push_str("  f15: \"1\"\nviews:\n  - type: table\n    name: All\n    order:\n      - formula.f0\n");
+        let base = parse(&yaml).unwrap();
+        let rows = vec![
+            page("A.md", serde_json::json!({}), &[]),
+            page("B.md", serde_json::json!({}), &[]),
+        ];
+        let cx = BaseEval::new(&base, &rows);
+        for r in &rows {
+            assert_eq!(cx.formula("f0", r), serde_json::json!(32768.0));
+        }
+        assert_eq!(cx.formula_evals.get(), 16 * 2);
+        // Asking again is free.
+        let _ = cx.column(&rows[0], "formula.f0");
+        assert_eq!(cx.formula_evals.get(), 16 * 2);
+
+        // A fanned-out cycle is still null, and still cheap.
+        let mut yaml = String::from("formulas:\n");
+        for i in 0..12 {
+            yaml.push_str(&format!(
+                "  c{i}: \"formula.c{n} + formula.c{n}\"\n",
+                n = (i + 1) % 12
+            ));
+        }
+        let base = parse(&yaml).unwrap();
+        let cx = BaseEval::new(&base, &rows);
+        assert_eq!(cx.formula("c0", &rows[0]), serde_json::Value::Null);
+        assert_eq!(cx.formula_evals.get(), 12, "{}", cx.formula_evals.get());
+    }
+
+    #[test]
+    fn an_ambiguous_basename_resolves_to_nothing() {
+        let rows = vec![
+            page("Songs/Intro.md", serde_json::json!({ "key": "C" }), &[]),
+            page("Drafts/Intro.md", serde_json::json!({ "key": "D" }), &[]),
+            page("Songs/Outro.md", serde_json::json!({ "key": "E" }), &[]),
+        ];
+        let cx = BaseEval::over(&rows);
+        // Two notes are called Intro: a bare [[Intro]] names neither.
+        assert!(cx.resolve("Intro").is_none());
+        assert!(cx.resolve("[[Intro]]").is_none());
+        // A path still picks one.
+        assert_eq!(cx.resolve("Songs/Intro").unwrap().path, "Songs/Intro.md");
+        assert_eq!(
+            cx.resolve("[[Drafts/Intro]]").unwrap().path,
+            "Drafts/Intro.md"
+        );
+        // A unique basename resolves as before.
+        assert_eq!(cx.resolve("Outro").unwrap().path, "Songs/Outro.md");
+    }
+
+    #[test]
+    fn formulas_evaluate_reference_each_other_and_follow_links() {
+        let base = parse(GIGS_BASE).unwrap();
+        let rows = gig_vault();
+        let cx = BaseEval::new(&base, &rows);
+        let friday = &rows[3];
+        assert_eq!(cx.formula("cut", friday), serde_json::json!(40.0));
+        assert_eq!(cx.formula("net", friday), serde_json::json!(360.0));
+        assert_eq!(cx.formula("song_key", friday), serde_json::json!("G"));
+        assert_eq!(
+            cx.formula("label", friday),
+            serde_json::json!("Friday in G")
+        );
+        assert_eq!(
+            cx.formula("label", &rows[5]),
+            serde_json::json!("Sunday in ?")
+        );
+        // A cycle is null, not a stack overflow.
+        assert_eq!(cx.formula("loop_a", friday), serde_json::Value::Null);
+        assert_eq!(cx.formula("missing", friday), serde_json::Value::Null);
+        assert_eq!(cx.column(friday, "formula.net"), serde_json::json!(360.0));
+    }
+
+    #[test]
+    fn views_filter_sort_and_group_on_links_and_formulas() {
+        let base = parse(GIGS_BASE).unwrap();
+        let rows = gig_vault();
+
+        let in_g = execute_view(&base, &base.views[0], rows.clone());
+        let names: Vec<&str> = in_g.groups[0]
+            .1
+            .iter()
+            .map(|r| r.basename.as_str())
+            .collect();
+        assert_eq!(names, ["Friday"]);
+
+        let by_net = execute_view(&base, &base.views[1], rows.clone());
+        let names: Vec<&str> = by_net.groups[0]
+            .1
+            .iter()
+            .map(|r| r.basename.as_str())
+            .collect();
+        // Ascending net — the reverse of the basename fallback order.
+        assert_eq!(names, ["Sunday", "Saturday", "Friday"]);
+
+        let by_key = execute_view(&base, &base.views[2], rows.clone());
+        let labels: Vec<&str> = by_key.groups.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, ["G", "D", ""]);
+    }
+
+    #[test]
+    fn view_table_projects_columns_and_formula_values() {
+        let base = parse(GIGS_BASE).unwrap();
+        let rows = gig_vault();
+        let table = view_table(&base, &base.views[0], &rows);
+        assert_eq!(table.name, "Gigs in G");
+        assert_eq!(table.kind, "table");
+        assert_eq!(table.columns, ["file.name", "fee", "formula.net"]);
+        assert_eq!(table.groups.len(), 1);
+        let row = &table.groups[0].rows[0];
+        assert_eq!(row.path, "Gigs/Friday.md");
+        assert_eq!(row.values["file.name"], serde_json::json!("Friday"));
+        assert_eq!(row.values["fee"], serde_json::json!(400));
+        assert_eq!(row.values["formula.net"], serde_json::json!(360.0));
+        assert_eq!(row.formulas["song_key"], serde_json::json!("G"));
+        assert_eq!(row.formulas.len(), base.formulas.len());
+        // A view with no `order` still names each row.
+        let bare = ViewSpec {
+            order: vec![],
+            ..base.views[1].clone()
+        };
+        assert_eq!(view_table(&base, &bare, &rows).columns, ["file.name"]);
     }
 }

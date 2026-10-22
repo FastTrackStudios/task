@@ -82,7 +82,10 @@ struct BoardData {
 }
 
 /// The Filter sheet's keys a task carries: `ctx:@errands`,
-/// `proj:<id>`, `pri:high`.
+/// `proj:<id>`, `pri:high` — and who is on it (`as:<user id>`,
+/// `as:agent:<name>`), who made it (`by:<ref>`) and whom a personal
+/// assistant made it for (`for:<ref>`, "on behalf of me").
+// t[impl attribution.on-behalf-of.filter]
 fn facet_keys(t: &task_proto::TaskInfo, index: &crate::task_board::ProjectIndex) -> Vec<String> {
     let mut keys: Vec<String> = t
         .contexts
@@ -93,28 +96,110 @@ fn facet_keys(t: &task_proto::TaskInfo, index: &crate::task_board::ProjectIndex)
         keys.push(format!("proj:{id}"));
     }
     keys.push(format!("pri:{}", t.priority.trim().to_lowercase()));
+    for a in t.workflow.iter().flat_map(|w| w.assignees.0.iter()) {
+        keys.push(match a {
+            task_proto::workflows_proto::AgentRef::Human { user_id, .. } => format!("as:{user_id}"),
+            other => format!("as:agent:{}", other.short_label()),
+        });
+    }
+    if let Some(by) = &t.created_by {
+        keys.push(format!("by:{by}"));
+    }
+    if let Some(obo) = &t.on_behalf_of {
+        keys.push(format!("for:{obo}"));
+    }
     keys
 }
+
+/// The Filter sheet's sections, in order: `(key prefix, title)`.
+const FACET_KINDS: &[(&str, &str)] = &[
+    ("ctx:", "Context"),
+    ("proj:", "Project"),
+    ("pri:", "Priority"),
+    ("as:", "Assignee"),
+    ("by:", "Created by"),
+    ("for:", "On behalf of"),
+];
 
 /// Whether a task passes the Filter sheet's picks: within a section any
 /// pick matches (OR), across sections all must (AND).
 fn passes_picks(keys: &[String], picked: &std::collections::BTreeSet<String>) -> bool {
-    ["ctx:", "proj:", "pri:"].iter().all(|kind| {
+    FACET_KINDS.iter().all(|(kind, _)| {
         let mine: Vec<&String> = picked.iter().filter(|p| p.starts_with(kind)).collect();
         mine.is_empty() || mine.iter().any(|p| keys.contains(p))
     })
 }
 
-/// The Filter sheet's sections, from the tasks on the board.
+/// The Filter sheet's sections, from the tasks on the board. `me` (the
+/// signed-in account's uuid) reads as "Me" wherever it appears.
 fn facets_of(
     tasks: &[&task_proto::TaskInfo],
     index: &crate::task_board::ProjectIndex,
+    me: Option<&str>,
 ) -> Vec<(&'static str, Vec<(String, String)>)> {
     use std::collections::BTreeMap;
     let mut ctx: BTreeMap<String, String> = BTreeMap::new();
     let mut proj: BTreeMap<String, String> = BTreeMap::new();
     let mut pri: BTreeMap<String, String> = BTreeMap::new();
+    let mut people: BTreeMap<&'static str, BTreeMap<String, String>> = BTreeMap::new();
+    let is_me = |r: &str| {
+        me.is_some_and(|me| {
+            task_proto::workflows_proto::creator::creator_id(r).eq_ignore_ascii_case(me)
+        })
+    };
     for t in tasks {
+        // Names for the people keys, from what the task itself recorded.
+        let mut named: Vec<(String, String)> = Vec::new();
+        for a in t.workflow.iter().flat_map(|w| w.assignees.0.iter()) {
+            match a {
+                task_proto::workflows_proto::AgentRef::Human {
+                    user_id,
+                    display_name,
+                } => named.push((
+                    format!("as:{user_id}"),
+                    display_name
+                        .clone()
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| "Someone".to_owned()),
+                )),
+                other => named.push((
+                    format!("as:agent:{}", other.short_label()),
+                    other.short_label(),
+                )),
+            }
+        }
+        if let Some(by) = &t.created_by {
+            named.push((
+                format!("by:{by}"),
+                t.created_by_name
+                    .clone()
+                    .unwrap_or_else(|| "Someone".to_owned()),
+            ));
+        }
+        if let Some(obo) = &t.on_behalf_of {
+            named.push((
+                format!("for:{obo}"),
+                t.on_behalf_of_name
+                    .clone()
+                    .unwrap_or_else(|| "Someone".to_owned()),
+            ));
+        }
+        for (key, name) in named {
+            let Some((kind, _)) = FACET_KINDS.iter().find(|(k, _)| key.starts_with(k)) else {
+                continue;
+            };
+            let r = &key[kind.len()..];
+            let label = if is_me(r) { "Me".to_owned() } else { name };
+            // A real name beats "Someone" from a row that lacked one.
+            let slot = people
+                .entry(*kind)
+                .or_default()
+                .entry(key.clone())
+                .or_insert_with(|| label.clone());
+            if slot == "Someone" {
+                *slot = label;
+            }
+        }
         for k in facet_keys(t, index) {
             if let Some(c) = k.strip_prefix("ctx:") {
                 ctx.insert(k.clone(), c.to_owned());
@@ -138,10 +223,24 @@ fn facets_of(
     }
     let mut proj: Vec<(String, String)> = proj.into_iter().collect();
     proj.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    // People sections: "Me" first, then by name.
+    let mut section = |kind: &'static str| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = people
+            .remove(kind)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        v.sort_by_key(|(_, l)| (l != "Me", l.to_lowercase()));
+        v
+    };
+    let (assignee, created_by, on_behalf_of) = (section("as:"), section("by:"), section("for:"));
     [
         ("Context", ctx.into_iter().collect()),
         ("Project", proj),
         ("Priority", pri.into_iter().collect()),
+        ("Assignee", assignee),
+        ("Created by", created_by),
+        ("On behalf of", on_behalf_of),
     ]
     .into_iter()
     .filter(|(_, v): &(&str, Vec<(String, String)>)| !v.is_empty())
@@ -306,7 +405,7 @@ fn TaskBoard(scope: Scope) -> Element {
         );
         // The Filter sheet: offered from what's on the board, then
         // narrowed by what's picked.
-        let facets = facets_of(&domain, &index);
+        let facets = facets_of(&domain, &index, me.as_deref());
         let picked_now = picked.read().clone();
         if !picked_now.is_empty() {
             domain.retain(|t| passes_picks(&facet_keys(t, &index), &picked_now));
@@ -992,4 +1091,80 @@ fn remember_view(view: task_ui::ViewMode) {
         task_ui::ViewMode::List => "list",
     };
     crate::local_store::set(VIEW_KEY, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // t[verify attribution.on-behalf-of.filter]
+    #[test]
+    fn the_filter_sheet_offers_assignee_creator_and_on_behalf_of_me() {
+        let me = "c0d1";
+        let mut atlas_for_me = task_proto::capture("Book the rehearsal room");
+        atlas_for_me.created_by = Some("bot:b1".into());
+        atlas_for_me.created_by_name = Some("Atlas".into());
+        atlas_for_me.on_behalf_of = Some(format!("user:{me}"));
+        atlas_for_me.on_behalf_of_name = Some("Cody".into());
+        atlas_for_me
+            .workflow
+            .get_or_insert_with(Default::default)
+            .assignees =
+            task_proto::model::AgentRefList(vec![task_proto::workflows_proto::AgentRef::Human {
+                user_id: "j1".into(),
+                display_name: Some("Jordan".into()),
+            }]);
+        let mut mine = task_proto::capture("Call the venue");
+        mine.created_by = Some(format!("user:{me}"));
+        mine.created_by_name = Some("Cody".into());
+        let index = crate::task_board::ProjectIndex::new(Vec::new());
+        let tasks = [&atlas_for_me, &mine];
+
+        let facets = facets_of(&tasks, &index, Some(me));
+        let section = |title: &str| {
+            facets
+                .iter()
+                .find(|(t, _)| *t == title)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            section("Assignee"),
+            vec![("as:j1".to_owned(), "Jordan".to_owned())]
+        );
+        assert_eq!(
+            section("Created by"),
+            vec![
+                (format!("by:user:{me}"), "Me".to_owned()),
+                ("by:bot:b1".to_owned(), "Atlas".to_owned()),
+            ],
+            "Me first"
+        );
+        assert_eq!(
+            section("On behalf of"),
+            vec![(format!("for:user:{me}"), "Me".to_owned())]
+        );
+
+        // Picking "on behalf of me" keeps what Atlas made for me; picking
+        // an assignee keeps their work.
+        let pick = |keys: &[&str]| -> Vec<String> {
+            let picked: std::collections::BTreeSet<String> =
+                keys.iter().map(|k| (*k).to_owned()).collect();
+            tasks
+                .iter()
+                .filter(|t| passes_picks(&facet_keys(t, &index), &picked))
+                .map(|t| t.title.clone())
+                .collect()
+        };
+        assert_eq!(
+            pick(&[&format!("for:user:{me}")]),
+            vec!["Book the rehearsal room"]
+        );
+        assert_eq!(pick(&["as:j1"]), vec!["Book the rehearsal room"]);
+        assert_eq!(pick(&[&format!("by:user:{me}")]), vec!["Call the venue"]);
+        assert!(
+            pick(&["as:j1", &format!("by:user:{me}")]).is_empty(),
+            "sections AND"
+        );
+    }
 }
