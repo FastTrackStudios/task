@@ -155,66 +155,64 @@ release-desktop VERSION:
 
 # ── Releases ─────────────────────────────────────────────────────────────
 #
-# Two separate stages (skills/release-workflow.md). dev collects verified
-# work; `just release-promote` opens dev -> main ("finished features": full
-# checks + Reviewer, merge commit, NOTHING deploys). A release is a TAG on
-# main: `release-prepare` cuts release/vX.Y.Z (version + changelog commit),
-# its PR merges into main, and `release-tag` pushes `vX.Y.Z`, which deploys
-# the server + web, uploads TestFlight builds, attaches the node binaries
-# and publishes the GitHub Release. Production = the latest `v*` tag.
-# One version for everything, `[workspace.package] version` in Cargo.toml;
-# the changelog is generated from commit subjects by git-cliff (cliff.toml).
+# Fleet flow v4 (the `release-workflow` fleet skill is the source of truth;
+# Task's specifics: skills/release-workflow.md). `main` is the only
+# long-lived branch: every change is a squash-merged PR carrying a
+# cargo-rail change file (`.changes/*.md`). A release is a TAG
+# `vYY.M.MICRO` (CalVer, computed): `release-prepare` cuts `release/pending`
+# (one commit: version + CHANGELOG from the change files, which it
+# deletes), its PR squash-merges into main, and `release-tag` pushes the
+# tag once the full suite on that commit is green. The tag deploys the
+# server + web, uploads TestFlight builds, attaches the node binaries and
+# publishes the GitHub Release. Production = the latest `v*` tag.
 
 # The product version (server, web, iOS, macOS, desktop-v*).
 version:
     @bash scripts/release.sh version
 
-# What is live (latest v* tag), what main holds since, what waits on dev,
-# the unreleased changelog and the migrations the next release carries.
+# Latest tag, what main holds since, the pending change files, the next
+# (computed) version, and the migrations / moved git deps it would carry.
 release-plan:
     bash scripts/release.sh plan
 
-# Stage 1: open the promotion PR dev -> main (finished features). Merge it
-# with a merge commit once `checks`, the release guard and the Reviewer pass.
-release-promote:
-    bash scripts/release.sh promote
+# Cut `release/pending` from origin/main: CalVer bump, CHANGELOG section
+# from `.changes/*.md` (deleted), ONE commit `chore(release): v<next>`.
+# ARGS: an explicit X.Y.Z (rare; must sort above the latest tag, and the
+# commit records the override), and/or `--on release/vX.Y.Z` for a hotfix.
+release-prepare *ARGS:
+    bash scripts/release.sh prepare {{ARGS}}
 
-# Stage 2: cut `release/v<next>` from origin/main: bump the version, write
-# the changelog section, commit `chore(release): v<next>`.
-# BUMP: patch (the default, whatever the commits say), minor or major (only
-# when the Captain or Commander calls one), auto (git-cliff decides from the
-# commits), or an exact X.Y.Z.
-release-prepare BUMP="patch":
-    bash scripts/release.sh prepare {{BUMP}}
-
-# On the release/v* (or hotfix/*) branch: push it and open its PR into
-# main, with the changelog and migrations as the body.
+# On release/pending: push it and open its PR (squash) into the branch it
+# was cut from, with the changelog and migrations as the body.
 release-pr:
     bash scripts/release.sh pr
 
-# After the release PR merged: tag v<version> on main. THE TAG DEPLOYS
-# (server + web, TestFlight, node binaries, GitHub Release). Then it opens
-# the main -> dev back-merge. Pushes as whoever you are: use the fts-forge
-# bot or a person, not a workflow token (that starts no workflow).
+# After the release PR merged and its full suite is green: tag
+# v<version> on the merge commit. THE TAG DEPLOYS. Pushes as whoever you
+# are: use the fts-forge bot or a person, never a workflow token (that
+# starts no workflow). A hotfix tag also opens the forward-port PR.
 release-tag *VERSION:
     bash scripts/release.sh tag {{VERSION}}
 
-# main -> dev (merge commit, auto-merge). A no-op when dev already has all
-# of main's content. `release-tag` runs it; run it alone after a hotfix.
-release-backmerge:
-    bash scripts/release.sh backmerge
-
-# hotfix/<name> from the latest tag (what production runs). Fix, then
-# `just release-pr`; then cut the patch release as usual.
-release-hotfix NAME:
-    bash scripts/release.sh hotfix {{NAME}}
+# Hotfix while main can't ship (fix on main FIRST): release/v<latest tag>
+# from the tag, fix/<NAME> with the commits cherry-picked (-x), PR into it.
+# NAME: sta-123-slug | no-issue-slug. Then release-prepare --on it.
+release-hotfix NAME +COMMITS:
+    bash scripts/release.sh hotfix {{NAME}} {{COMMITS}}
 
 # One version's section of CHANGELOG.md (default: the current version).
 release-notes *VERSION:
     @bash scripts/release.sh notes {{VERSION}}
 
-# The promotion PR's gate, locally: everything `just ci` runs plus docs
-# (rustdoc -D warnings), which only the gate on PRs into main runs.
+# Every PR that changes a crate carries a change file (`cargo rail change
+# add <crates> --bump none|patch|minor|major -m "…"`). This is the CI gate:
+# against BASE when given (CI passes the PR's base sha), else the
+# merge-base with main.
+ci-changes BASE="":
+    if [ -n "{{BASE}}" ]; then cargo rail change check --since "{{BASE}}"; else cargo rail change check --merge-base; fi
+
+# The full suite's lint half, locally: everything `just ci` runs plus docs
+# (rustdoc -D warnings).
 ci-release: ci ci-docs
 
 # The typing test: every markdown construct typed into the app's note
@@ -472,10 +470,10 @@ ci-wasm: css
 ci-docs: css
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Everything the gate runs, in the gate's order. Run it before pushing a
-# card: on a PR into dev this IS the gate (CI does not run there), and
-# its output is the evidence the reviewer checks on the card. (`ci-docs`
-# runs only on release PRs; `just ci-release` adds it.)
+# Everything the PR checks run, in their order (CI runs only the affected
+# tests; this runs them all). Optional before pushing: the PR's checks
+# are the gate. (`ci-docs` runs on PRs into main and full runs; `just
+# ci-release` adds it. `ci-changes` is separate: it needs cargo-rail.)
 ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
@@ -518,16 +516,6 @@ capn-precommit:
 # Run capn pre-push checks manually (without pushing).
 capn-prepush:
     capn pre-push
-
-# ── Releases / changelog ─────────────────────────────────────────────────
-
-# Regenerate CHANGELOG.md from conventional commits.
-changelog:
-    git cliff -o CHANGELOG.md
-
-# Preview release notes for the next bump (no file write).
-changelog-preview:
-    git cliff --unreleased
 
 # ── Aliases ──────────────────────────────────────────────────────────────
 

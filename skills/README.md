@@ -27,15 +27,12 @@ on the CLI for idempotence + audit.
 
 ## Current skills
 
-- [`release-workflow.md`](release-workflow.md) — how a change reaches
-  production, in two separate stages: card PRs squash into `dev` on the
-  worker's own evidence (no CI there); `dev -> main` is a promotion PR
-  ("finished features": full checks + Reviewer on the diff, nothing
-  deploys); a release is a `vX.Y.Z` tag on main (version + changelog
-  commit, then `just release-tag`) and the tag alone deploys, uploads
-  TestFlight builds and publishes the GitHub Release, followed by a
-  back-merge into dev; versioning, changelog, hotfix, rollback, and what
-  the reviewer verifies.
+- [`release-workflow.md`](release-workflow.md) — Task's specifics of
+  fleet flow v4 (the fleet `release-workflow` skill is the source of
+  truth): branch from main, PR into main with a cargo-rail change file,
+  squash; a release is a CalVer tag `vYY.M.MICRO` (`just release-prepare`,
+  release PR, `just release-tag`) and the tag alone deploys; hotfix
+  branches, rollback, what runs where.
 - [`live-dev.md`](live-dev.md) — the local web app against the
   deployed server and the real issuer, signed in as the account in
   `.env` (`just live`); the CLI as that account; the traps that make

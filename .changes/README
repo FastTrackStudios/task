@@ -1,0 +1,44 @@
+Change files: release intent and release notes, one file per change
+====================================================================
+
+Every PR that changes a workspace crate adds a change file here. The
+release (`just release-prepare`) turns the pending files into the
+CHANGELOG.md section and deletes them in the release commit. Nobody edits
+CHANGELOG.md outside a release. CI enforces it on every PR
+(`cargo rail change check`; locally: `just ci-changes`).
+
+Write one with cargo-rail (in the dev or CI shell):
+
+    cargo rail change add <every crate you changed> --bump <none|patch|minor|major> \
+      -m "Fixed sync stalling after offline edits"
+
+It writes .changes/<slug>.md:
+
+    ---
+    "files-store" = "patch"
+    ---
+
+    Fixed sync stalling after offline edits
+
+- The message is the release note, written for the user: start with a
+  verb (Added / Fixed / Improved / Changed / Removed / Deprecated /
+  Security); name any changed setting, command or keybinding exactly.
+- --bump: major -> "Breaking / Migration", minor -> "Added",
+  patch -> "Fixed and improved". none = nothing a user would notice
+  (refactor, CI, tests, docs): it satisfies the check and adds no entry.
+- Breaking changes (a PR title with `!`) and anything under
+  **/migrations/**: --bump major, and add a "Migration:" paragraph to the
+  body (what changed, why, exact steps, whether a DB migration runs on
+  deploy).
+- A revert of something not yet released: delete the original change file
+  instead of adding a new one.
+
+The bump is release intent and severity only: the app version is CalVer,
+computed at release time.
+
+This file has no .md extension on purpose: cargo-rail parses every .md in
+this directory as a change file.
+
+Source of truth: the fleet `release-workflow` skill
+(fleet-skills, skills/release-workflow/references/changelog.md and
+cargo-rail.md).

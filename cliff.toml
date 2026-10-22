@@ -1,20 +1,15 @@
-# git-cliff config — generates CHANGELOG.md from the commit history.
+# git-cliff config — the FALLBACK changelog source.
 #
-# The release procedure runs it for you (scripts/release.sh, `just
-# release-plan` / `just release-prepare`), over a RANGE: the commits since
-# the last release tag become the new section, older sections stay as
-# released. Do not regenerate the whole file with `git cliff -o`: with
-# release branches, git-cliff's whole-history walk files a card merged
-# into dev during a release under that release, by date. By hand:
+# Release notes come from cargo-rail change files (.changes/README):
+# scripts/release.sh builds each CHANGELOG section from the pending
+# `.changes/*.md`. Only when a release has no change files at all (the
+# first CalVer release after 0.2.4; a range that skipped them) does it run
+# git-cliff over the commit RANGE since the last release tag, so a release
+# is never empty. Never regenerate the whole file with `git cliff -o`.
 #
-#   git cliff --bumped-version                    the version the next release gets
-#   git cliff --tag v0.2.5 --strip all v0.2.4..HEAD   preview the next release's notes
+#   git cliff --tag v26.10.0 --strip all v0.2.4..HEAD   preview that fallback
 #
-# Card PRs are squash-merged into `dev`, so each card is ONE commit whose
-# subject is the PR title — a conventional commit (`feat(files): …`,
-# `fix: …`). Older history uses `area: message` subjects; those land under
-# "Changes". The file is generated: fix a wrong line by fixing the commit
-# subject (or the PR title before the squash), never by editing the file.
+# Delete this file once every release since has had change files.
 
 [changelog]
 header = """

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # wt-new — a card worktree with a warm target dir, seeded by reflink.
 #
-#   wt-new <name> [<base-ref>=origin/dev] [-b <branch>]
+#   wt-new <name> [<base-ref>=origin/main] [-b <branch>]
 #
 # Makes $WT_ROOT/<name> (default /run/media/Development/wt/<name>) as a git
 # worktree of the canonical checkout $WT_REPO (default
@@ -36,7 +36,7 @@ set -euo pipefail
 usage() { sed -n '2,4p' "$0" >&2; exit 2; }
 [ $# -ge 1 ] || usage
 name=$1; shift
-base=origin/dev; branch=
+base=origin/main; branch=
 while [ $# -gt 0 ]; do
   case "$1" in
     -b) branch=$2; shift 2 ;;
