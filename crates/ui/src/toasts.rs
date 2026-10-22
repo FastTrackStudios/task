@@ -96,8 +96,12 @@ mod tests {
     fn toast_with_action_snapshot() {
         let mut dom = VirtualDom::new(app);
         dom.rebuild_in_place();
-        // The toast was queued during the first render; draw it.
-        dom.render_immediate(&mut NoOpMutations);
+        // The toast was queued during the first render. The provider's
+        // list is a memo, so let the scheduler settle, then draw it.
+        for _ in 0..8 {
+            dom.process_events();
+            dom.render_immediate(&mut NoOpMutations);
+        }
         let html = normalize_ids(&dioxus_ssr::render(&dom));
 
         assert!(
