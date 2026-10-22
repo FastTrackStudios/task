@@ -290,6 +290,6 @@ mod tests {
             assert_eq!(t.on_behalf_of_name, None);
         }
         // A person never acts "for" someone else.
-        assert_eq!(cody.clone().acting_for(team).on_behalf_of, None);
+        assert_eq!(cody.acting_for(team).on_behalf_of, None);
     }
 }

@@ -1148,11 +1148,11 @@ mod tests {
         doc
     }
 
-    fn ops(v: Value) -> Vec<Op> {
-        parse_ops(&v).unwrap()
+    fn ops(v: &Value) -> Vec<Op> {
+        parse_ops(v).unwrap()
     }
 
-    fn apply_all(doc: &LoroDoc, v: Value) -> Result<(), String> {
+    fn apply_all(doc: &LoroDoc, v: &Value) -> Result<(), String> {
         for op in ops(v) {
             run(doc, &op)?;
         }
@@ -1166,7 +1166,7 @@ mod tests {
 
     #[test]
     fn ops_parse_from_json_and_paths_from_either_form() {
-        let parsed = ops(json!([
+        let parsed = ops(&json!([
             { "op": "set", "path": ["song", "tempo"], "value": 80 },
             { "op": "set", "path": "/song/sections/0", "value": "intro" },
             { "op": "insert", "path": "song/sections", "value": "bridge" },
@@ -1199,7 +1199,7 @@ mod tests {
         let d = doc();
         apply_all(
             &d,
-            json!([
+            &json!([
                 { "op": "set", "path": ["song", "tempo"], "value": 82 },
                 { "op": "set", "path": ["song", "capo"], "value": { "fret": 2, "on": true } },
                 { "op": "insert", "path": ["song", "sections"], "index": 1, "value": "bridge" },
@@ -1223,13 +1223,13 @@ mod tests {
         d.commit();
         apply_all(
             &d,
-            json!([{ "op": "splice", "path": ["song", "lyrics"], "index": 8, "delete": 5, "insert": "love" }]),
+            &json!([{ "op": "splice", "path": ["song", "lyrics"], "index": 8, "delete": 5, "insert": "love" }]),
         )
         .unwrap();
         assert_eq!(value(&d)["song"]["lyrics"], json!("Amazing love"));
         apply_all(
             &d,
-            json!([{ "op": "set", "path": ["song", "lyrics"], "value": "Be thou" }]),
+            &json!([{ "op": "set", "path": ["song", "lyrics"], "value": "Be thou" }]),
         )
         .unwrap();
         assert_eq!(
@@ -1243,7 +1243,7 @@ mod tests {
     fn the_schema_check_keeps_a_fields_kind_and_the_paths_real() {
         let d = doc();
         let refuse = |v: Value| {
-            let op = ops(json!([v])).remove(0);
+            let op = ops(&json!([v])).remove(0);
             run(&d.fork(), &op).unwrap_err()
         };
         let e = refuse(json!({ "op": "set", "path": ["song", "tempo"], "value": "fast" }));
@@ -1265,7 +1265,7 @@ mod tests {
         // null changes a kind, in two steps.
         apply_all(
             &d,
-            json!([
+            &json!([
                 { "op": "set", "path": ["song", "tempo"], "value": null },
                 { "op": "set", "path": ["song", "tempo"], "value": "rubato" },
             ]),
@@ -1283,7 +1283,7 @@ mod tests {
         assert!(v1.contains('@'), "{v1}");
         apply_all(
             &d,
-            json!([{ "op": "set", "path": ["song", "tempo"], "value": 90 }]),
+            &json!([{ "op": "set", "path": ["song", "tempo"], "value": 90 }]),
         )
         .unwrap();
         assert_ne!(version(&d), v1, "an edit moves the version");
@@ -1303,7 +1303,7 @@ mod tests {
         undo.set_merge_interval(0);
         apply_all(
             &served,
-            json!([{ "op": "set", "path": ["song", "tempo"], "value": 90 }]),
+            &json!([{ "op": "set", "path": ["song", "tempo"], "value": 90 }]),
         )
         .unwrap();
         undo.record_new_checkpoint().unwrap();

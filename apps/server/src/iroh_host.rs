@@ -212,6 +212,7 @@ async fn bind_org(
     // router dispatching into a backend without it.
     let mut org = state
         .org(slug)
+        .map(|shared| crate::OrgAppState::clone(&shared))
         .ok_or_else(|| eyre::eyre!("org vanished between listing and binding"))?;
     crate::attach_peering(&mut org, id.clone(), IrohRemotes::port(endpoint.clone()));
     // And the wiki lane dials from the same endpoint, for the same
@@ -219,11 +220,12 @@ async fn bind_org(
     // org, so the id the publisher sees is the id it granted.
     #[cfg(feature = "plugin-wiki")]
     crate::attach_wiki_peering(&org, endpoint.clone());
+    let org = std::sync::Arc::new(org);
     state
         .orgs
         .write()
         .map_err(|_| eyre::eyre!("orgs lock poisoned"))?
-        .insert(slug.to_owned(), org.clone());
+        .insert(slug.to_owned(), std::sync::Arc::clone(&org));
 
     let serving = endpoint.clone();
     let gate = state.write_gate.clone();

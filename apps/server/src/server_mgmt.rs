@@ -244,7 +244,7 @@ impl OrgManagementImpl {
         })?;
 
         let state = self.state.clone();
-        let token = req.session_token.clone();
+        let token = req.session_token;
         let (user_id, email) = tokio::runtime::Handle::current()
             .block_on(async move { crate::central_auth::identify_unfenced(&state, &token).await })
             .ok_or_else(|| OrgManagementError::Unauthorized("invalid session token".into()))?;
@@ -256,7 +256,7 @@ impl OrgManagementImpl {
         // row, so hand it back) or someone else's (there is not, and a
         // derived slug must never adopt an existing org).
         if self.state.org(&slug).is_some() {
-            let memberships = home.memberships.clone();
+            let memberships = home.memberships;
             let existing = tokio::runtime::Handle::current()
                 .block_on({
                     let slug = slug.clone();
@@ -283,12 +283,9 @@ impl OrgManagementImpl {
         // The org exists; without this row it is an org the person who
         // asked for it cannot read. Written after creation so a failed
         // scaffold leaves no membership pointing at nothing.
-        let memberships = home.memberships.clone();
+        let memberships = home.memberships;
         tokio::runtime::Handle::current()
-            .block_on({
-                let slug = slug.clone();
-                async move { memberships.upsert(user_id, &slug, Some("owner")).await }
-            })
+            .block_on(async move { memberships.upsert(user_id, &slug, Some("owner")).await })
             .map_err(|e| OrgManagementError::Internal(format!("grant ownership: {e}")))?;
 
         Ok(manifest)

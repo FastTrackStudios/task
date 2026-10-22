@@ -348,7 +348,7 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
             .expect("stream open")
             .expect("one event");
         let mut owned: Option<FilesEvent> = None;
-        let _ = event.map(|ev| owned = Some(ev.clone()));
+        let _ = event.map(|ev| owned = Some(ev));
         assert!(
             matches!(
                 owned,

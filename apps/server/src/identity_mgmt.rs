@@ -81,7 +81,7 @@ impl IdentityServiceImpl {
         let store = self
             .state
             .org(&home_slug)
-            .and_then(|o| o.identity)
+            .and_then(|o| o.identity.clone())
             .ok_or_else(|| {
                 IdentityServiceError::Internal("home org has no identity locker".into())
             })?;

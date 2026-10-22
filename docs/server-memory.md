@@ -14,8 +14,8 @@ against every org, with a device sweep each round.
 
 | measure | budget | why that number |
 |---|---|---|
-| peak live heap | 96 MiB | Measured at 58.6 MiB after this card, and at 49.3 MiB in zero-copy PR 3 (STA-305), which tightened it from 128 MiB. The rest is headroom for the product to grow, and the figure is still an order of magnitude under prod's. |
-| heap growth over the 12 measured rounds | 4 MiB | Identical traffic should retain nothing, and 1.4 MiB was measured after this card. The allowance covers lazily filled caches, the inbox the rounds grow, and what background tasks hold at the moment of reading. Before this card the sweep leaked 9.1 MiB over these rounds. |
+| peak live heap | 80 MiB | Measured at 58.6 MiB after this card, 49.3 MiB in zero-copy PR 3 (STA-305, which tightened it from 128 to 96 MiB) and 50.5 MiB before zero-copy PR 2 (STA-304, which tightened it to 80 MiB). The rest is headroom for the product to grow, and the figure is still an order of magnitude under prod's. |
+| heap growth over the 12 measured rounds | 3 MiB | Identical traffic should retain nothing; 1.4 MiB was measured after this card and 0.0–1.1 MiB in zero-copy PRs 2 and 3. PR 2 tightened it from 4 MiB, keeping about twice the worst run. The allowance covers lazily filled caches, the inbox the rounds grow, and what background tasks hold at the moment of reading. Before this card the sweep leaked 9.1 MiB over these rounds. |
 | anonymous RSS | 200 MiB | The card's figure for seven small orgs was 300 MiB; zero-copy PR 3 measured about 101 MiB and tightened it. It is loose, because RSS also counts the allocator's slack, thread stacks and the harness. |
 
 Heap is counted by a global allocator installed in the `it` test binary

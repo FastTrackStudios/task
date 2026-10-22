@@ -67,7 +67,7 @@ type SubCall = std::pin::Pin<Box<dyn Future<Output = bool> + Send>>;
 pub fn spawn(state: &AppState) {
     for slug in state.org_slugs() {
         if let Some(org) = state.org(&slug) {
-            spawn_org(org, Arc::clone(&state.scope));
+            spawn_org(&org, Arc::clone(&state.scope));
         }
     }
 }
@@ -76,7 +76,7 @@ pub fn spawn(state: &AppState) {
 /// in-process link, and start one pump per subscribed hub. The pumps
 /// live until `scope` closes (their LocalServer acceptors are
 /// deferred on it).
-fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
+fn spawn_org(org: &Arc<OrgAppState>, scope: Arc<architect::Scope>) {
     let deliver = Arc::new(Deliverer::new(&org));
     let local = Arc::new(architect::LocalServer::serve(
         crate::org_layer_router(&org),
@@ -174,7 +174,7 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
     // Email rule — new mail in any configured mailbox.
     #[cfg(feature = "plugin-email")]
     if org.plugins.contains("email") {
-        spawn_email(org.clone(), Arc::clone(&deliver));
+        spawn_email(Arc::clone(&org), Arc::clone(&deliver));
     }
 
     // Agent rule — only when the agent plugin is mounted.
@@ -590,7 +590,7 @@ fn spawn_project_feed(
 /// right way round: a duplicate is noise, a silent drop is a missed
 /// email.
 #[cfg(feature = "plugin-email")]
-fn spawn_email(org: OrgAppState, deliver: Arc<Deliverer>) {
+fn spawn_email(org: Arc<OrgAppState>, deliver: Arc<Deliverer>) {
     use email_proto::{EmailProduct, EmailSync, SeqRange};
 
     /// Matches `email-product`'s own poller, so a new message waits at
@@ -761,11 +761,10 @@ where
         misses = 0;
         let drain = async {
             while let Ok(Some(msg)) = rx.recv().await {
-                // `SelfRef` has no owned extraction; `map` lends the
-                // value, so cloning out is sound — events own their
-                // data.
+                // `SelfRef` has no owned extraction; `map` hands the
+                // value to the closure, which moves it out.
                 let mut owned: Option<Ev> = None;
-                let _ = msg.map(|ev| owned = Some(ev.clone()));
+                let _ = msg.map(|ev| owned = Some(ev));
                 if let Some(ev) = owned {
                     on_event(ev);
                 }

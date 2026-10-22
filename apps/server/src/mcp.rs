@@ -111,16 +111,30 @@ mod code {
     pub const INTERNAL: i32 = -32603;
 }
 
+/// A JSON object from owned fields, moved in. `json!` serializes each
+/// interpolated value from a reference, so `json!({ "result": result })`
+/// deep-copies `result`; a tool's whole answer was copied once more per
+/// response that way.
+fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
+    Value::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
 fn rpc_result(id: Value, result: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+    object([("jsonrpc", json!("2.0")), ("id", id), ("result", result)])
 }
 
 fn rpc_error(id: Value, code: i32, message: impl Into<String>) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": code, "message": message.into() },
-    })
+    object([
+        ("jsonrpc", json!("2.0")),
+        ("id", id),
+        (
+            "error",
+            object([
+                ("code", json!(code)),
+                ("message", Value::String(message.into())),
+            ]),
+        ),
+    ])
 }
 
 /// A tool's answer. MCP models tool failure as a *successful*
@@ -165,12 +179,12 @@ pub struct ToolDef {
 
 /// Shorthand for a JSON Schema object.
 fn obj(props: Value, required: &[&str]) -> Value {
-    json!({
-        "type": "object",
-        "properties": props,
-        "required": required,
-        "additionalProperties": false,
-    })
+    object([
+        ("type", json!("object")),
+        ("properties", props),
+        ("required", json!(required)),
+        ("additionalProperties", json!(false)),
+    ])
 }
 
 fn s_(desc: &str) -> Value {
@@ -214,8 +228,16 @@ fn links_schema() -> Value {
 /// Descriptions are written *for the model*: they say when to reach
 /// for the tool, not merely what it does, because that's what drives
 /// correct selection.
+///
+/// Built once per process (zero-copy audit S4): `tools/list` and every
+/// `tools/call`'s plugin gate used to rebuild the whole list.
 #[must_use]
-pub fn tool_catalog() -> Vec<ToolDef> {
+pub fn tool_catalog() -> &'static [ToolDef] {
+    static CATALOG: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(build_tool_catalog)
+}
+
+fn build_tool_catalog() -> Vec<ToolDef> {
     let mut v = vec![
         ToolDef {
             name: "task_context",
@@ -1896,7 +1918,7 @@ fn tools_list_payload(plugins: &task_plugin::PluginSet) -> Value {
 ///   model reads — the tool exists in the build, this org turned it off);
 /// - enabled → `Ok(())`.
 fn plugin_gate(name: &str, plugins: &task_plugin::PluginSet) -> Result<(), Option<String>> {
-    let Some(def) = tool_catalog().into_iter().find(|t| t.name == name) else {
+    let Some(def) = tool_catalog().iter().find(|t| t.name == name) else {
         return Err(None);
     };
     if plugins.contains(def.plugin) {
@@ -1970,9 +1992,9 @@ don't need a confirmation round-trip.",
 pub async fn mcp_account_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
-    mcp_dispatch(state, None, headers, body).await
+    mcp_dispatch(state, None, headers, &body).await
 }
 
 /// `POST /org/{slug}/mcp` — the org-scoped lane, unchanged.
@@ -1980,9 +2002,68 @@ pub async fn mcp_handler(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     headers: HeaderMap,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
-    mcp_dispatch(state, Some(slug), headers, body).await
+    mcp_dispatch(state, Some(slug), headers, &body).await
+}
+
+/// One JSON-RPC request, its parts moved out of the parsed body rather
+/// than copied (zero-copy audit S2): the `id` and `params` are the very
+/// values the parser built.
+#[derive(Debug, PartialEq)]
+struct RpcRequest {
+    /// `Null` when absent — a notification.
+    id: Value,
+    /// `None` when `method` is missing or not a string; the request is
+    /// then refused with `id` still echoed.
+    method: Option<String>,
+    /// `{}` when absent.
+    params: Value,
+}
+
+/// Parse a request body. `Err` is the error response to send: a body
+/// that isn't JSON, or a batch (the current MCP revision dropped
+/// JSON-RPC batching).
+fn parse_request(body: &[u8]) -> Result<RpcRequest, Value> {
+    let request: Value = serde_json::from_slice(body)
+        .map_err(|e| rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}")))?;
+    let mut fields = match request {
+        Value::Object(fields) => fields,
+        Value::Array(_) => {
+            return Err(rpc_error(
+                Value::Null,
+                code::INVALID_REQUEST,
+                "batched requests are not supported",
+            ));
+        }
+        // A bare scalar has no id and no method; it is refused below
+        // as a request missing its `method`.
+        _ => serde_json::Map::new(),
+    };
+    let method = match fields.remove("method") {
+        Some(Value::String(m)) => Some(m),
+        _ => None,
+    };
+    Ok(RpcRequest {
+        id: fields.remove("id").unwrap_or(Value::Null),
+        method,
+        params: fields.remove("params").unwrap_or_else(|| json!({})),
+    })
+}
+
+/// A `tools/call`'s parameters, moved out of `params`: the tool's name
+/// and its arguments (`{}` when absent). Params that aren't an object
+/// name no tool.
+fn split_tool_call(params: Value) -> (Option<String>, Value) {
+    let Value::Object(mut fields) = params else {
+        return (None, json!({}));
+    };
+    let name = match fields.remove("name") {
+        Some(Value::String(n)) => Some(n),
+        _ => None,
+    };
+    let args = fields.remove("arguments").unwrap_or_else(|| json!({}));
+    (name, args)
 }
 
 /// Shared JSON-RPC dispatch. `pinned` is `Some(slug)` on the org lane
@@ -1992,33 +2073,15 @@ async fn mcp_dispatch(
     state: AppState,
     pinned: Option<String>,
     headers: HeaderMap,
-    body: String,
+    body: &[u8],
 ) -> Response {
-    let request: Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            return Json(rpc_error(
-                Value::Null,
-                code::PARSE,
-                format!("invalid JSON: {e}"),
-            ))
-            .into_response();
-        }
+    let RpcRequest { id, method, params } = match parse_request(body) {
+        Ok(request) => request,
+        Err(refusal) => return Json(refusal).into_response(),
     };
-    // The current MCP revision dropped JSON-RPC batching.
-    if request.is_array() {
-        return Json(rpc_error(
-            Value::Null,
-            code::INVALID_REQUEST,
-            "batched requests are not supported",
-        ))
-        .into_response();
-    }
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let Some(method) = request.get("method").and_then(Value::as_str) else {
+    let Some(method) = method.as_deref() else {
         return Json(rpc_error(id, code::INVALID_REQUEST, "missing `method`")).into_response();
     };
-    let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
     // Notifications carry no id and take no response body.
     if id.is_null() && method.starts_with("notifications/") {
@@ -2093,7 +2156,8 @@ async fn mcp_dispatch(
             }
         }
         "tools/call" => {
-            if let Some(name) = params.get("name").and_then(Value::as_str)
+            let (name, args) = split_tool_call(params);
+            if let Some(name) = name.as_deref()
                 && let Some(tools) = bot_tools(&state, &headers).await
                 && !tools.allows(name)
             {
@@ -2113,14 +2177,10 @@ async fn mcp_dispatch(
                 };
                 return Json(rpc_result(id, tool_err(refusal))).into_response();
             }
-            let args_peek = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
             // Account lane: the call names its org, else the default.
             let target = match &pinned {
                 Some(s) => s.clone(),
-                None => match arg_str(&args_peek, "org") {
+                None => match arg_str(&args, "org") {
                     Some(s) => s,
                     None => match default_slug(&state, &pinned, &headers).await {
                         Some(s) => s,
@@ -2134,7 +2194,7 @@ async fn mcp_dispatch(
                             // `list_orgs`: a bot made with no orgs asks
                             // exactly this before it is granted one.
                             if matches!(caller, Caller::Known)
-                                && params.get("name").and_then(Value::as_str) == Some("list_orgs")
+                                && name.as_deref() == Some("list_orgs")
                             {
                                 return Json(rpc_result(
                                     id,
@@ -2163,7 +2223,7 @@ async fn mcp_dispatch(
             };
             // `list_orgs` is account-lane only and spans orgs, so it
             // answers before any single-org authentication.
-            if pinned.is_none() && params.get("name").and_then(Value::as_str) == Some("list_orgs") {
+            if pinned.is_none() && name.as_deref() == Some("list_orgs") {
                 let orgs = reachable_orgs(&state, &headers).await;
                 let home = state.home_slug();
                 let out: Vec<Value> = orgs
@@ -2186,10 +2246,10 @@ async fn mcp_dispatch(
             // has its own operator check rather than a per-org session,
             // and is method-not-found when no backend is configured.
             if pinned.is_none()
-                && let Some(name) = params.get("name").and_then(Value::as_str)
+                && let Some(name) = name.as_deref()
                 && TELEMETRY_TOOLS.contains(&name)
             {
-                return match telemetry_call(&state, &headers, name, &args_peek).await {
+                return match telemetry_call(&state, &headers, name, &args).await {
                     Some(payload) => Json(rpc_result(id, payload)).into_response(),
                     None => Json(rpc_error(
                         id,
@@ -2203,18 +2263,14 @@ async fn mcp_dispatch(
                 Ok(org) => org,
                 Err(e) => return Json(rpc_error(id, code::INVALID_REQUEST, e)).into_response(),
             };
-            let Some(name) = params.get("name").and_then(Value::as_str) else {
+            let Some(name) = name else {
                 return Json(rpc_error(id, code::INVALID_PARAMS, "missing tool `name`"))
                     .into_response();
             };
-            let args = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
             // Plugin gate FIRST — a disabled plugin's tool must fail
             // the same way whether or not its backend would have
             // answered, and before any backend work happens.
-            match plugin_gate(name, &org.plugins) {
+            match plugin_gate(&name, &org.plugins) {
                 Ok(()) => {}
                 Err(None) => {
                     return Json(rpc_error(
@@ -2242,7 +2298,7 @@ async fn mcp_dispatch(
             // task-local can't be set from here (`spawn_blocking`
             // would lose it anyway), so the principal rides as a
             // value instead.
-            let principal = mcp_principal(&org, &headers).await;
+            let principal = mcp_principal(&state.static_token, &org, &headers).await;
             // …and who that is, for the records a tool creates
             // (`created_by`, `crate::attribution`): a bot key's bot, a
             // session's person. Never from the tool's arguments.
@@ -2251,7 +2307,7 @@ async fn mcp_dispatch(
                 None => None,
             };
             let tools = bot_tools(&state, &headers).await;
-            let called = name.to_string();
+            let called = name.clone();
             // Email links live in the person's own org, never in the org
             // being acted on. That is what keeps them private: a project
             // can live in a shared org while the links pointing at it sit
@@ -2261,7 +2317,7 @@ async fn mcp_dispatch(
             let links_org = state
                 .home_slug()
                 .and_then(|slug| state.org(&slug))
-                .unwrap_or_else(|| org.clone());
+                .unwrap_or_else(|| std::sync::Arc::clone(&org));
             let dispatched = tokio::task::spawn_blocking(move || {
                 call_tool(
                     &org,
@@ -2333,20 +2389,14 @@ async fn default_slug(
 /// Rewrite a per-org tools payload for the account lane: every tool
 /// gains `org`, and `list_orgs` is prepended so a client can discover
 /// the topology before it guesses at slugs.
-fn account_tools_payload(payload: Value, default_slug: &str) -> Value {
-    let mut tools: Vec<Value> = payload
-        .get("tools")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|mut t| {
-            if let Some(schema) = t.get("inputSchema").cloned() {
-                t["inputSchema"] = with_org_param(schema, default_slug);
-            }
-            t
-        })
-        .collect();
+fn account_tools_payload(mut payload: Value, default_slug: &str) -> Value {
+    let mut tools: Vec<Value> = match payload.get_mut("tools").map(Value::take) {
+        Some(Value::Array(tools)) => tools,
+        _ => Vec::new(),
+    };
+    for schema in tools.iter_mut().filter_map(|t| t.get_mut("inputSchema")) {
+        *schema = with_org_param(schema.take(), default_slug);
+    }
     tools.insert(
         0,
         json!({
@@ -2571,8 +2621,7 @@ pub async fn reachable_orgs(state: &AppState, headers: &HeaderMap) -> Vec<String
         return Vec::new();
     };
     let hosted = state.org_slugs();
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if state.static_token.matches(&token) {
         return hosted;
     }
     let mut reachable = Vec::new();
@@ -2719,7 +2768,7 @@ async fn linked_slugs(state: &AppState, token: &str) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let Some(store) = home.identity else {
+    let Some(store) = &home.identity else {
         return Vec::new();
     };
     store
@@ -2739,14 +2788,13 @@ async fn authenticate_for(
     state: &AppState,
     slug: &str,
     headers: &HeaderMap,
-) -> Result<crate::OrgAppState, String> {
+) -> Result<std::sync::Arc<crate::OrgAppState>, String> {
     let token = crate::watch_bridge::bearer(headers).ok_or("missing bearer token")?;
     let org = state
         .org(slug)
         .ok_or_else(|| format!("org `{slug}` not hosted"))?;
 
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if state.static_token.matches(&token) {
         return Ok(org);
     }
     if org
@@ -2770,7 +2818,7 @@ async fn authenticate_for(
                 token: token.clone(),
             })
             .await
-        && let Some(store) = home.identity
+        && let Some(store) = &home.identity
         && let Ok(links) = store.list_links(bundle.user.id).await
         && let Some(link) = links.into_iter().find(|l| l.remote_slug == slug)
         && let Some(linked) = link.token
@@ -2801,10 +2849,13 @@ async fn authenticate_for(
 /// Caller-sensitive backends treat that as "no person" — the wiki
 /// lane, for one, then writes as the server does when it plants a
 /// seed, and records no Editor on a wiki it creates.
-async fn mcp_principal(org: &crate::OrgAppState, headers: &HeaderMap) -> Option<String> {
+async fn mcp_principal(
+    static_token: &crate::operator::StaticToken,
+    org: &crate::OrgAppState,
+    headers: &HeaderMap,
+) -> Option<String> {
     let token = crate::watch_bridge::bearer(headers)?;
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
+    if static_token.matches(&token) {
         return None;
     }
     match org
@@ -4559,7 +4610,7 @@ fn call_tool(
 
         // ── Email (read + draft; no send by design) ──────────────
         "list_email_accounts" => {
-            let accounts = org.email.accounts().map_err(email_err)?;
+            let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
             let out: Vec<Value> = accounts
                 .iter()
                 .map(|a| {
@@ -4600,7 +4651,7 @@ fn call_tool(
                     &folder,
                     email_proto::SeqRange::Recent(limit as u32),
                 )
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             // Newest first for the model, whatever the backend's order.
             rows.sort_by(|a, b| b.date_ms.cmp(&a.date_ms));
             let out: Vec<Value> = rows.iter().take(limit).map(envelope_json).collect();
@@ -4613,7 +4664,7 @@ fn call_tool(
             let msg = links
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let body = msg
                 .body_text
                 .clone()
@@ -4654,7 +4705,10 @@ fn call_tool(
                 references: Vec::new(),
                 attachments: Vec::new(),
             };
-            let id = org.email.append_draft(&account, draft).map_err(email_err)?;
+            let id = org
+                .email
+                .append_draft(&account, draft)
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "draft_id": id,
                 "note": "saved to Drafts — the user reviews and sends it from their mail client",
@@ -4667,7 +4721,7 @@ fn call_tool(
             let original = org
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let env = &original.envelope;
             let subject = if env.subject.to_lowercase().starts_with("re:") {
                 env.subject.clone()
@@ -4692,7 +4746,10 @@ fn call_tool(
                 references,
                 attachments: Vec::new(),
             };
-            let id = org.email.append_draft(&account, draft).map_err(email_err)?;
+            let id = org
+                .email
+                .append_draft(&account, draft)
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "draft_id": id,
                 "in_reply_to": message_id,
@@ -4707,7 +4764,7 @@ fn call_tool(
             let link = links
                 .email_links
                 .link(&message_id, target, principal.unwrap_or("agent"))
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(link_json(&link))
         }
 
@@ -4717,7 +4774,7 @@ fn call_tool(
             links
                 .email_links
                 .unlink(&message_id, target)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({ "unlinked": true, "message_id": message_id }))
         }
 
@@ -4726,7 +4783,7 @@ fn call_tool(
             let rows = links
                 .email_links
                 .links_for_message(&message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let out: Vec<Value> = rows.iter().map(link_json).collect();
             Ok(json!({ "message_id": message_id, "count": out.len(), "links": out }))
         }
@@ -4736,7 +4793,7 @@ fn call_tool(
             let rows = links
                 .email_links
                 .links_for_target(target)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             // Bare ids are useless to a reader; with an account we can
             // say what each message actually is. A missing message is
             // not an error — the link outlives the mailbox.
@@ -4776,7 +4833,7 @@ fn call_tool(
             let msg = links
                 .email
                 .fetch_message(&account, &message_id)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             let title = arg_str(args, "title")
                 .unwrap_or_else(|| msg.envelope.subject.clone())
                 .trim()
@@ -4882,7 +4939,7 @@ fn call_tool(
             links
                 .email
                 .move_message(&account, &message_id, &folder)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({ "moved": true, "message_id": message_id, "folder": folder }))
         }
 
@@ -4907,7 +4964,7 @@ fn call_tool(
             links
                 .email
                 .set_flags(&account, &message_id, delta)
-                .map_err(email_err)?;
+                .map_err(|e| email_err(&e))?;
             Ok(json!({
                 "message_id": message_id,
                 "added": added,
@@ -6097,7 +6154,7 @@ fn wiki_summary_json(w: &wiki_proto::WikiSummary) -> Value {
 /// The sender identity for a draft: the account's own address.
 fn account_addr(org: &crate::OrgAppState, account: &str) -> Result<email_proto::Addr, ToolFailure> {
     use email_proto::EmailSync as _;
-    let accounts = org.email.accounts().map_err(email_err)?;
+    let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
     let acct = accounts.iter().find(|a| a.id.0 == account).ok_or_else(|| {
         ToolFailure::Message(format!(
             "no mail account `{account}` — call list_email_accounts first"
@@ -6153,7 +6210,7 @@ fn link_json(l: &email_proto::MessageLink) -> Value {
 
 /// Email backend errors, with the one common capability gap named
 /// instead of debug-dumped.
-fn email_err(e: email_proto::EmailSyncError) -> ToolFailure {
+fn email_err(e: &email_proto::EmailSyncError) -> ToolFailure {
     let raw = format!("{e:?}");
     if raw.starts_with("Unsupported") {
         ToolFailure::Message(format!(
@@ -6394,12 +6451,122 @@ fn envelope_json(e: &email_proto::Envelope) -> Value {
 mod tests {
     use super::*;
 
+    /// The request's parts as the old dispatch read them (`get` +
+    /// `cloned` on the parsed value) — the reading `parse_request`
+    /// replaced. Pinned against it so moving the parts out decides
+    /// exactly as copying them did.
+    fn copied_reading(body: &str) -> Result<RpcRequest, Value> {
+        let request: Value = serde_json::from_str(body)
+            .map_err(|e| rpc_error(Value::Null, code::PARSE, format!("invalid JSON: {e}")))?;
+        if request.is_array() {
+            return Err(rpc_error(
+                Value::Null,
+                code::INVALID_REQUEST,
+                "batched requests are not supported",
+            ));
+        }
+        Ok(RpcRequest {
+            id: request.get("id").cloned().unwrap_or(Value::Null),
+            method: request
+                .get("method")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            params: request.get("params").cloned().unwrap_or_else(|| json!({})),
+        })
+    }
+
+    #[test]
+    fn parse_request_moves_what_the_copying_reading_copied() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":"a-b","method":"tools/call","params":{"name":"list_tasks","arguments":{"status":"open"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":null,"method":"tools/list","params":[]}"#,
+            r#"{"jsonrpc":"2.0","id":7}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":42}"#,
+            r#"{"id":{"nested":[1,2]},"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+            r#"42"#,
+            r#""ping""#,
+            r#"null"#,
+            r#"{"id":1,"method":"ping""#,
+            "",
+        ] {
+            assert_eq!(
+                parse_request(body.as_bytes()),
+                copied_reading(body),
+                "body {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_that_is_not_utf8_is_a_parse_error() {
+        let refusal = parse_request(b"{\"id\":1,\"method\":\"\xff\"}").unwrap_err();
+        assert_eq!(refusal["error"]["code"], code::PARSE);
+        assert_eq!(refusal["id"], Value::Null);
+    }
+
+    #[test]
+    fn split_tool_call_matches_the_copying_reading() {
+        for params in [
+            json!({ "name": "list_tasks", "arguments": { "org": "alpha" } }),
+            json!({ "name": "list_tasks" }),
+            json!({ "arguments": { "org": "alpha" } }),
+            json!({ "name": 3, "arguments": [] }),
+            json!([]),
+            json!("list_tasks"),
+            json!({}),
+        ] {
+            let copied = (
+                params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            );
+            assert_eq!(split_tool_call(params.clone()), copied, "params {params}");
+        }
+    }
+
+    #[test]
+    fn account_tools_payload_adds_org_to_every_schema() {
+        let payload = json!({ "tools": [
+            { "name": "a", "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "b" },
+        ]});
+        let out = account_tools_payload(payload, "home");
+        let tools = out["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["name"], "list_orgs");
+        assert_eq!(tools[1]["name"], "a");
+        assert_eq!(
+            tools[1]["inputSchema"]["properties"]["org"]["type"],
+            "string"
+        );
+        assert_eq!(tools[2], json!({ "name": "b" }));
+        assert_eq!(
+            account_tools_payload(json!({}), "home")["tools"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_catalog_is_built_once() {
+        assert!(std::ptr::eq(tool_catalog(), tool_catalog()));
+    }
+
     #[test]
     fn catalog_entries_are_well_formed() {
         let catalog = tool_catalog();
         assert!(catalog.len() >= 15, "catalog shrank unexpectedly");
         let mut seen = std::collections::HashSet::new();
-        for tool in &catalog {
+        for tool in catalog {
             assert!(seen.insert(tool.name), "duplicate tool `{}`", tool.name);
             // A typo'd plugin id would silently hide the tool for
             // every org (unknown ids are never in a resolved set).
@@ -6414,6 +6581,7 @@ mod tests {
                 "`{}` needs a description the model can select on",
                 tool.name
             );
+
             let schema = (tool.schema)();
             assert_eq!(schema["type"], "object", "`{}` schema", tool.name);
             assert!(schema["properties"].is_object(), "`{}` schema", tool.name);

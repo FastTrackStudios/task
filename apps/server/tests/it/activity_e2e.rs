@@ -34,7 +34,7 @@ async fn next_event<Ev: Clone + vox::facet::Facet<'static> + 'static>(
         .expect("rx error")
         .expect("rx closed");
     let mut owned: Option<Ev> = None;
-    let _ = msg.map(|ev| owned = Some(ev.clone()));
+    let _ = msg.map(|ev| owned = Some(ev));
     owned.expect("decode event")
 }
 

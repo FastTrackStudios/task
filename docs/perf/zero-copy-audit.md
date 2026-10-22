@@ -88,13 +88,13 @@ whole vault per request.
 
 | # | Site | Copy | Bytes × frequency | Status |
 |---|------|------|-------------------|--------|
-| S1 | `AppState::org(slug)` | clones the whole `OrgAppState` (strings, roots, plugin set, auth, sharing handles) out of the map on every request | struct × every MCP / HTTP call (`authenticate_for` 682 k allocs) | **next**: store `Arc<OrgAppState>`, hand out the `Arc` |
-| S2 | `mcp::mcp_dispatch` | body `String` parsed to a `serde_json::Value`, then `params` and `id` deep-cloned out of it | request size × 2 × calls (1.69 M allocs) | **next**: take `params`/`id` out of the owned map (`remove`), parse from the body bytes |
-| S3 | `mcp::authenticate_for` | `std::env::var("TASK_MCP_TOKEN")` (a `String`) per call; token cloned per session lookup | per call | **next**: read the static token once at startup; pass the token by reference where architect allows |
-| S4 | `mcp::call_tool`, `tool_ok`, `rpc_result` | tool results built as `Value` then serialized; the catalogue rebuilt per `tools/list` | 388 k + 73 k + 105 k allocs | **next**: build `tool_catalog` once (`OnceLock`) and serialize straight to the response |
+| S1 | `AppState::org(slug)` | clones the whole `OrgAppState` (strings, roots, plugin set, auth, sharing handles) out of the map on every request | struct × every MCP / HTTP call (`authenticate_for` 682 k allocs) | **done** (PR 2: `orgs` holds `Arc<OrgAppState>`, `org()` hands out the `Arc`) |
+| S2 | `mcp::mcp_dispatch` | body `String` parsed to a `serde_json::Value`, then `params` and `id` deep-cloned out of it | request size × 2 × calls (1.69 M allocs) | **done** (PR 2: `Bytes` body + `from_slice`; `parse_request` / `split_tool_call` move `id`, `params`, `name`, `arguments` out; parity test against the copying reading) |
+| S3 | `mcp::authenticate_for` | `std::env::var("TASK_MCP_TOKEN")` (a `String`) per call; token cloned per session lookup | per call | **done** (PR 2: `AppState::static_token`, read once per boot). The bearer is still cloned once per session lookup: `architect_auth::CurrentSession` takes an owned `String` |
+| S4 | `mcp::call_tool`, `tool_ok`, `rpc_result` | tool results built as `Value` then serialized; the catalogue rebuilt per `tools/list` | 388 k + 73 k + 105 k allocs | **done** (PR 2: `tool_catalog()` is a `OnceLock`'d `&'static [ToolDef]`). `tool_ok`/`rpc_result` already move their values; the response is still one `Value` serialized by `Json` |
 | S5 | `iroh_host::bind_org` | 22.7 MiB of the 67 MiB peak | retained, not churn | **leave** here: iroh endpoint and blob store state, owned by t_4219725c / t_911268fa |
 | S6 | `sharing::{sources, subtree}` | path strings rebuilt per entry while walking a shared subtree | entries × share listings | **later** |
-| S7 | 36 copy-lint hits (server) | mostly `needless_pass_by_value` on handlers' `String`/`Vec` args | small each | **next**, with the deny |
+| S7 | 36 copy-lint hits (server) | mostly `needless_pass_by_value` on handlers' `String`/`Vec` args | small each | **done** (PR 2: 37 → 0 over lib, unit tests and the `it` binary; `task-server` denies the four lints in `lib.rs`, `main.rs` and `tests/it/main.rs`) |
 
 ### files / files-store / files-sync
 
@@ -218,3 +218,58 @@ chunk/object read and per pull, and it scales with file size. Growth is
 noise around zero (1.4 MiB was measured at t_37712151). The budget is
 tightened on the strength of the peak: heap 128 → 96 MiB, RssAnon
 300 → 200 MiB; growth stays at 4 MiB.
+
+### PR 2: task-server MCP / request path
+
+Branch `perf/zero-copy-server` (STA-304, PR #223). Fixes S1–S4 and S7.
+
+- `AppState::orgs` holds `Arc<OrgAppState>` and `AppState::org` hands
+  out the `Arc`: a reference count per request instead of a copy of the
+  struct. `iroh_host::bind_org` (and the tests that do the same) copies
+  the org once to attach peering, then stores a fresh `Arc`.
+- `/mcp` and `/org/{slug}/mcp` take the body as `Bytes` and parse it
+  with `from_slice`. `parse_request` moves `id`, `method` and `params`
+  out of the parsed object; `split_tool_call` moves `name` and
+  `arguments` out of `params`. That replaces one deep clone of `params`
+  and two of `arguments` per `tools/call`. A unit test pins both readers
+  against the old `get` + `cloned` reading.
+- JSON-RPC envelopes (`rpc_result`, `rpc_error`), tool schemas (`obj`)
+  and the telemetry envelope are built by moving values into a map.
+  `json!` serializes an interpolated value from a reference, so
+  `json!({ "result": result })` deep-copied every tool answer once more.
+- `TASK_MCP_TOKEN` is read once into `AppState::static_token`
+  (`operator::StaticToken`, an `Arc<str>`). It used to be a fresh
+  `String` from the environment on every MCP call and operator check.
+  It's held on the `AppState`, not in a process static, so each test
+  boot keeps its own token. The bearer itself is still cloned once per
+  session lookup, because `architect_auth::CurrentSession` takes an
+  owned `String`.
+- `tool_catalog()` is built once (`OnceLock`) and returns
+  `&'static [ToolDef]`.
+- S7: the server's copy-lint hits are fixed (by-reference parameters,
+  moves instead of clones, `#[derive(Clone, Copy)]` on a tag enum), and
+  the crate denies the four lints.
+- No on-disk or wire format change. One behaviour note: a body that
+  isn't UTF-8 now gets JSON-RPC `-32700` instead of axum's plain-text
+  400.
+
+Numbers (THEBATTLESHIP, canonical checkout under the build lease, dev
+e7af2a2f against the branch):
+
+| | dev e7af2a2f | PR 2 |
+|---|---|---|
+| copy lints `task-server` (lib + tests + `it`) | 37 (23 `redundant_clone`, 14 `needless_pass_by_value`) | 0 |
+| memory_budget peak heap | 47.2 MiB | 47.4 / 47.3 / 47.6 MiB |
+| memory_budget growth (12 rounds) | 0.6 MiB | 0.0 / 0.0 / 1.1 MiB |
+| memory_budget RssAnon | 104088 KiB | 106964 / 102692 / 100936 KiB |
+
+(PR 2 column: three runs, on 98040bec, c04b529d and cd462a6c; the code
+under test is the same in all three.)
+
+The scenario's MCP traffic is a few small calls per org per round, so
+the per-request savings don't show in its peak: the peak is set by boot
+and the iroh/Files state (S5). Peak and RssAnon are flat within run to
+run noise, and growth is noise around zero. The budget is tightened
+anyway, since every run since PR 1 measured under 51 MiB peak: heap
+96 → 80 MiB. Growth goes 4 → 3 MiB, about twice the worst run seen
+(1.4 MiB). RssAnon stays at 200 MiB.
