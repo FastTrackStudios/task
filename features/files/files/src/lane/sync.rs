@@ -48,29 +48,54 @@
 //! subscription is a record of what that peer keeps — applying it here
 //! would let a laptop that unticks "footage" release the host's copy.
 //!
-//! **A project's capabilities are derived from its `RootFlavor`.** Facets
-//! come from capabilities, capabilities come from a project declaration,
-//! and that declaration is not yet wired to roots — see
-//! [`capability_of`]. A media root therefore takes *every* media
-//! capability's layouts rather than a guess at which one it holds, which
-//! is the widest correct answer while the narrow one is unavailable.
+//! ## Which conventions apply to a root
+//!
+//! **A root's capabilities are its project's declaration**, read from
+//! the project page at the top of the root's own tree
+//! ([`files_domain::facet::DECLARATION`], `project.md`). Facets come from
+//! capabilities and capabilities come from that page
+//! (`project.identity.declaration`), so a music project recognises
+//! REAPER's `Media` and its `.rpp` sessions, a video project recognises
+//! Resolve's `Proxies`, and a root whose project declared neither
+//! recognises nothing and reports every directory as unmapped — rather
+//! than every media root being assumed to be both, which classified a
+//! music album's `Proxies` folder as somebody's proxies.
+//!
+//! The page lives in the tree on purpose. It syncs with the root, so a
+//! laptop that pulled the root reads the same declaration from the same
+//! bytes as the server, with no side channel to fall out of step, and a
+//! restart finds it where it was. The lane never releases it to a stub:
+//! it is what everything else here is read by.
+//!
+//! ## A session and its media are one unit
+//!
+//! `files.sync.selective` says a session arrives with the media it
+//! references. A device keeps a session by subscribing to `sessions` or
+//! by pinning the session file, and then `apply_subscription`
+//! reads what the session references (`files_domain::session`) and keeps
+//! those files resident with it — wherever in the root they sit, and
+//! whatever their directory's own facet. Nothing else follows: footage
+//! beside the session stays a stub unless something else keeps it.
+//! [`SyncService::session_media`] spells the unit out, including what
+//! the session names that this root cannot supply.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::error::FilesError;
 use chrono::Utc;
-use files_domain::facet::{Capability, Facet, FacetMap, Source};
-use files_domain::hydration::{Subscription as Plan, decide};
+use files_domain::facet::{Capability, DECLARATION, Facet, FacetMap, Source};
+use files_domain::hydration::{References, Subscription as Plan, decide_with, kept_sessions};
 use files_domain::ignore::{IgnoreSet as DomainIgnores, Layer};
+use files_domain::session::{self, Format, Referenced};
 use files_proto::error::FilesFault;
 use files_proto::id::{DeviceId, RootId};
 use files_proto::model::{FileRootInfo, RootFlavor};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability as Can;
 use files_proto::service::sync::{
-    DeviceInfo, FacetBinding, FacetName, FacetSource, IgnoreSet, Subscription, SyncService,
-    TransferPolicy,
+    DeviceInfo, FacetBinding, FacetName, FacetSource, IgnoreSet, SessionMedia, Subscription,
+    SyncService, TransferPolicy,
 };
 use files_proto::service::tree::Hydration;
 
@@ -443,51 +468,56 @@ fn read_state<T>(backend: &FilesBackend, f: impl FnOnce(&SyncState) -> T) -> T {
 
 // ── Capabilities, ignores, facet maps ──────────────────────────────
 
-/// A root's capabilities.
+/// The capabilities a root holds, from its flavour and its project page.
 ///
-/// Capabilities belong to a project declaration — "this is a music
-/// project" — and that declaration is not yet attached to a File Root.
-/// Until it is, the root's flavour is the only signal available, and a
-/// media root is assumed to be music production.
-///
-/// FUTURE: read the project's declared capabilities once projects carry
-/// them. This is wrong for a video project, which will see its `Proxies`
-/// and `CacheClip` directories reported as unmapped rather than
-/// recognised — reported, note, not guessed at, so the failure is
-/// visible and recoverable by `map_facet` rather than silent.
-/// The capabilities whose tool layouts apply to a root.
-///
-/// Both, for a media root. `project.capability` makes capability a
-/// *set* precisely because a collaborative album is music production
-/// and video production at once, and a root cannot know which half of
-/// such a project it holds — flavour distinguishes media from source,
-/// not audio from video.
-///
-/// Reading it as one capability meant Resolve's layouts never applied
-/// anywhere, so `Proxies` was unclassifiable and a laptop that declined
-/// footage was declining *unmapped* content instead. The two
-/// vocabularies are disjoint — nothing in Pro Tools, REAPER or Logic
-/// names a directory Resolve also names — so the union classifies
-/// strictly more and reclassifies nothing.
-///
-/// The honest fix is upstream: capabilities belong to the project
-/// declaration (`project.identity.declaration`), not to a root's
-/// flavour. Until that seam exists this is the widest correct answer
-/// rather than a guess at the narrow one.
-fn capability_of(root: &FileRootInfo) -> Vec<Capability> {
-    match root.flavor {
-        RootFlavor::Media => vec![Capability::MusicProduction, Capability::VideoProduction],
-        // A software root holds source, not sessions or footage. No
-        // tool layout applies and nothing here classifies it.
+/// A software root holds source, not sessions or footage: no tool layout
+/// applies whatever its page says. A media root holds exactly what its
+/// project declared (`files_domain::facet::declaration`), and nothing
+/// when there is no page or the page declares nothing — the honest
+/// answer for a tree whose tools nobody named, which reports every
+/// directory as unmapped rather than guessing at a convention.
+fn capabilities_for(flavor: RootFlavor, page: Option<&str>) -> Vec<Capability> {
+    match flavor {
         RootFlavor::Software => Vec::new(),
+        RootFlavor::Media => page
+            .map(|p| files_domain::facet::declaration(p).held)
+            .unwrap_or_default(),
     }
 }
 
 impl FilesBackend {
-    /// The facet map in force for a root: the capability's tool layouts
+    /// The capabilities a root's project declares — see the module note.
+    ///
+    /// Read from the live tree on every call: a person editing the page's
+    /// `capabilities:` list changes the conventions the next pass applies,
+    /// with nothing cached to invalidate. A page an older pass released
+    /// to a stub is hydrated first, since a stub has nothing to read.
+    // t[impl project.capability.conventions] — the declared capabilities,
+    // bound to the root their project's page sits in
+    async fn capabilities_of(&self, root: &FileRootInfo) -> Vec<Capability> {
+        if root.flavor != RootFlavor::Media {
+            return Vec::new();
+        }
+        let Ok(tree) = crate::lane::lane_tree(root) else {
+            return Vec::new();
+        };
+        let page = tree.join(DECLARATION);
+        if crate::stub::probe(&page).is_some()
+            && let Err(e) = self.hydrate_path(root.id, DECLARATION.to_string()).await
+        {
+            tracing::warn!(root = %root.id, error = %e, "files sync: the project page is a stub and could not be fetched");
+        }
+        let text = crate::lane::blocking(move || Ok(std::fs::read_to_string(&page).ok()))
+            .await
+            .ok()
+            .flatten();
+        capabilities_for(root.flavor, text.as_deref())
+    }
+
+    /// The facet map in force for a root: its capabilities' tool layouts
     /// plus whatever the project has mapped.
-    fn facet_map(&self, root_id: RootId, root: &FileRootInfo) -> FacetMap {
-        let mut map = FacetMap::new(capability_of(root));
+    fn facet_map(&self, root_id: RootId, capabilities: Vec<Capability>) -> FacetMap {
+        let mut map = FacetMap::new(capabilities);
         read_state(self, |s| {
             if let Some(project) = s.mappings.get(&root_id) {
                 for (path, facet) in project {
@@ -503,10 +533,10 @@ impl FilesBackend {
     async fn sync_ignores(
         &self,
         root_id: RootId,
-        root: &FileRootInfo,
+        capabilities: &[Capability],
     ) -> Result<DomainIgnores, FilesFault> {
         let project = self.ignore_patterns(root_id.get()).await.map_err(fault)?;
-        let mut set = DomainIgnores::new(capability_of(root));
+        let mut set = DomainIgnores::new(capabilities.iter().copied());
         set.with_project(project);
         Ok(set)
     }
@@ -539,19 +569,32 @@ impl FilesBackend {
     ///
     /// A software root is skipped whole: its working tree belongs to its
     /// colocated git, which has its own opinion about what is on disk.
+    ///
+    /// A kept session brings what it references (see the module note),
+    /// and the project page is always kept: it weighs nothing and it is
+    /// what this pass read the root's conventions from.
+    // t[impl files.sync.selective] — the session and its media, as one unit
     async fn apply_subscription(&self, root_id: RootId) -> Result<Vec<RootPath>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         if root.flavor != RootFlavor::Media {
             return Ok(Vec::new());
         }
-        let ignores = self.sync_ignores(root_id, &root).await?;
+        let capabilities = self.capabilities_of(&root).await;
+        let ignores = self.sync_ignores(root_id, &capabilities).await?;
         let listing = self.list_tree(&root, &ignores).await?;
-        let map = self.facet_map(root_id, &root);
+        let map = self.facet_map(root_id, capabilities);
         let plan = self.plan_for(root_id);
+        let refs = self
+            .references(root_id, &root, &listing.files, &map, &plan)
+            .await?;
 
         let mut changed = Vec::new();
         for path in listing.files {
-            let wanted = decide(&path, &map, &plan).hydration;
+            let wanted = if path.as_str() == DECLARATION {
+                Hydration::Resident
+            } else {
+                decide_with(&path, &map, &plan, &refs).hydration
+            };
             let outcome = match wanted {
                 Hydration::Resident => self.hydrate_path(root_id.get(), path.to_string()).await,
                 // `Unavailable` is a fact about the network, decided
@@ -570,6 +613,63 @@ impl FilesBackend {
             }
         }
         Ok(changed)
+    }
+
+    /// The media every session this device keeps references.
+    ///
+    /// Only kept sessions are read — a session nobody selected brings
+    /// nothing — and each is hydrated before it is read, since it is
+    /// about to be kept anyway and a stub names no media.
+    async fn references(
+        &self,
+        root_id: RootId,
+        root: &FileRootInfo,
+        files: &[RootPath],
+        map: &FacetMap,
+        plan: &Plan,
+    ) -> Result<References, FilesFault> {
+        let mut refs = References::new();
+        for session in kept_sessions(files.iter(), map, plan) {
+            let found = self
+                .session_references(root_id, root, session, files, map)
+                .await?;
+            refs.add(session, found.inside);
+        }
+        Ok(refs)
+    }
+
+    /// What one session references: its `FILE` lines for a format this
+    /// lane reads, otherwise the atomic tool directories beside it.
+    ///
+    /// Reading needs the session's bytes, so a stub session is hydrated
+    /// first. One that cannot be (a partial replica missing its chunks)
+    /// is reported as referencing nothing rather than failing the pass —
+    /// the same tolerance the pass has for any one file.
+    async fn session_references(
+        &self,
+        root_id: RootId,
+        root: &FileRootInfo,
+        session: &RootPath,
+        files: &[RootPath],
+        map: &FacetMap,
+    ) -> Result<Referenced, FilesFault> {
+        match session::format_of(session) {
+            Format::Opaque => Ok(session::folder_references(session, files.iter(), map)),
+            Format::Reaper => {
+                if let Err(e) = self.hydrate_path(root_id.get(), session.to_string()).await {
+                    tracing::warn!(%root_id, %session, error = %e, "files sync: a kept session could not be fetched, so its media is unknown");
+                    return Ok(Referenced::default());
+                }
+                let disk = crate::lane::lane_tree(root)?.join(session.as_str());
+                let text = crate::lane::blocking(move || {
+                    Ok(std::fs::read(&disk)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default())
+                })
+                .await?;
+                Ok(session::reaper_references(session, &text))
+            }
+        }
     }
 
     /// Walk a root's live tree, skipping its internals and everything
@@ -831,9 +931,10 @@ impl SyncService for FilesBackend {
     async fn facets(&self, root_id: RootId) -> Result<Vec<FacetBinding>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
-        let ignores = self.sync_ignores(root_id, &root).await?;
+        let capabilities = self.capabilities_of(&root).await;
+        let ignores = self.sync_ignores(root_id, &capabilities).await?;
         let listing = self.list_tree(&root, &ignores).await?;
-        let map = self.facet_map(root_id, &root);
+        let map = self.facet_map(root_id, capabilities);
 
         Ok(listing
             .dirs
@@ -868,7 +969,8 @@ impl SyncService for FilesBackend {
                 .or_default()
                 .insert(path.as_str().to_ascii_lowercase(), facet);
         });
-        Ok(binding_for(path, &self.facet_map(root_id, &root)))
+        let capabilities = self.capabilities_of(&root).await;
+        Ok(binding_for(path, &self.facet_map(root_id, capabilities)))
     }
 
     // t[impl files.ignore.layers] — three layers, none able to defeat another
@@ -878,7 +980,7 @@ impl SyncService for FilesBackend {
         let project = self.ignore_patterns(root_id.get()).await.map_err(fault)?;
         // The domain owns both the matching and the lists; this is a
         // projection of them, not a second copy.
-        let domain = DomainIgnores::new(capability_of(&root));
+        let domain = DomainIgnores::new(self.capabilities_of(&root).await);
         Ok(IgnoreSet {
             platform: domain.patterns(Layer::Platform),
             capability: domain.patterns(Layer::Capability),
@@ -1031,6 +1133,44 @@ impl SyncService for FilesBackend {
     }
 
     // t[impl files.device.control] — revoked, refused sync, wipes on next contact
+    // t[impl files.sync.selective] — the unit a selected session keeps
+    async fn session_media(
+        &self,
+        root_id: RootId,
+        session: RootPath,
+    ) -> Result<SessionMedia, FilesFault> {
+        let root = crate::lane::root_or_fault(self, root_id)?;
+        let session = session.validate()?;
+        crate::lane::caller::authorise(self, root_id, &session, Can::Read).await?;
+        let capabilities = self.capabilities_of(&root).await;
+        let map = self.facet_map(root_id, capabilities.clone());
+        if !map.is_session(session.as_str()) {
+            return Err(FilesFault::invalid(format!(
+                "{session} is not a session file of the work this root's project declares"
+            )));
+        }
+        let ignores = self.sync_ignores(root_id, &capabilities).await?;
+        let listing = self.list_tree(&root, &ignores).await?;
+        if !listing.files.contains(&session) {
+            return Err(FilesFault::PathNotFound(session));
+        }
+        let parsed = session::format_of(&session) == Format::Reaper;
+        let found = self
+            .session_references(root_id, &root, &session, &listing.files, &map)
+            .await?;
+        let (media, missing): (Vec<RootPath>, Vec<RootPath>) = found
+            .inside
+            .into_iter()
+            .partition(|p| listing.files.contains(p));
+        Ok(SessionMedia {
+            session,
+            media,
+            missing,
+            outside: found.outside,
+            parsed,
+        })
+    }
+
     async fn revoke_device(&self, device: DeviceId) -> Result<DeviceInfo, FilesFault> {
         let revoked = with_state(self, |s| {
             let info = s
@@ -1322,19 +1462,29 @@ mod tests {
         assert_eq!(read_state(&backend, |s| s.devices.len()), 1);
     }
 
+    const MUSIC_PAGE: &str = "---\ntype: project\ncapabilities: [music-production]\n---\n";
+
     #[test]
     fn a_software_root_holds_no_facet_capability() {
-        let root = FileRootInfo {
-            id: uuid::Uuid::nil(),
-            name: "src".into(),
-            path: Some("/nowhere".into()),
-            flavor: RootFlavor::Software,
-            created_at: Utc::now(),
-            project_version: None,
-        };
         assert!(
-            capability_of(&root).is_empty(),
-            "source is neither sessions nor footage"
+            capabilities_for(RootFlavor::Software, Some(MUSIC_PAGE)).is_empty(),
+            "source is neither sessions nor footage, whatever the page says"
         );
+    }
+
+    // t[verify project.capability.conventions] — a root holds the
+    // capabilities its own project page declares, and no others
+    #[test]
+    fn a_media_root_holds_what_its_project_declares_and_nothing_more() {
+        assert_eq!(
+            capabilities_for(RootFlavor::Media, Some(MUSIC_PAGE)),
+            vec![Capability::MusicProduction],
+            "a music project is not also assumed to be a video one"
+        );
+        assert!(
+            capabilities_for(RootFlavor::Media, None).is_empty(),
+            "no page, no declaration: nothing is guessed"
+        );
+        assert!(capabilities_for(RootFlavor::Media, Some("# notes\n")).is_empty());
     }
 }

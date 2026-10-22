@@ -65,6 +65,7 @@ mod rockstars_adult_jam;
 mod safe_saves;
 mod scale;
 mod search;
+mod session_media;
 mod setlist;
 mod sibling_apps;
 mod song_library;

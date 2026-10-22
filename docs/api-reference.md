@@ -523,6 +523,7 @@ Plugin: `core` — schema stamp: `5f412dcb4809521f`
 | `coordinator` | — | `read` on `files/**` | — |
 | `set_transfer_policy` | `device`, `policy` | `write` on `files/**` | — |
 | `revoke_device` | `device` | `write` on `files/**` | audited |
+| `session_media` | `root_id`, `session` | `read` on `files/**` | — |
 
 ## `files-replica` (SyncService)
 

@@ -283,6 +283,20 @@ name_version` so it survives retention. A DAW opens files on local disk, so
 the working copy on a machine comes from the Files daemon, not from streaming
 — see *Not built yet*.
 
+A session and its media are one unit. Declare the project's work in the
+`capabilities:` list of the `project.md` at the top of the root
+(`music-production` for REAPER and Pro Tools, `video-production` for
+Resolve): that page travels with the root, and it is what makes `.rpp` a
+session and `Media/` a tool directory on every machine that syncs it. A
+machine then selects one session by pinning its file
+(`SyncServiceClient::pin(root, vec![session], true)`), or every session by
+subscribing to `sessions`; either way the session and every file its `FILE`
+lines name stay resident together — wherever those files sit in the root —
+and nothing else does. `SyncServiceClient::session_media(root, session)`
+lists that unit before you open it: the media present, what the session
+names but the root lacks (`missing`), and paths outside the root
+(`outside`).
+
 **Keyflow (charts).** Charts are vault documents, not bytes:
 `ResourcesServiceClient::upsert_chart` / `chart` / `list_charts`, with
 collaborative editing. Song lists are collections of kind `songlist` over
@@ -414,10 +428,12 @@ be expanded against `VersionService::chain` first.
 
 Plan around these; do not search for them:
 
-- **The desktop working copy.** Files the DAW opens come from the Files
-  daemon (`fts-files-daemon`), which syncs roots to disk with on-demand stubs.
-  A device's identity still resets when the daemon restarts, and "a session
-  brings its media with it" is specified but not wired — Session needs both.
+- **The desktop working copy, end to end.** Files the DAW opens come from
+  the Files daemon (`fts-files-daemon`), which syncs roots to disk with
+  on-demand stubs. A device keeps its identity across restarts, and a
+  selected session keeps its media (above); what is not built is the daemon
+  re-applying a device's selection after every pull on its own — today the
+  selection is applied when it is made and on the next `subscribe` / `pin`.
 - **A browser playing an original.** Bytes ride vox; a browser `<audio>` tag
   reaches only renditions (proxies, waveform peaks) through the rendition
   route. Play originals through `read_to` into Media Source Extensions.
