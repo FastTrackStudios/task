@@ -355,6 +355,12 @@ jobs:
       - name: Boundaries
         if: ${{ !cancelled() }}
         run: ${NIX_DEV} just ci-boundaries
+      # Ungated: compiles the Tailwind sheet, nothing of Task's Rust. Task's
+      # tokens come from architect-ui through apps/.architect-ui; fails on a
+      # re-vendored copy or an import that bypasses the link (STA-392).
+      - name: architect-ui sheet
+        if: ${{ !cancelled() }}
+        run: ${NIX_DEV} just ci-architect-css
 
       # `macpro-*` runners are Lima VMs on the Mac Pro: half the test
       # threads (see `ci-tests` in the Justfile), and test scratch on the

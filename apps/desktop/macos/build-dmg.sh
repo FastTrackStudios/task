@@ -95,6 +95,7 @@ else
     "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
         set -euo pipefail
         cd '$ROOT/$DX_APP_DIR'
+        ${DX_TAILWIND:+bash '$ROOT/scripts/architect-ui-link.sh'}
         ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" && tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css')}
         dx build --platform macos --release
     " > /tmp/task-macos-dmg-build.log 2>&1 || true

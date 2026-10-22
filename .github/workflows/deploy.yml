@@ -136,6 +136,7 @@ jobs:
           nix develop --accept-flake-config .#default -c \
             python3 scripts/target-sweep.py run deploy-web -- bash -c '
             set -e
+            bash scripts/architect-ui-link.sh
             (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
             cd apps/web
             dx build --release --platform web --debug-symbols false \

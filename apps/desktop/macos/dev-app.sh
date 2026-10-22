@@ -31,6 +31,7 @@ if [ -z "${SKIP_BUILD:-}" ]; then
     "$NIX" develop "$ROOT" -c bash -c "
         set -euo pipefail
         unset RUSTC_WRAPPER
+        bash '$ROOT/scripts/architect-ui-link.sh' >/dev/null
         cd '$ROOT/apps' && tailwindcss -i tailwind.css -o desktop/assets/tailwind.css >/dev/null
         cd '$ROOT/apps/desktop' && dx build --platform macos
     "
