@@ -90,7 +90,7 @@ families here when you introduce them.
 | `perm.principal` / `perm.resource` / `perm.action` / `perm.reason` / `perm.default_role` | | `permits::GateAudit` |
 | `media.authorized` / `media.auth_via` / `media.mode` / `media.token_error` | signed-URL media route | `lib.rs` (media route) |
 | `dav.auth_via` | WebDAV bridge auth path | `webdav.rs` |
-| `collab.sync` | a document sync attach: `attached` \| `refused` (write guard) \| `foreign_lineage` (the device's copy is not a version of the server's document) | `doc_guard::GuardedVaultDocs` |
+| `collab.sync` | a document sync attach: `attached` \| `refused` (write guard) \| `foreign_lineage` (the device's copy is not a version of the server's document) | `vault_collab::VaultCollab` (`impl DocSync`) |
 | `share.outcome` / `share.label` / `share.guest` | share-link resolution | `share.rs`, `share_guest.rs` |
 | `mcp.tool` | the MCP tool name (`create_task`, `telemetry_query_logs`, …) | `mcp` |
 | `telemetry.backend` | `tempo` \| `loki` | `mcp::telemetry_call` |

@@ -4,7 +4,7 @@
 //! `offline.doc.materialise`, `offline.doc.access` — driven through the
 //! code a device runs (`vault_doc::Replica`, the same sessions the shell's
 //! driver opens) against a booted server over a real WebSocket: the
-//! `DocSync` lane under its guard (`doc_guard`), the vault-collab registry,
+//! `DocSync` lane under its guard (`impl DocSync for VaultCollab`), the vault-collab registry,
 //! its mirror write-behind and the vault watcher.
 //!
 //! "Offline" here is exactly what it is on a device: no session running.

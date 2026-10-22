@@ -20,8 +20,6 @@ serde_yaml = { workspace = true }
 # The record book's index rows (`book`).
 serde = { workspace = true }
 serde_json = { workspace = true }
-# `DocEntry`, the peer lane's wire type.
-facet = { workspace = true }
 tracing = { workspace = true }
 # Declared apart from the workspace dep (which is `full`) so the wasm
 # build stays clean: channels + `select!` only.

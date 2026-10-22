@@ -68,7 +68,6 @@ pub mod task_sync;
 // link store keeps its `NoFederation` default, which is the honest
 // answer for a single-org server.
 pub mod device_enrollment;
-pub mod doc_guard;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live;
 #[cfg(feature = "plugin-fasttrackstudio")]
@@ -4485,8 +4484,8 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // listed and exchanged by path, gated on `docs/replica` — the
         // only part of the vault an admitted peer reaches.
         .with(
-            vault_doc::peer::doc_peer_service_descriptor(),
-            vault_doc::peer::DocPeerDispatcher::new(doc_peer::DocPeerHost::of(org)),
+            crdt::peer::doc_peer_service_descriptor(),
+            crdt::peer::DocPeerDispatcher::new(doc_peer::host(org)),
         )
         // Presence — ONE mounted `DocPresence` service, routed by doc
         // id: the fixed `presence::PRESENCE_DOC_ID` reaches the
@@ -4605,7 +4604,7 @@ fn org_doc_sync(org: &OrgAppState, live_access: &LiveAccess) -> live::DocSyncRou
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
-fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> doc_guard::GuardedVaultDocs {
+fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> vault_collab::VaultCollab {
     vault_docs(org)
 }
 
@@ -4634,12 +4633,9 @@ async fn ffprobe_on_path() -> bool {
 }
 
 /// The vault's docs over the collab lane, under the same write guard a
-/// save answers to.
-fn vault_docs(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
-    doc_guard::GuardedVaultDocs {
-        registry: org.vault_collab.registry().clone(),
-        sync: org.vault_sync.clone(),
-    }
+/// save answers to (`impl DocSync for VaultCollab`).
+fn vault_docs(org: &OrgAppState) -> vault_collab::VaultCollab {
+    org.vault_collab.clone()
 }
 
 pub fn org_router_guarded(

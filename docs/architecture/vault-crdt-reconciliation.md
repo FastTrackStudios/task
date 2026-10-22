@@ -69,10 +69,11 @@ doc id still routes to the standalone `PresenceHost`).
   (`vault_doc::merge_text`: changed props by key, the body's edit by
   character, committed under an `"outside edit"` message). Docs that
   aren't open are skipped; the next open merges the edit as above.
-- **Attach guard** (`apps/server/src/doc_guard.rs`) — every `DocSync`
-  attach asks the file's write guard for the caller, and refuses a
-  replica whose history shares no peer with the served doc
-  (`vault_doc::FOREIGN_LINEAGE`: the server's doc was recreated — a fresh
+- **Attach guard** (`impl DocSync for VaultCollab`, and the registry's
+  `with_authorizer` for every other lane) — every `DocSync` attach asks
+  the file's write guard for the caller, and refuses a replica whose
+  history shares no peer with the served doc (`crdt::peer::check_lineage`,
+  `FOREIGN_LINEAGE`: the server's doc was recreated — a fresh
   data root, a reseeded demo — and merging would duplicate every line).
 - **Echo guard** — the write-behind records the flushed sha (and
   text) *before* `put_file`, in memory and in the doc's `meta` map;

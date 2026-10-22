@@ -22168,6 +22168,7 @@ dependencies = [
 name = "vault-collab"
 version = "0.2.4"
 dependencies = [
+ "architect-telemetry",
  "crdt",
  "sha2 0.10.9",
  "tempfile",
@@ -22177,6 +22178,7 @@ dependencies = [
  "vault-doc",
  "vault-live",
  "vault-proto",
+ "vox",
 ]
 
 [[package]]
@@ -22185,7 +22187,6 @@ version = "0.2.4"
 dependencies = [
  "async-trait",
  "crdt",
- "facet",
  "serde",
  "serde_json",
  "serde_yaml",
