@@ -8,7 +8,7 @@
 //! The rendition and share routes are covered by `rendition_route.rs`
 //! and `share_files_e2e.rs`.
 
-use attachments_proto::{AttachmentService as _, ContentHashArg};
+use attachments_proto::ContentHashArg;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
 /// The bytes both routes serve: 1000 distinct-ish bytes so every window
@@ -73,10 +73,22 @@ fn header(r: &reqwest::Response, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Drive one URL through the whole range contract.
-async fn assert_ranged(url: &str, mime: &str, what: &str) -> eyre::Result<()> {
+/// Drive one URL through the whole range contract, presenting `bearer`
+/// on every request when the route binds its grant to a caller.
+async fn assert_ranged(
+    url: &str,
+    bearer: Option<&str>,
+    mime: &str,
+    what: &str,
+) -> eyre::Result<()> {
     let data = payload();
-    let client = reqwest::Client::new();
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(token) = bearer {
+        headers.insert("authorization", format!("Bearer {token}").parse()?);
+    }
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
 
     // No Range: the whole body, advertised as seekable.
     let r = client.get(url).send().await?;
@@ -158,7 +170,7 @@ async fn media_and_blob_routes_serve_byte_ranges() -> eyre::Result<()> {
     // `/media`: a stem on disk, streamed by `serve_file`.
     let token = grant(&state, "songs/hymn").await;
     let media = format!("{base}/org/range-test/media/songs/hymn/stems/bass.ogg?token={token}");
-    assert_ranged(&media, "audio/ogg", "media").await?;
+    assert_ranged(&media, None, "audio/ogg", "media").await?;
     let r = reqwest::get(format!(
         "{base}/org/range-test/media/songs/hymn/stems/absent.ogg?token={token}"
     ))
@@ -166,7 +178,10 @@ async fn media_and_blob_routes_serve_byte_ranges() -> eyre::Result<()> {
     assert_eq!(r.status().as_u16(), 404, "a missing media file");
 
     // `/blobs/download`: a blob in the attachment store, read through
-    // `serve_body` (only the window is fetched from the store).
+    // `serve_body` (only the window is fetched from the store). The
+    // grant fails closed without a caller and is bound to the member who
+    // minted it, so a signed-in member mints over vox and redeems with
+    // their own session.
     let org = state.org("range-test").expect("org hosted");
     let hash = "ab".repeat(32);
     org.attachments
@@ -174,8 +189,10 @@ async fn media_and_blob_routes_serve_byte_ranges() -> eyre::Result<()> {
         .put_blob(&hash, &payload())
         .await
         .map_err(|e| eyre::eyre!("put blob: {e:?}"))?;
-    let signed = org
-        .attachments
+    let member = crate::attachments_auth::user(&state, "range-test", "member@range.test").await?;
+    let host = base.trim_start_matches("http://");
+    let client = crate::attachments_auth::attachments(host, "range-test", Some(&member)).await?;
+    let signed = client
         .get_download_url(ContentHashArg {
             content_hash: hash.clone(),
         })
@@ -188,6 +205,6 @@ async fn media_and_blob_routes_serve_byte_ranges() -> eyre::Result<()> {
     };
     // Not in the in-memory catalog, so the type is sniffed; 1000 bytes of
     // a counting pattern sniff as octet-stream.
-    assert_ranged(&blob, "application/octet-stream", "blob").await?;
+    assert_ranged(&blob, Some(&member), "application/octet-stream", "blob").await?;
     Ok(())
 }

@@ -59,7 +59,7 @@ async fn boot() -> eyre::Result<(String, AppState, tempfile::TempDir)> {
 
 /// A signed-in user that exists only in `slug`'s auth store. Returns the
 /// session token.
-async fn user(state: &AppState, slug: &str, email: &str) -> eyre::Result<String> {
+pub(crate) async fn user(state: &AppState, slug: &str, email: &str) -> eyre::Result<String> {
     let bundle = state
         .org(slug)
         .ok_or_else(|| eyre::eyre!("{slug} not hosted"))?
@@ -82,7 +82,7 @@ async fn user(state: &AppState, slug: &str, email: &str) -> eyre::Result<String>
 
 /// An `AttachmentService` client on `slug`'s lane, presenting `bearer`
 /// at the upgrade (the native channel), or nothing at all.
-async fn attachments(
+pub(crate) async fn attachments(
     host: &str,
     slug: &str,
     bearer: Option<&str>,
