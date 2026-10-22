@@ -42,7 +42,22 @@ pattern = ".route("
 instead = "a #[architect::service] trait mounted by EngineHost"
 
 [baseline]
-# BASELINE-PLACEHOLDER
+# 2026-10-21 first run (architect xtask d644a04, Task dev 80a8c1b2), 4m20s.
+# The root cause of most: the workspace `architect` dep enables `iroh` for
+# every crate (Cargo.toml [workspace.dependencies]); moving it to apps/*
+# clears ~200 rows at once.
+#   contract-clean 123: tokio/rt 41, iroh 41, architect/iroh 41.
+#   ui-reach 81: tower-http 22, iroh 22, architect/iroh 22, tokio-tungstenite 15.
+#   transport-host 217: architect/iroh and architect/dispatch-tokio by default.
+#   lints 5: fitness body/exercises/fitness/intake/workouts.
+#   single-source 1: Cargo.lock has architect v0.9.2 and v0.9.6.
+#   hand-routes 59: apps/server/src/lib.rs 30, email-mux 9, watch_bridge 6, ...
+contract-clean = 123
+ui-reach = 81
+transport-host = 217
+lints = 5
+single-source = 1
+hand-routes = 59
 
 # ── L0 contracts ──
 [[row]]
