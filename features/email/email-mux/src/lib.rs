@@ -215,7 +215,7 @@ impl Backend {
     /// a silent fall-through to the wrong store — filing a Gmail
     /// message into a local maildir because a lookup missed would be
     /// data loss.
-    fn route(&self, account: &str) -> Result<&dyn EmailSync, EmailSyncError> {
+    fn backend_for(&self, account: &str) -> Result<&dyn EmailSync, EmailSyncError> {
         match self.routes.get(account) {
             Some(Route::Maildir) => Ok(&self.maildir),
             Some(Route::Imap) => self
@@ -245,7 +245,7 @@ impl EmailSync for Backend {
     }
 
     fn list_folders(&self, account: &str) -> Result<Vec<Folder>, EmailSyncError> {
-        self.route(account)?.list_folders(account)
+        self.backend_for(account)?.list_folders(account)
     }
 
     /// Read-through: serve the listing from the local index when it is
@@ -292,7 +292,7 @@ impl EmailSync for Backend {
         }
 
         let envelopes = self
-            .route(account)?
+            .backend_for(account)?
             .fetch_envelopes(account, folder, range)?;
 
         if cacheable {
@@ -312,7 +312,8 @@ impl EmailSync for Backend {
     }
 
     fn fetch_message(&self, account: &str, message_id: &str) -> Result<Message, EmailSyncError> {
-        self.route(account)?.fetch_message(account, message_id)
+        self.backend_for(account)?
+            .fetch_message(account, message_id)
     }
 
     fn fetch_attachment(
@@ -321,7 +322,7 @@ impl EmailSync for Backend {
         message_id: &str,
         part: &str,
     ) -> Result<Vec<u8>, EmailSyncError> {
-        self.route(account)?
+        self.backend_for(account)?
             .fetch_attachment(account, message_id, part)
     }
 
@@ -331,7 +332,9 @@ impl EmailSync for Backend {
         message_id: &str,
         delta: FlagDelta,
     ) -> Result<(), EmailSyncError> {
-        let out = self.route(account)?.set_flags(account, message_id, delta);
+        let out = self
+            .backend_for(account)?
+            .set_flags(account, message_id, delta);
         if out.is_ok() {
             self.invalidate(account);
         }
@@ -345,7 +348,7 @@ impl EmailSync for Backend {
         dest_folder: &str,
     ) -> Result<(), EmailSyncError> {
         let out = self
-            .route(account)?
+            .backend_for(account)?
             .move_message(account, message_id, dest_folder);
         if out.is_ok() {
             self.invalidate(account);
@@ -354,7 +357,9 @@ impl EmailSync for Backend {
     }
 
     fn delete_message(&self, account: &str, message_id: &str) -> Result<(), EmailSyncError> {
-        let out = self.route(account)?.delete_message(account, message_id);
+        let out = self
+            .backend_for(account)?
+            .delete_message(account, message_id);
         if out.is_ok() {
             // Also drop the row so a stale listing cannot resurrect it.
             if let Some(store) = self.stores.get(account) {
@@ -368,11 +373,11 @@ impl EmailSync for Backend {
     }
 
     fn append_draft(&self, account: &str, draft: Draft) -> Result<String, EmailSyncError> {
-        self.route(account)?.append_draft(account, draft)
+        self.backend_for(account)?.append_draft(account, draft)
     }
 
     fn send(&self, account: &str, draft: Draft) -> Result<String, EmailSyncError> {
-        self.route(account)?.send(account, draft)
+        self.backend_for(account)?.send(account, draft)
     }
 }
 
