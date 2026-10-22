@@ -73,6 +73,8 @@ pub mod doc_guard;
 pub mod live;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live_docs;
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub mod signal_docs;
 pub mod node_cli;
 #[cfg(feature = "plugin-wiki")]
 pub mod node_homes;
@@ -465,6 +467,10 @@ pub struct OrgAppState {
     /// songs' docs and presence served beside the vault's.
     #[cfg(feature = "plugin-fasttrackstudio")]
     pub live: live::LiveHost,
+    /// Signal's library mirrored into the org (spec §7 S5): one doc per
+    /// entity, Signal the one writer, read by agents over `doc_read`.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    pub signal: signal_docs::SignalHost,
     /// Link-graph read service (`VaultGraph`) over the same vault
     /// root as [`Self::vault_sync`] — backlinks / links / orphans /
     /// unresolved / deadends / tags for the web vault page.
@@ -2219,6 +2225,11 @@ pub(crate) async fn build_org_state(
             collections.clone(),
             resources.clone(),
         );
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        let signal = signal_docs::SignalHost::new(
+            org_root.slug().to_owned(),
+            org_root.path().join("signal-docs"),
+        );
 
         // Who a write is attributed to (`created_by`): this org's
         // accounts, and the home org's — where bot accounts live.
@@ -2334,6 +2345,8 @@ pub(crate) async fn build_org_state(
             ),
             #[cfg(feature = "plugin-fasttrackstudio")]
             live,
+            #[cfg(feature = "plugin-fasttrackstudio")]
+            signal,
             vault_graph,
             sqlite_conns,
         })
@@ -4599,6 +4612,7 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 fn org_doc_sync(org: &OrgAppState, live_access: &LiveAccess) -> live::DocSyncRouter {
     live::DocSyncRouter {
         live: org.live.clone(),
+        signal: org.signal.clone(),
         vault: vault_docs(org),
         access: live_access.clone(),
     }

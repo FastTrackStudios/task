@@ -580,10 +580,12 @@ impl live_proto::LiveSessionsStreamSource for GuestLiveLane {
 }
 
 /// The org's one `DocSync`: a live doc to the live host (read-only where
-/// this connection observes it), anything else to the vault's registry.
+/// this connection observes it), a doc of Signal's library to its host
+/// ([`crate::signal_docs`]), anything else to the vault's registry.
 #[derive(Clone)]
 pub struct DocSyncRouter {
     pub live: LiveHost,
+    pub signal: crate::signal_docs::SignalHost,
     pub vault: crate::doc_guard::GuardedVaultDocs,
     /// This connection's access, shared with its [`LiveLane`].
     pub access: LiveAccess,
@@ -601,6 +603,8 @@ impl DocSync for DocSyncRouter {
             self.live
                 .sync_as(&self.access, doc_id, from, up, down)
                 .await
+        } else if self.signal.admits(doc_id).await.is_some() {
+            self.signal.sync(doc_id, from, up, down).await
         } else {
             self.vault.sync(doc_id, from, up, down).await
         }
