@@ -103,14 +103,15 @@ rather than with request count — fewer calls, far more bytes each.
 
 | # | Site | Copy | Bytes × frequency | Status |
 |---|------|------|-------------------|--------|
-| F1 | `ChunkStore::read_to_vec`, `Backend::sync_object`, `sync_read_chunk` | whole file / object / chunk into a `Vec<u8>` | file size × reads | **next**: return `Bytes` from the store (chunks are already immutable, content-addressed); stream objects larger than a chunk |
-| F2 | `files_sync` object cache (`HashMap<String, Vec<u8>>`) | each object held once per lane that fetched it | object size × lanes | **next**: `Bytes` values, shared across lanes |
-| F3 | `files_sync` `chunks(root_id, batch.to_vec())` | batch of hashes copied per request | small × batches | **later**: take the batch by value |
+| F1 | `ChunkStore::read_to_vec`, `Backend::sync_object`, `sync_read_chunk` | whole file / object / chunk into a `Vec<u8>` | file size × reads | **done** (PR 3: `read_chunk`, `read_raw_object`, `sync_object`, `sync_read_chunk` return `Bytes`; `read_to_vec` → `read_bytes`, one allocation sized from the manifest; whole-tier chunk reads sized from the file; imports take `impl Into<Bytes>` / a slice. Anything larger than a chunk was already streamed — `read_to`, `read_range`, `read_chunk_range`, bao windows — and stays so) |
+| F2 | `files_sync` object cache (`HashMap<String, Vec<u8>>`) | each object held once per lane that fetched it | object size × lanes | **done** (PR 3: the commit cache holds `Bytes`; decoding on one blocking thread and importing on another share it instead of cloning the `Vec`. The vox wire stays `Vec<u8>`; `Vec::from(Bytes)` hands over a uniquely owned buffer without a copy) |
+| F3 | `files_sync` `chunks(root_id, batch.to_vec())` | batch of hashes copied per request | small × batches | **done** (PR 3: each batch is split off the owned list and moved into its request) |
 | F4 | `files::lane::federation::trim_to_byte_range` | full object read, then trimmed | object size × ranged reads | **later**: read only the range (seek + `take`) |
 | F5 | `files::{durable, hydration, ignore}` `fs::read` | whole file to inspect it | file size × calls | **later**: stream where only a hash/prefix is needed |
 | F6 | `files::backend` merge (`side_a.to_vec(), side_b.to_vec()`) | both sides copied to merge | file size × merges | **later**: merge from slices |
 | F7 | `FileId::new(id.as_bytes().to_vec())` (content.rs) | 32-byte ids | tiny | **leave** |
-| F8 | 45 copy-lint hits (files) | the largest lint cluster | small each | **next**, with the deny |
+| F8 | 45 copy-lint hits (files) | the largest lint cluster | small each | **done** (PR 3: 45 → 0; `files`, `files-store` and `files-sync` deny the four lints) |
+| F9 | `FilesBackend::sync_has_object` | read the whole object to answer "is it here?", once per object a pull walks | object size × objects × pulls | **done** (PR 3: `VersionStoreBackend::has_raw_object`, a `stat`) |
 
 ### vault-doc (CRDT peer)
 
@@ -182,3 +183,38 @@ Branch `perf/zero-copy-vault-live`. Fixes V5–V10.
 - `just clippy-copies`.
 
 Numbers: see the PR body (seeded scenario before/after, lint counts).
+
+### PR 3: files / files-store / files-sync
+
+Branch `perf/zero-copy-files` (STA-305). Fixes F1, F2, F3, F8 and F9.
+
+- The chunk store, the version store and the sync seams hand out chunks
+  and structural objects as `Bytes`: `ChunkStore::read_chunk`,
+  `read_bytes` (was `read_to_vec`; one allocation sized from the
+  manifest), `VersionStoreBackend::read_raw_object`,
+  `FilesBackend::sync_object` / `sync_read_chunk`. Imports take
+  `impl Into<Bytes>` or a slice, so neither a wire `Vec` nor a store's
+  `Bytes` is copied on the way in.
+- The vox wire is unchanged (`Vec<u8>`): at the `SyncService` boundary
+  `Vec::from(Bytes)` takes over the uniquely owned buffer, no copy.
+- `files_sync`'s commit cache holds `Bytes`, shared between the decode
+  and the import threads; chunk batches are moved into their requests.
+- `sync_has_object` stats the object instead of reading it.
+- The `files` crate's 45 copy-lint hits are gone; `files`, `files-store`
+  and `files-sync` deny the four lints.
+
+Numbers (THEBATTLESHIP, canonical checkout under the build lease):
+
+| | dev 319e410c | PR 3 |
+|---|---|---|
+| copy lints `files` / `files-store` / `files-sync` | 45 / 0 / 0 | 0 / 0 / 0 |
+| memory_budget peak heap | 49.3 MiB | 49.3 MiB |
+| memory_budget growth (12 rounds) | 0.0 MiB | 0.8 MiB |
+| memory_budget RssAnon | 103832 KiB | 103368 KiB |
+
+The seeded scenario hardly reads Files content (one File Root, a laptop
+syncing small files), so its numbers don't move; the saving is per
+chunk/object read and per pull, and it scales with file size. Growth is
+noise around zero (1.4 MiB was measured at t_37712151). The budget is
+tightened on the strength of the peak: heap 128 → 96 MiB, RssAnon
+300 → 200 MiB; growth stays at 4 MiB.

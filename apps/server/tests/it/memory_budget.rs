@@ -13,7 +13,7 @@
 //!   device sweeps ([`GROWTH_BUDGET`]) — a server answering the same
 //!   questions over and over must not keep more each time (the shape of
 //!   the prod leak: a no-op sync that retained something every cycle);
-//! - **anonymous RSS** ([`RSS_ANON_BUDGET_KIB`]) — the card's 300 MiB,
+//! - **anonymous RSS** ([`RSS_ANON_BUDGET_KIB`]) — under the card's 300 MiB,
 //!   checked loosely, because RSS also counts what glibc kept, thread
 //!   stacks and this harness.
 //!
@@ -46,11 +46,14 @@ const ORGS: [&str; 6] = [
 
 /// Peak live heap over boot + traffic + sweeps, seven small orgs.
 ///
-/// Measured at 58.6 MiB on THEBATTLESHIP after this card's fixes
-/// (t_37712151). The budget is that plus headroom for normal growth of
-/// the product, and still an order of magnitude under what prod was
-/// using. A change that has to raise it should say why on its PR.
-const HEAP_BUDGET: usize = 128 << 20;
+/// Measured at 58.6 MiB on THEBATTLESHIP after t_37712151's fixes, and
+/// at 49.3 MiB once the zero-copy port's first PRs had landed (PR 3,
+/// STA-305, measured on dev 319e410c and on its own tip). The budget is
+/// that plus about as much again for normal growth of the product
+/// (tightened from 128 MiB in PR 3), and still an order of magnitude
+/// under what prod was using. A change that has to raise it should say
+/// why on its PR.
+const HEAP_BUDGET: usize = 96 << 20;
 
 /// How much more heap may be live after the measured rounds than after
 /// the warm-up.
@@ -65,8 +68,11 @@ const HEAP_BUDGET: usize = 128 << 20;
 /// here with room to spare.
 const GROWTH_BUDGET: usize = 4 << 20;
 
-/// The card's budget for seven small orgs.
-const RSS_ANON_BUDGET_KIB: u64 = 300 * 1024;
+/// The card's budget for seven small orgs was 300 MiB. Measured at about
+/// 101 MiB on THEBATTLESHIP (32 threads, so as many glibc arenas as any
+/// runner here has) in zero-copy PR 3, which tightened it to 200 MiB:
+/// loose, because RSS also counts allocator slack and thread stacks.
+const RSS_ANON_BUDGET_KIB: u64 = 200 * 1024;
 
 /// Rounds of traffic before the baseline is read, and after it.
 const WARMUP_ROUNDS: usize = 3;
