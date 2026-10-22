@@ -60,6 +60,7 @@ pub struct InboxItem {
     /// stale copy) can't rewrite it. `None` on items captured before
     /// attribution existed, and on writes no principal stands behind
     /// (the server itself, a file edited in place).
+    #[facet(default)]
     #[serde(default)]
     #[architect(filterable)]
     pub created_by: Option<String>,
@@ -67,8 +68,27 @@ pub struct InboxItem {
     /// "Cody") — what a surface shows without a directory lookup, the
     /// same snapshot `AgentRef::Human::display_name` keeps. Stamped and
     /// kept with [`Self::created_by`].
+    #[facet(default)]
     #[serde(default)]
     pub created_by_name: Option<String>,
+    // t[impl attribution.on-behalf-of]
+    /// Whom the creator acted for, when it is a **personal** bot — an
+    /// assistant like Atlas that works for one person: that person's
+    /// ref (`"user:<uuid>"`), so the item reads "from Atlas (for
+    /// Cody)". `None` for a person's own capture, for a team bot's
+    /// (one with no personal owner), and on items from before.
+    ///
+    /// Stamped by the server from the bot key's owner, never from the
+    /// item a client sends, and write-once with [`Self::created_by`].
+    #[facet(default)]
+    #[serde(default)]
+    #[architect(filterable)]
+    pub on_behalf_of: Option<String>,
+    /// That person's display name at capture, kept with
+    /// [`Self::on_behalf_of`].
+    #[facet(default)]
+    #[serde(default)]
+    pub on_behalf_of_name: Option<String>,
     /// RFC-3339 capture timestamp. Sortable so the daily review can
     /// surface the oldest unprocessed items first.
     #[architect(filterable, sortable)]
@@ -141,6 +161,8 @@ impl InboxItem {
             source: source.into(),
             created_by: None,
             created_by_name: None,
+            on_behalf_of: None,
+            on_behalf_of_name: None,
             created: created.into(),
             resurface_on: None,
             processed_into: None,
@@ -157,6 +179,14 @@ impl InboxItem {
     #[must_use]
     pub fn created_by_matches(&self, who: &str) -> bool {
         workflows_proto::creator::creator_matches(self.created_by.as_deref(), who)
+    }
+
+    /// Whether this item was captured on behalf of `who` — the same
+    /// rule as [`Self::created_by_matches`], over
+    /// [`Self::on_behalf_of`].
+    #[must_use]
+    pub fn on_behalf_of_matches(&self, who: &str) -> bool {
+        workflows_proto::creator::creator_matches(self.on_behalf_of.as_deref(), who)
     }
 
     /// True if the item is still awaiting processing.

@@ -495,6 +495,16 @@ pub const CAST: &[Member] = &[
         holds: Holds::Employee,
         scope: "",
     },
+    // A second employee, newer than Sam: the person attribution is for —
+    // work Atlas made for Alice and Alice handed on lands on Priya's
+    // own Tasks list (`attribution.seed`).
+    Member {
+        email: "priya@acme.test",
+        name: "Priya",
+        org: "acme-audio",
+        holds: Holds::Employee,
+        scope: "",
+    },
     Member {
         email: "casey@client.test",
         name: "Casey",
@@ -527,7 +537,8 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Comp lead vocals — Track One", "alice@acme.test"),
     ("Mix revisions — Track Two", "alice@acme.test"),
     ("Master review with the label", "alice@acme.test"),
-    ("Collect streaming metadata", "sam@acme.test"),
+    // Atlas made it for Alice; Alice handed it to Priya.
+    ("Collect streaming metadata", "priya@acme.test"),
     ("Cut the visualiser to the album mix", "sam@acme.test"),
     ("Rough cut review", "victor@vnt.test"),
     // Alice's own next actions — the Tasks list is what is assigned to
@@ -1072,15 +1083,52 @@ pub struct DeclaredBot {
     /// Under [`crate::bots::BOT_DOMAIN`] — which is what makes the
     /// account a bot to attribution (`crate::attribution::Creator`).
     pub email: &'static str,
+    /// The cast member a **personal** bot works for (by email): what it
+    /// made reads "from Atlas (for Alice)". `None` for a team bot
+    /// (`crate::bots::Kind`).
+    pub acts_for: Option<&'static str>,
 }
 
-/// The example's bots: Atlas, Alice's assistant, who files suggestions
-/// from mail and makes tasks when asked.
-pub const BOTS: &[DeclaredBot] = &[DeclaredBot {
-    org: "acme-audio",
-    name: "Atlas",
-    email: "atlas@bots.task.invalid",
-}];
+/// The example's bots: Atlas, Alice's personal assistant, who files
+/// suggestions from mail and makes tasks when asked — and the Studio
+/// Desk, a team bot that acts for nobody in particular.
+pub const BOTS: &[DeclaredBot] = &[
+    DeclaredBot {
+        org: "acme-audio",
+        name: "Atlas",
+        email: "atlas@bots.task.invalid",
+        acts_for: Some("alice@acme.test"),
+    },
+    DeclaredBot {
+        org: "acme-audio",
+        name: "Studio Desk",
+        email: "studio-desk@bots.task.invalid",
+        acts_for: None,
+    },
+];
+
+/// The creator a seeded record made by account `email` is attributed
+/// to: the account, and — for a [`BOTS`] entry that is someone's
+/// personal assistant — whom it acted for. `None` when the account was
+/// not made.
+pub async fn seeded_creator(
+    auth: &crate::AuthState,
+    email: &str,
+) -> Option<crate::attribution::Creator> {
+    let user = auth.auth.find_user_by_email(email).await.ok()??;
+    let creator = crate::attribution::Creator::of_account(&user);
+    let Some(person) = BOTS
+        .iter()
+        .find(|b| b.email == email)
+        .and_then(|b| b.acts_for)
+    else {
+        return Some(creator);
+    };
+    match auth.auth.find_user_by_email(person).await {
+        Ok(Some(p)) => Some(creator.acting_for(crate::attribution::Creator::of_account(&p))),
+        _ => Some(creator),
+    }
+}
 
 /// The declared bots of one org.
 pub fn bots_of(slug: &str) -> impl Iterator<Item = &'static DeclaredBot> + '_ {
@@ -1121,6 +1169,9 @@ pub const TASK_CREATORS: &[(&str, &str)] = &[
     ("Cut the visualiser to the album mix", "sam@acme.test"),
     ("Restring the studio guitars", "alice@acme.test"),
     ("Pick up the test pressings", "atlas@bots.task.invalid"),
+    // The team bot's: a chore it files for whoever is in, so for nobody
+    // in particular — no "(for …)".
+    ("Vacuum the live room", "studio-desk@bots.task.invalid"),
 ];
 
 /// Who made the seeded task titled `title`, if the seed says.
@@ -1162,10 +1213,9 @@ pub async fn stamp_capture_creators(
         if item.created_by.is_some() {
             continue;
         }
-        let Ok(Some(user)) = auth.auth.find_user_by_email(email).await else {
+        let Some(creator) = seeded_creator(auth, email).await else {
             continue;
         };
-        let creator = crate::attribution::Creator::of_account(&user);
         crate::attribution::attribute_inbox(&mut item, Some(&creator));
         // Straight to the file, as the planting itself was: the backend
         // keeps an item's first creator, and this one had none.
@@ -3313,6 +3363,44 @@ mod declared_tests {
                 .iter()
                 .any(|c| !CAPTURE_CREATORS.iter().any(|(id, _)| *id == c.id)),
             "one capture stays unattributed, like those made before attribution"
+        );
+
+        // A personal bot and a team bot (`attribution.on-behalf-of`):
+        // the person a personal bot works for is in its org.
+        for b in BOTS {
+            if let Some(person) = b.acts_for {
+                assert!(
+                    cast_of(b.org).iter().any(|m| m.email == person),
+                    "{} acts for `{person}`, who is not in {}",
+                    b.name,
+                    b.org
+                );
+            }
+        }
+        assert!(BOTS.iter().any(|b| b.acts_for.is_some()), "no personal bot");
+        assert!(BOTS.iter().any(|b| b.acts_for.is_none()), "no team bot");
+        let made_by_team_bot = TASK_CREATORS
+            .iter()
+            .any(|(_, e)| BOTS.iter().any(|b| b.email == *e && b.acts_for.is_none()));
+        assert!(made_by_team_bot, "the team bot made nothing");
+
+        // An employee who is not the first one, with work a personal
+        // bot made for someone else and that someone handed on.
+        let employees: Vec<_> = CAST
+            .iter()
+            .filter(|m| matches!(m.holds, Holds::Employee))
+            .collect();
+        assert!(employees.len() >= 2, "a second employee");
+        let handed_on = TASK_OWNERS.iter().any(|(title, owner)| {
+            employees[1..].iter().any(|e| e.email == *owner)
+                && task_creator(title).is_some_and(|by| {
+                    BOTS.iter()
+                        .any(|b| b.email == by && b.acts_for.is_some_and(|p| p != *owner))
+                })
+        });
+        assert!(
+            handed_on,
+            "no assistant-made task assigned to the new employee"
         );
     }
 

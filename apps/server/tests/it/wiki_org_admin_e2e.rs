@@ -199,6 +199,7 @@ async fn a_bot_is_an_org_admin_only_when_its_row_says_admin() {
         "Atlas",
         &OrgChoice::Some(vec![PERSONAL_SLUG.to_owned()]),
         Tools::All,
+        bots::Kind::Team,
     )
     .await
     .expect("Atlas is made");

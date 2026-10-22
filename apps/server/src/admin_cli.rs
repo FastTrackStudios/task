@@ -103,7 +103,9 @@ pub async fn dispatch() -> eyre::Result<bool> {
     }
 }
 
-/// `admin bot create|list|revoke` — a person's agents ([`crate::bots`]).
+/// `admin bot create|list|revoke|personal|team` — a person's agents
+/// ([`crate::bots`]). `personal` / `team` mark whether a bot acts for
+/// its owner (`attribution.on-behalf-of`).
 ///
 /// The owner is `--owner <uuid>`, or the account a personal server is
 /// signed in as (`task-server peer sign-in`).
@@ -142,13 +144,22 @@ async fn bot(args: &[String]) -> eyre::Result<()> {
                     .ok_or_else(|| eyre::eyre!("--tools is `all` or `library`"))?,
                 None => crate::bots::Tools::All,
             };
-            let made = crate::bots::create(&auth, &memberships, owner, &name, &orgs, tools).await?;
+            // A personal assistant acts for its owner; a team bot for
+            // nobody in particular (the default).
+            let kind = if has(args, "--personal") {
+                crate::bots::Kind::Personal
+            } else {
+                crate::bots::Kind::Team
+            };
+            let made =
+                crate::bots::create(&auth, &memberships, owner, &name, &orgs, tools, kind).await?;
             println!(
-                "{} ({}) — {:?} tools in {}",
+                "{} ({}) — {:?} tools in {}, {}",
                 made.bot.name,
                 made.bot.id,
                 made.bot.tools,
-                orgs_label(&made.bot.orgs)
+                orgs_label(&made.bot.orgs),
+                kind_label(made.bot.kind)
             );
             if made.bot.orgs.is_empty() {
                 println!();
@@ -175,17 +186,33 @@ async fn bot(args: &[String]) -> eyre::Result<()> {
             } else {
                 // The first column is the bot's principal — what
                 // `admin grant --principal` and `bot revoke --bot` take.
-                println!("PRINCIPAL  NAME  TOOLS  ORGS");
+                println!("PRINCIPAL  NAME  TOOLS  KIND  ORGS");
             }
             for b in bots {
                 println!(
-                    "{}  {}  {:?}  {}",
+                    "{}  {}  {:?}  {:?}  {}",
                     b.id,
                     b.name,
                     b.tools,
+                    b.kind,
                     orgs_label(&b.orgs)
                 );
             }
+        }
+        Some(verb @ ("personal" | "team")) => {
+            let Some(raw) = flag(args, "--bot") else {
+                bail!("--bot <uuid> is required");
+            };
+            let bot = raw
+                .trim()
+                .parse::<uuid::Uuid>()
+                .map_err(|e| eyre::eyre!("--bot must be a uuid: {e}"))?;
+            let kind = crate::bots::Kind::parse(verb).unwrap_or_default();
+            crate::bots::set_kind(&auth, &memberships, owner, bot, kind).await?;
+            println!(
+                "{bot} is now {} — what it makes from now on says so",
+                kind_label(kind)
+            );
         }
         Some("revoke") => {
             let Some(raw) = flag(args, "--bot") else {
@@ -199,13 +226,22 @@ async fn bot(args: &[String]) -> eyre::Result<()> {
             println!("{bot} revoked — its key no longer works");
         }
         _ => bail!(
-            "usage:\n  task-server admin bot create --name <name> (--org <slug> [--org <slug>…] | --no-orgs) [--tools all|library] [--owner <uuid>]\n    \
+            "usage:\n  task-server admin bot create --name <name> (--org <slug> [--org <slug>…] | --no-orgs) [--tools all|library] [--personal] [--owner <uuid>]\n    \
              (--no-orgs: a key that reaches nothing until `admin grant --org <slug> --principal <bot id>`)\n  \
              task-server admin bot list [--owner <uuid>]  (first column: the bot's principal uuid)\n  \
-             task-server admin bot revoke --bot <uuid> [--owner <uuid>]"
+             task-server admin bot revoke --bot <uuid> [--owner <uuid>]\n  \
+             task-server admin bot personal|team --bot <uuid> [--owner <uuid>]  (does it act for its owner?)"
         ),
     }
     Ok(())
+}
+
+/// A bot's kind for a terminal.
+fn kind_label(kind: crate::bots::Kind) -> &'static str {
+    match kind {
+        crate::bots::Kind::Personal => "a personal assistant (acts for its owner)",
+        crate::bots::Kind::Team => "a team bot (acts for nobody in particular)",
+    }
 }
 
 /// A bot's orgs for a terminal: the slugs, or that it has none yet.

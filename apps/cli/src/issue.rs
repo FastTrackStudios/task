@@ -1205,6 +1205,8 @@ pub(crate) async fn run_issue(cmd: IssueCmd) -> eyre::Result<()> {
                     date_modified: None,
                     created_by: None,
                     created_by_name: None,
+                    on_behalf_of: None,
+                    on_behalf_of_name: None,
                     details: String::new(),
                     workflow: Some(task::model::WorkflowAttrs {
                         parent: Some(parent.id),
@@ -1652,6 +1654,8 @@ pub(crate) async fn run_issue(cmd: IssueCmd) -> eyre::Result<()> {
                 date_modified: None,
                 created_by: None,
                 created_by_name: None,
+                on_behalf_of: None,
+                on_behalf_of_name: None,
                 details: body,
                 workflow,
             };
@@ -1922,6 +1926,8 @@ pub(crate) async fn run_issue(cmd: IssueCmd) -> eyre::Result<()> {
                     date_modified: None,
                     created_by: None,
                     created_by_name: None,
+                    on_behalf_of: None,
+                    on_behalf_of_name: None,
                     details: body,
                     workflow: None,
                 };
@@ -2986,6 +2992,8 @@ fn build_pulled_task(
         date_modified: None,
         created_by: None,
         created_by_name: None,
+        on_behalf_of: None,
+        on_behalf_of_name: None,
         details: ext.body.clone(),
         workflow,
     }

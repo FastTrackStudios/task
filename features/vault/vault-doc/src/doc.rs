@@ -120,6 +120,11 @@ pub const WRITE_ONCE_PROPS: &[&str] = &[
     "created_by_name",
     "createdBy",
     "createdByName",
+    // …and whom a personal bot made it for (`attribution.on-behalf-of`).
+    "on_behalf_of",
+    "on_behalf_of_name",
+    "onBehalfOf",
+    "onBehalfOfName",
 ];
 
 fn is_write_once(key: &str) -> bool {
@@ -422,12 +427,12 @@ mod tests {
     #[test]
     fn a_creator_survives_every_later_text() {
         let doc = LoroDoc::new();
-        let made = "---\ntitle: Restring\ncreatedBy: bot:atlas\n---\nbody\n";
+        let made = "---\ntitle: Restring\ncreatedBy: bot:atlas\nonBehalfOf: user:cody\n---\nbody\n";
         adopt_text(&doc, made);
         doc.commit();
 
         // A replica's text naming someone else, then one leaving it out.
-        let spoof = "---\ntitle: Restring the Strat\ncreatedBy: user:mallory\n---\nbody\n";
+        let spoof = "---\ntitle: Restring the Strat\ncreatedBy: user:mallory\nonBehalfOf: user:mallory\n---\nbody\n";
         merge_text(&doc, made, spoof);
         doc.commit();
         let gone = "---\ntitle: Restring the Strat\n---\nbody\n";
@@ -435,6 +440,7 @@ mod tests {
         doc.commit();
 
         assert_eq!(prop(&doc, "createdBy"), Some(LoroValue::from("bot:atlas")));
+        assert_eq!(prop(&doc, "onBehalfOf"), Some(LoroValue::from("user:cody")));
         assert_eq!(
             prop(&doc, "title"),
             Some(LoroValue::from("Restring the Strat"))

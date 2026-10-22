@@ -120,6 +120,7 @@ async fn query_base_runs_the_seeded_gigs_base_in_the_callers_org_only() {
         "Gig Runner",
         &OrgChoice::Some(vec!["acme-audio".to_owned()]),
         Tools::Library,
+        bots::Kind::Team,
     )
     .await
     .expect("the bot is made");

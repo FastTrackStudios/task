@@ -127,6 +127,7 @@ async fn only_an_owner_grants_and_everyone_else_finds_nothing() {
         "Atlas",
         &OrgChoice::Some(personal.to_vec()),
         Tools::All,
+        bots::Kind::Team,
     )
     .await
     .expect("a bot");

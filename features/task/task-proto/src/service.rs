@@ -82,8 +82,22 @@ pub struct TaskListFilter {
     /// Keep tasks whose creator matches — a ref (`"bot:<uuid>"`), a
     /// bare account uuid, or `"none"` for tasks with no recorded
     /// creator (`workflows_proto::creator::creator_matches`).
+    #[facet(default)]
     #[serde(default)]
     pub created_by: Option<String>,
+    /// Keep tasks made on behalf of this person — the same forms as
+    /// [`Self::created_by`] over `on_behalf_of` ("what my assistant
+    /// made for me").
+    #[facet(default)]
+    #[serde(default)]
+    pub on_behalf_of: Option<String>,
+    /// Keep tasks with this assignee — a person's ref or bare account
+    /// uuid (`"user:<uuid>"`, `"<uuid>"`), an agent's `"agent:<name>"`,
+    /// or `"none"` for unassigned tasks
+    /// (`workflows_proto::creator::assignee_matches`).
+    #[facet(default)]
+    #[serde(default)]
+    pub assignee: Option<String>,
     /// Page size. `None` = no cap.
     pub limit: Option<u32>,
     /// Rows to skip (after filtering). `None` = 0.
