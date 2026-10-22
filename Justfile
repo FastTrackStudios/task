@@ -405,8 +405,14 @@ ci-boundaries:
 ci-versions:
     bash scripts/check-versions.sh
 
+# `TASK_CI_TEST_THREADS` lets one runner ask for fewer test threads than
+# the profile's 16 (the workflow sets it for the Mac Pro VM runner, STA-369:
+# at 16 two tests that dial by endpoint id time out under load, at 8 the
+# whole suite passes in ~2.5 min). `--test-threads` beats the
+# `NEXTEST_TEST_THREADS` the runner unit exports. Unset, it is the
+# profile's own 16, so nothing changes elsewhere.
 ci-tests: css
-    cargo nextest run --profile ci --workspace
+    cargo nextest run --profile ci --workspace --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }}
 
 ci-clippy: css
     cargo clippy --workspace --all-targets -- -D warnings
