@@ -349,6 +349,12 @@ jobs:
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} just ci-manifests
+      # Ungated: resolves dependency graphs and scans sources, compiles
+      # nothing of Task's. Layer table + ratcheted baselines in
+      # boundaries.toml (architect ADR layout.md, STA-268).
+      - name: Boundaries
+        if: ${{ !cancelled() }}
+        run: ${NIX_DEV} just ci-boundaries
 
       - name: Tests
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
