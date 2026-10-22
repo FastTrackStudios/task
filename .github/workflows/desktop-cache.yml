@@ -16,11 +16,11 @@
 # `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
 # already cached is harmless to re-run: cachix skips paths it holds.
 #
-# WHERE: Task's self-hosted `task` runner on THEBATTLESHIP. The package is
-# a pure Nix build of the whole workspace (cargoArtifacts = null), which a
-# 4-vCPU hosted runner takes the better part of an hour and ~30 GB of disk
-# to do; on the 32-core host it is minutes, and its store keeps the result,
-# which is also the store the fleet's timer installs from.
+# WHERE: Task's self-hosted `task` runner on the Mac Pro VM — one of the
+# few jobs kept off GitHub's hosted runners on purpose. The package is a
+# pure Nix build of the whole workspace (cargoArtifacts = null): ~61 min
+# cold on the Mac Pro, the better part of an hour or more and ~30 GB of
+# disk on a 4-vCPU hosted runner, and the runner's store keeps the result.
 #
 # SECRET: CACHIX_AUTH_TOKEN, a repo Actions secret (owned by Keeper; a
 # cachix token with write access to `fasttrackstudio`). It reaches cachix

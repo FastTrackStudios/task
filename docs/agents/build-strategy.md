@@ -156,14 +156,16 @@ or rebuilt (it reads fingerprint atimes, so it needs relatime, which both
 hosts' dev drives have; it refuses on `noatime`). `sweep` deletes every
 unit no kind's latest build used.
 
-- **CI runners**: every build step runs as a kind (`checks-tests`,
-  `checks-clippy`, `checks-wasm`, `checks-docs`, `deploy-server`,
-  `deploy-web`, `macos`, `ios`, `desktop-release`), and the job ends with
+- **Self-hosted CI runners**: every build step runs as a kind
+  (`checks-tests`, `deploy-server`, `deploy-web`, `macos`, `ios`,
+  `desktop-release`), and the job ends with
   `sweep --protect-hours 0`. So each runner keeps its latest build of every
   kind it does and nothing else. This replaced `cargo sweep --maxsize`,
   which evicts oldest-first. Once a run's working set outgrew the cap, it
   evicted that run's own dependencies, and the next run rebuilt them from
-  cold.
+  cold. (Checks' lint and wasm jobs run on GitHub-hosted runners with a
+  throwaway `./target` and a rust-cache saved from main, so they need no
+  sweep.)
 - **Local trees** (canonical, worktrees): `just sweep-local`, which is
   `sweep --keep-days 7 --flycheck-max-gb 40`. The Captain's `dx serve`, the
   IDE and bare `cargo run` aren't wrapped as kinds, so anything any build

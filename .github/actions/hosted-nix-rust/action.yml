@@ -1,0 +1,99 @@
+# Set up a GitHub-HOSTED runner (ubuntu-latest) for one build kind of
+# checks.yml: the repo's `.#ci` dev shell exported into the job's
+# environment, and a Swatinem/rust-cache of that kind's dependencies.
+#
+# After this action every later step of the job runs inside the dev shell
+# (nicknovitski/nix-develop writes its PATH and env to $GITHUB_PATH /
+# $GITHUB_ENV), so steps call `just ci-*` directly, with no `nix develop`
+# prefix. The self-hosted `tests` job does not use this: it keeps its warm
+# target dir on the Mac Pro.
+#
+# CACHE BUDGET: the repo gets 10 GB of Actions cache, evicted LRU across
+# every branch. So rust-cache SAVES only on main (`save-if`), and PRs
+# restore main's entry without writing their own; each kind has its own
+# `shared-key` so lint (check-mode metadata) and wasm (wasm32) never
+# overwrite each other. The cargo-rail store path below is ~50 MB and is
+# saved from any ref (only when missing).
+name: Hosted nix + rust cache
+description: Free disk, install nix with the FTS cachix, enter .#ci, restore the rust cache for one build kind.
+inputs:
+  kind:
+    description: Build kind; the rust-cache shared-key (lint, wasm).
+    required: true
+runs:
+  using: composite
+  steps:
+    # The image's unused toolchains (Android SDK, .NET, GHC, CodeQL, ~30 GB)
+    # are deleted in the background: the space is free before the build
+    # needs it, and nothing waits on it.
+    - name: Free disk (background)
+      shell: bash
+      run: |
+        nohup sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+          /usr/local/.ghcup /opt/hostedtoolcache/CodeQL </dev/null >/dev/null 2>&1 &
+        df -h / | tail -1
+
+    # The flake's nixConfig names the same cachix; setting it here makes it
+    # trusted without --accept-flake-config prompts.
+    - uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          accept-flake-config = true
+          extra-substituters = https://fasttrackstudio.cachix.org
+          extra-trusted-public-keys = fasttrackstudio.cachix.org-1:r7v7WXBeSZ7m5meL6w0wttnvsOltRvTpXeVNItcy9f4=
+
+    # cargo-rail (nix/modules/cargo-rail.nix) is built from source and is in
+    # neither cache.nixos.org nor the FTS cachix, so entering the shell
+    # would compile it on every run. Its store path is kept in the Actions
+    # cache as a file:// binary cache, keyed on the path itself.
+    - name: cargo-rail store path
+      id: rail
+      shell: bash
+      run: |
+        set -euo pipefail
+        out="$(nix eval --raw .#devShells.x86_64-linux.ci --apply \
+          'sh: toString (builtins.filter (p: (p.pname or "") == "cargo-rail") (sh.nativeBuildInputs ++ sh.buildInputs))')"
+        echo "out=$out" >> "$GITHUB_OUTPUT"
+        echo "hash=$(basename "$out" | cut -d- -f1)" >> "$GITHUB_OUTPUT"
+        echo "cargo-rail: ${out:-<not in the shell>}"
+    - name: Restore cargo-rail
+      id: rail-cache
+      if: ${{ steps.rail.outputs.out != '' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/nix-file-cache
+        key: nix-cargo-rail-${{ steps.rail.outputs.hash }}
+    - name: Import cargo-rail
+      if: ${{ steps.rail-cache.outputs.cache-hit == 'true' }}
+      shell: bash
+      env:
+        OUT: ${{ steps.rail.outputs.out }}
+      run: nix copy --no-check-sigs --from "file://$HOME/.cache/nix-file-cache" "$OUT" || echo "::warning::cargo-rail import failed; the shell builds it"
+
+    - name: Enter .#ci
+      uses: nicknovitski/nix-develop@v1
+      with:
+        arguments: --accept-flake-config .#ci
+
+    - name: Export cargo-rail
+      id: rail-export
+      if: ${{ steps.rail.outputs.out != '' && steps.rail-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        OUT: ${{ steps.rail.outputs.out }}
+      run: nix copy --to "file://$HOME/.cache/nix-file-cache" "$OUT"
+    - name: Save cargo-rail
+      if: ${{ steps.rail-export.outcome == 'success' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/nix-file-cache
+        key: nix-cargo-rail-${{ steps.rail.outputs.hash }}
+
+    # After the shell, so its key reads the pinned nix rustc, not the
+    # image's rustup (which would download the rust-toolchain.toml pin).
+    # Dependencies only: rust-cache drops the workspace's own crates.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: checks-${{ inputs.kind }}
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+        cache-on-failure: true

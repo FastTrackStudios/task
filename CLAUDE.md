@@ -129,7 +129,8 @@ Task's specifics are in `skills/release-workflow.md`. In short:
   gh pr create --draft --base main --title "fix(files): …"
   ```
 
-- CI (`checks`, on THEBATTLESHIP's warm runners) is the gate: fmt,
+- CI (`checks`: lint and wasm on GitHub-hosted runners, tests on the
+  Mac Pro's warm runner) is the gate: fmt,
   `cargo rail change check`, the affected tests (`cargo rail plan`),
   clippy, wasm, docs. A local `just ci` under the build lease is optional.
   PRs squash-merge; the full suite runs after every merge to `main`.
