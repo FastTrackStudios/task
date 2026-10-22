@@ -18,9 +18,36 @@ command = ["sh", "-c", "echo TASK_WATCH_POLL=1 >> \"$NEXTEST_ENV\""]
 filter = 'all()'
 setup = 'watch-by-polling'
 
+# Test scratch space on tmpfs, on a CI runner that has one (STA-369).
+#
+# Every test builds its own world in a `tempfile` under `$TMPDIR`: sqlite
+# files, redb blob stores (one per File Root), jj op logs. All of it is
+# fsync'd. A runner's `$TMPDIR` is a real disk, and on the Mac Pro VM
+# runner (`macpro-task-1`, a Lima guest whose disks are image files on a
+# macOS volume) an fsync costs milliseconds: the same `integration`
+# suite took 13m43s with `$TMPDIR` on `/build` and 2m27s on tmpfs, with
+# the `integration` binary timing out at 60s per test and `rename_org`
+# failing. Scratch data is thrown away anyway, so it has no business
+# waiting on a disk flush.
+#
+# systemd gives a service with `RuntimeDirectory=` a tmpfs directory and
+# names it in `$RUNTIME_DIRECTORY`; the runner units have one. Anywhere
+# that is unset (a laptop, `just ci` on airlock) this does nothing and
+# `$TMPDIR` stays as it was. `TASK_CI_TMPDIR` overrides the choice.
+#
+# It is under `/run`, not `/dev/shm`, on purpose: `rename_org` asserts a
+# list in path order and expects the scratch dir to sort after
+# `/mnt/storage`; `/dev/shm` and `/build` sort before it.
+[scripts.setup.ci-test-tmpdir]
+command = [
+    "sh",
+    "-c",
+    'd="${TASK_CI_TMPDIR:-${RUNTIME_DIRECTORY%%:*}}"; if [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ]; then t="$d/nextest-tmp"; mkdir -p "$t" && echo "TMPDIR=$t" >> "$NEXTEST_ENV"; fi',
+]
+
 [[profile.ci.scripts]]
 filter = 'all()'
-setup = 'watch-by-polling'
+setup = ['watch-by-polling', 'ci-test-tmpdir']
 
 [profile.default]
 fail-fast = true

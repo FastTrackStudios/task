@@ -356,9 +356,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: ${NIX_DEV} just ci-boundaries
 
+      # `macpro-*` runners are Lima VMs on the Mac Pro: half the test
+      # threads (see `ci-tests` in the Justfile), and test scratch on the
+      # unit's tmpfs `RuntimeDirectory` (`.config/nextest.toml`,
+      # `ci-test-tmpdir`). STA-369.
       - name: Tests
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        env:
+          TASK_CI_TEST_THREADS: ${{ startsWith(runner.name, 'macpro-') && '8' || '16' }}
+          TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
         run: ${NIX_DEV} ${SWEEP_RUN} checks-tests -- just ci-tests
+      - name: Test log
+        if: ${{ always() && needs.plan.outputs.workspace == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-ci
+          path: ${{ runner.temp }}/nextest-ci.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} ${SWEEP_RUN} checks-clippy -- just ci-clippy
@@ -401,6 +416,9 @@ jobs:
       - name: Bound the target dir
         if: ${{ always() }}
         run: |
+          # The tmpfs test scratch is RAM: give it back even after a red
+          # run (tests killed by a timeout leave their worlds behind).
+          [ -n "${RUNTIME_DIRECTORY:-}" ] && rm -rf "${RUNTIME_DIRECTORY%%:*}/nextest-tmp" || true
           # CARGO_INCREMENTAL=0 stops new incremental output but does not
           # remove what earlier runs left; nothing regenerates this now.
           rm -rf "${CARGO_TARGET_DIR}/debug/incremental"

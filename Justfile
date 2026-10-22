@@ -405,8 +405,29 @@ ci-boundaries:
 ci-versions:
     bash scripts/check-versions.sh
 
+# `TASK_CI_TEST_THREADS` lets one runner ask for fewer test threads than
+# the profile's 16 (the workflow sets it for the Mac Pro VM runner, STA-369:
+# at 16 two tests that dial by endpoint id time out under load, at 8 the
+# whole suite passes in ~2.5 min). `--test-threads` beats the
+# `NEXTEST_TEST_THREADS` the runner unit exports. Unset, it is the
+# profile's own 16, so nothing changes elsewhere.
 ci-tests: css
-    cargo nextest run --profile ci --workspace
+    #!/usr/bin/env bash
+    # nextest's report goes to a FILE, then a digest to the step's pipe. On
+    # the Mac Pro VM runner nextest died with exit 110, "error reporting
+    # results: error writing to output", at the first failing test's output
+    # (run after run, 1250-1460 tests in, the rest "not run due to reporting
+    # error"): writing a failure's captured log to the runner's stdout pipe
+    # failed. A regular file cannot do that. The full log is the step's
+    # artifact (`TASK_CI_TEST_LOG`); the step shows the summary and the tail.
+    set -uo pipefail
+    log="${TASK_CI_TEST_LOG:-${TMPDIR:-/tmp}/nextest-ci.log}"
+    mkdir -p "$(dirname "$log")"
+    cargo nextest run --profile ci --workspace --test-threads {{ env("TASK_CI_TEST_THREADS", "16") }} >"$log" 2>&1
+    rc=$?
+    { grep -E '^ *(FAIL|TRY [0-9]+ (FAIL|TMT)|SIGSEGV|SIGABRT|LEAK|TIMEOUT)|Summary \[|tests were not run|^error' "$log" | head -n 200
+      echo "── tail of $log (full log: the step's nextest-ci artifact) ──"; tail -n 60 "$log"; } || true
+    exit "$rc"
 
 ci-clippy: css
     cargo clippy --workspace --all-targets -- -D warnings
