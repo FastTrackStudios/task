@@ -22,25 +22,32 @@
 //! [`use_app_shortcuts`], which owns the Dioxus signals + the router's
 //! `Navigator` and performs the effect inside the runtime.
 //!
-//! The wasm build installs **capture-phase** `keydown`/`keyup`
-//! listeners on the document:
+//! The processor is owned by `architect_input::dioxus::use_input_processor`;
+//! its handle arms the sequence timeout and mirrors the pending prefix
+//! into a signal itself. The wasm build installs **capture-phase**
+//! `keydown`/`keyup` listeners on the document that call the handle
+//! directly, outside the Dioxus runtime:
 //!
-//! - the raw DOM closure runs the processor *synchronously* (`press`)
-//!   so a match can `preventDefault()` + `stopPropagation()` in the same
-//!   tick (that's what lets app shortcuts win over browser natives, and
-//!   stops `<space>` from scrolling while a leader sequence is pending);
-//! - matched ids / which-key updates cross back into the Dioxus runtime
-//!   over a channel a spawned task drains;
-//! - `keyup` feeds [`InputProcessor::notify_key_release`] so held-key /
-//!   sticky-prefix bookkeeping stays correct (without it a second
-//!   `<space>` reads as auto-repeat and `space space` never fires).
+//! - `keydown` runs the processor *synchronously* (`key_down`) so a
+//!   match can `preventDefault()` + `stopPropagation()` in the same tick
+//!   (that's what lets app shortcuts win over browser natives, and stops
+//!   `<space>` from scrolling while a leader sequence is pending);
+//!   matched ids cross into the Dioxus runtime over a channel a spawned
+//!   task drains, since running one awaits the registry;
+//! - `keyup` reports the release (`key_up`) so held-key / sticky-prefix
+//!   bookkeeping stays correct (without it a second `<space>` reads as
+//!   auto-repeat and `space space` never fires).
+//!
+//! Vim's macro keys are off ([`keymap_processor`]): `q` and `@` are
+//! ordinary keys.
 //!
 //! ## Which-key
 //!
 //! While a sequence is pending, [`InputProcessor::which_key`] lists what
 //! can follow it, named by [`which_key_labels`]: leaf continuations show
-//! the binding's label, deeper prefixes a group name ([`GROUPS`]).
-//! [`WhichKeyOverlay`] draws it.
+//! the binding's label, deeper prefixes a group name ([`GROUPS`]). A memo
+//! over the handle's pending prefix keeps the view current, timeouts
+//! included; [`WhichKeyOverlay`] draws it.
 //!
 //! **Typing guard**: when the focused element is a text control or a
 //! contenteditable region (the vault editor), plain-key shortcuts are
@@ -59,12 +66,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-#[cfg(any(target_arch = "wasm32", test))]
-use architect_input::{InputCommand, InputContext, InputEvent, KeyEvent};
+use architect_input::dioxus::{InputHandle, use_input_processor};
 use architect_input::{
-    InputProcessor, KeyChord, KeyCode, KeymapConfig, WhichKey, WhichKeyEntry, WhichKeyLabels,
-    parse_key_sequence,
+    ConfigError, InputContext, InputProcessor, KeyChord, KeyCode, KeymapConfig, MacroKeys,
+    WhichKey, WhichKeyEntry, WhichKeyLabels, parse_key_sequence,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use architect_input::{InputCommand, InputEvent, KeyEvent};
 use dioxus::prelude::*;
 
 use crate::actions;
@@ -290,6 +298,17 @@ pub fn keymap_config(prioritize_app: bool) -> KeymapConfig {
     cfg
 }
 
+/// The app's processor for [`keymap_config`]. Vim's macro keys are off:
+/// Task is not a vim app, so an unbound `q` or `@` is an ordinary key and
+/// never swallows the key after it as a register name.
+///
+/// # Errors
+///
+/// When the compiled keymap does not build (a test pins that it does).
+pub fn keymap_processor(prioritize_app: bool) -> Result<InputProcessor, ConfigError> {
+    Ok(InputProcessor::from_config(keymap_config(prioritize_app))?.with_macro_keys(MacroKeys::Off))
+}
+
 // ── which-key ───────────────────────────────────────────────────────
 
 /// Names for the intermediate prefixes (the which-key groups), in
@@ -366,6 +385,15 @@ fn chord_display(chord: &KeyChord) -> String {
     }
 }
 
+/// The overlay's view of `keys`' pending sequence; `None` when nothing is
+/// pending.
+#[must_use]
+fn which_key_view(keys: &InputProcessor, labels: &WhichKeyLabels) -> Option<WhichKeyView> {
+    keys.which_key(&InputContext::new(), labels)
+        .as_ref()
+        .map(WhichKeyView::from_model)
+}
+
 // ── one keydown ─────────────────────────────────────────────────────
 
 /// What one keydown resolved to.
@@ -374,9 +402,8 @@ fn chord_display(chord: &KeyChord) -> String {
 struct KeyPress {
     /// Action ids to run, in order.
     actions: Vec<String>,
-    /// The which-key view while a sequence is pending; `None` once it
-    /// ends.
-    which_key: Option<WhichKeyView>,
+    /// A sequence is still pending after the key.
+    pending: bool,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -385,31 +412,57 @@ impl KeyPress {
     /// prefix (so `<space>` doesn't scroll mid-leader); misses are left
     /// to the browser.
     const fn claims_event(&self) -> bool {
-        !self.actions.is_empty() || self.which_key.is_some()
+        !self.actions.is_empty() || self.pending
     }
 }
 
-/// Feed one key to the processor: the actions it fires and the
-/// which-key view left behind.
+/// Feed one keydown to the shortcut processor. Callable outside the
+/// Dioxus runtime (the capture-phase listener): the handle re-enters it
+/// to update the which-key view and arm the sequence timeout.
 #[cfg(any(target_arch = "wasm32", test))]
-fn press(engine: &mut InputProcessor, key: KeyEvent, labels: &WhichKeyLabels) -> KeyPress {
-    let ctx = InputContext::new();
-    let commands = engine.process(InputEvent::Key(key), &ctx);
+fn key_down(keys: &InputHandle, key: KeyEvent) -> KeyPress {
+    let commands = keys.process_event(InputEvent::Key(key), &InputContext::new());
     KeyPress {
-        actions: commands
-            .into_iter()
-            .filter_map(|command| match command {
-                InputCommand::Action(id) | InputCommand::ActionWithArgs { action: id, .. } => {
-                    Some(id)
-                }
-                _ => None,
-            })
-            .collect(),
-        which_key: engine
-            .which_key(&ctx, labels)
-            .as_ref()
-            .map(WhichKeyView::from_model),
+        actions: commands.into_iter().filter_map(fired_action).collect(),
+        pending: keys.processor().needs_timeout(),
     }
+}
+
+/// The action id a command runs, if it runs one.
+#[cfg(any(target_arch = "wasm32", test))]
+fn fired_action(command: InputCommand) -> Option<String> {
+    match command {
+        InputCommand::Action(id) | InputCommand::ActionWithArgs { action: id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// Report a keyup. Without releases a second `<space>` reads as OS
+/// auto-repeat and `space space` never fires. Whether to hide the
+/// overlay needs no answer here: a release that ends a held prefix
+/// clears the pending sequence, and the which-key view follows it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn key_up(keys: &InputHandle, chord: &KeyChord) {
+    let _overlay_follows_pending = keys.notify_key_release(chord);
+}
+
+/// The app's shortcut processor, and the which-key view of its pending
+/// sequence (recomputed whenever the handle's pending prefix changes).
+fn use_keymap() -> (InputHandle, Memo<Option<WhichKeyView>>) {
+    let keys = use_input_processor(|| {
+        keymap_processor(true)
+            .unwrap_or_else(|_| InputProcessor::new().with_macro_keys(MacroKeys::Off))
+    });
+    let labels = use_hook(|| Rc::new(which_key_labels()));
+    let which_key = use_memo({
+        let keys = keys.clone();
+        move || {
+            // Subscribe: the handle's mirror changes with every key.
+            let _prefix = keys.pending_display();
+            which_key_view(&keys.processor(), &labels)
+        }
+    });
+    (keys, which_key)
 }
 
 // ── which-key overlay ───────────────────────────────────────────────
@@ -418,7 +471,7 @@ fn press(engine: &mut InputProcessor, key: KeyEvent, labels: &WhichKeyLabels) ->
 /// pending — a compact column of key → action rows, lazygit-style.
 /// Renders nothing when `state` is `None`.
 #[component]
-pub fn WhichKeyOverlay(state: Signal<Option<WhichKeyView>>) -> Element {
+pub fn WhichKeyOverlay(state: Memo<Option<WhichKeyView>>) -> Element {
     let view = state.read().clone();
     let Some(view) = view else {
         return rsx! {};
@@ -465,22 +518,21 @@ pub fn WhichKeyOverlay(state: Signal<Option<WhichKeyView>>) -> Element {
 
 /// Messages crossing from the raw DOM closure / palette into the Dioxus
 /// runtime. `Exec` runs an action through the registry (which enqueues
-/// an `Intent`); `Intent` is performed directly; `WhichKey` updates the
-/// overlay.
-// `Exec` / `WhichKey` are only built by the wasm DOM listeners.
+/// an `Intent`, and awaits, so it cannot run in the listener);
+/// `Intent` is performed directly.
+// `Exec` is only built by the wasm DOM listeners.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 enum Msg {
     Exec(String),
     Intent(actions::Intent),
-    WhichKey(Option<WhichKeyView>),
 }
 
 /// Mount the app-wide shortcut engine + the actions registry. Call once
 /// from an app-long component under `AppShell` (today:
 /// [`crate::palette::CommandPalette`]). Returns the which-key overlay
-/// signal the caller renders. Also provides [`crate::actions::ActionsCtx`]
+/// view the caller renders. Also provides [`crate::actions::ActionsCtx`]
 /// via context so the palette executes through the same registry.
-pub fn use_app_shortcuts() -> Signal<Option<WhichKeyView>> {
+pub fn use_app_shortcuts() -> Memo<Option<WhichKeyView>> {
     use futures_channel::mpsc;
 
     let palette = use_context::<crate::palette::PaletteOpen>().0;
@@ -497,11 +549,11 @@ pub fn use_app_shortcuts() -> Signal<Option<WhichKeyView>> {
     let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
     let timer_muts = crate::stores::use_timer_mutations();
 
-    let whichkey = use_signal(|| None::<WhichKeyView>);
+    let (keys, which_key) = use_keymap();
 
     // Single channel: DOM/palette → the effect loop. `msg_tx` is shared
     // (registry handlers enqueue intents, the DOM closure enqueues
-    // Exec/WhichKey); a spawned task drains it inside the runtime. The
+    // Exec); a spawned task drains it inside the runtime. The
     // receiver rides an `Rc` (use_hook needs `Clone`, `UnboundedReceiver`
     // isn't) and is `take`n once by the effect loop.
     let (msg_tx, msg_rx) = use_hook(|| {
@@ -530,26 +582,14 @@ pub fn use_app_shortcuts() -> Signal<Option<WhichKeyView>> {
         }
     });
 
-    // The processor, shared between the raw DOM closures (sync match +
-    // preventDefault) and config reloads. Single-threaded on wasm.
-    let engine: Rc<RefCell<InputProcessor>> = use_hook(|| {
-        Rc::new(RefCell::new(
-            InputProcessor::from_config(keymap_config(true)).unwrap_or_default(),
-        ))
-    });
-
     // Recompile the keymap when the "prioritize app shortcuts" pref
     // changes (boot load included).
     {
-        let engine = engine.clone();
+        let keys = keys.clone();
         use_effect(move || {
             let prioritize = prefs.read().shortcuts_priority;
-            if engine
-                .borrow_mut()
-                .reload_config(keymap_config(prioritize))
-                .is_err()
-            {
-                tracing::warn!("shortcut keymap reload failed");
+            if let Err(e) = keys.reload_config(keymap_config(prioritize)) {
+                tracing::warn!(%e, "shortcut keymap reload failed");
             }
         });
     }
@@ -570,18 +610,12 @@ pub fn use_app_shortcuts() -> Signal<Option<WhichKeyView>> {
             let mut explorer = explorer;
             let mut right_panel = right_panel;
             let mut zen = zen;
-            let mut whichkey = whichkey;
             spawn(async move {
                 use futures_util::StreamExt;
                 while let Some(msg) = rx.next().await {
                     match msg {
                         Msg::Exec(id) => {
                             registry.execute(id).await;
-                        }
-                        Msg::WhichKey(view) => {
-                            if *whichkey.peek() != view {
-                                whichkey.set(view);
-                            }
                         }
                         Msg::Intent(intent) => perform_intent(
                             intent,
@@ -605,11 +639,11 @@ pub fn use_app_shortcuts() -> Signal<Option<WhichKeyView>> {
     });
 
     #[cfg(target_arch = "wasm32")]
-    install_dom_listeners(engine, msg_tx);
+    install_dom_listeners(keys, msg_tx);
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = (engine, msg_tx);
+    let _ = (keys, msg_tx);
 
-    whichkey
+    which_key
 }
 
 /// Perform one resolved [`actions::Intent`]. Runs inside the Dioxus
@@ -760,81 +794,42 @@ pub fn spawn_new_note(
 /// Capture-phase document listeners. Installed once; the palette lives
 /// as long as the shell, so the listeners are `forget`-leaked.
 ///
-/// The processor runs here, outside the Dioxus runtime, so a match can
-/// `preventDefault()` in the same tick. That is also why this does not
-/// use `architect_input::dioxus::use_input_processor`: its handle arms
-/// the timeout with `spawn` (needs the runtime) and has no way to report
-/// a key release.
+/// They call the handle directly, outside the Dioxus runtime, so a match
+/// can `preventDefault()` in the same tick; the handle re-enters the
+/// runtime for the which-key view and the sequence timeout.
 #[cfg(target_arch = "wasm32")]
-fn install_dom_listeners(
-    engine: Rc<RefCell<InputProcessor>>,
-    msg_tx: futures_channel::mpsc::UnboundedSender<Msg>,
-) {
-    use std::cell::Cell;
-
+fn install_dom_listeners(keys: InputHandle, msg_tx: futures_channel::mpsc::UnboundedSender<Msg>) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
 
     use_hook(move || {
-        // Bumped on every processed keydown; a pending-sequence timeout
-        // only fires if no further key arrived (the processor owns no
-        // clock).
-        let epoch = Rc::new(Cell::new(0_u64));
-        let labels = Rc::new(which_key_labels());
-
         let keydown = {
-            let engine = engine.clone();
-            let epoch = epoch.clone();
-            let msg_tx = msg_tx.clone();
+            let keys = keys.clone();
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-                // Typing guard: plain keys belong to the focused text
-                // control; only Ctrl/Cmd chords are shortcuts there.
-                // Exception: the note editor in vim NORMAL mode may
-                // start a leader sequence with `<space>` (and continue
-                // a pending one) — plain letters stay vim motions, so
-                // `g`/`gg` never leave the editor.
-                if text_entry_focused() && !(e.ctrl_key() || e.meta_key()) {
-                    let leader_ok = editor_vim_normal()
-                        && editor_root_focused()
-                        && (e.key() == " " || !engine.borrow().pending_keys().is_empty());
-                    if !leader_ok {
-                        return;
-                    }
-                }
                 // OS auto-repeat never fires app actions.
-                if e.repeat() {
+                if e.repeat() || !typing_guard_passes(&e, &keys) {
                     return;
                 }
                 let Some(key) = key_event(&e) else {
                     return;
                 };
-                epoch.set(epoch.get().wrapping_add(1));
-                let outcome = press(&mut engine.borrow_mut(), key, &labels);
-                if engine.borrow().needs_timeout() {
-                    schedule_sequence_timeout(engine.clone(), epoch.clone(), msg_tx.clone());
-                }
+                let outcome = key_down(&keys, key);
                 if outcome.claims_event() {
                     e.prevent_default();
                     e.stop_propagation();
                 }
-                let KeyPress { actions, which_key } = outcome;
-                for id in actions {
+                for id in outcome.actions {
                     let _ = msg_tx.unbounded_send(Msg::Exec(id));
                 }
-                let _ = msg_tx.unbounded_send(Msg::WhichKey(which_key));
             })
         };
 
-        let keyup = {
-            let engine = engine.clone();
+        let keyup =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
                 if let Some(k) = key_event(&e) {
-                    let _ = engine
-                        .borrow_mut()
-                        .notify_key_release(&KeyChord::new(k.key, k.modifiers));
+                    key_up(&keys, &KeyChord::new(k.key, k.modifiers));
                 }
-            })
-        };
+            });
 
         if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
             let _ = doc.add_event_listener_with_callback_and_bool(
@@ -853,23 +848,19 @@ fn install_dom_listeners(
     });
 }
 
-/// Expire a pending prefix after the processor's timeout, unless another
-/// key arrived first. Also clears the which-key overlay.
+/// Typing guard: plain keys belong to the focused text control; only
+/// Ctrl/Cmd chords are shortcuts there. Exception: the note editor in vim
+/// NORMAL mode may start a leader sequence with `<space>` (and continue a
+/// pending one); plain letters stay vim motions, so `g`/`gg` never leave
+/// the editor.
 #[cfg(target_arch = "wasm32")]
-fn schedule_sequence_timeout(
-    engine: Rc<RefCell<InputProcessor>>,
-    epoch: Rc<std::cell::Cell<u64>>,
-    msg_tx: futures_channel::mpsc::UnboundedSender<Msg>,
-) {
-    let want = epoch.get();
-    let ms = u32::try_from(engine.borrow().timeout_duration().as_millis()).unwrap_or(1000);
-    gloo_timers::callback::Timeout::new(ms, move || {
-        if epoch.get() == want {
-            let _ = engine.borrow_mut().timeout_expired();
-            let _ = msg_tx.unbounded_send(Msg::WhichKey(None));
-        }
-    })
-    .forget();
+fn typing_guard_passes(e: &web_sys::KeyboardEvent, keys: &InputHandle) -> bool {
+    if !text_entry_focused() || e.ctrl_key() || e.meta_key() {
+        return true;
+    }
+    editor_vim_normal()
+        && editor_root_focused()
+        && (e.key() == " " || keys.processor().needs_timeout())
 }
 
 /// `web_sys::KeyboardEvent` → an input key event, through architect's
@@ -941,28 +932,77 @@ fn text_entry_focused() -> bool {
 #[cfg(test)]
 mod tests {
     use architect_input::{Modifiers, parse_key_chord};
+    use dioxus::core::VirtualDom;
 
     use super::*;
 
-    fn engine(prioritize_app: bool) -> InputProcessor {
-        InputProcessor::from_config(keymap_config(prioritize_app)).expect("keymap compiles")
+    thread_local! {
+        static MOUNTED: RefCell<Option<(InputHandle, Memo<Option<WhichKeyView>>)>> =
+            const { RefCell::new(None) };
     }
 
-    /// Press then release every chord of `seq` the way the DOM does,
-    /// returning the last keydown's outcome.
-    fn type_seq(engine: &mut InputProcessor, seq: &str) -> KeyPress {
-        let labels = which_key_labels();
-        let mut last = None;
+    #[allow(non_snake_case)]
+    fn Keys() -> Element {
+        let mounted = use_keymap();
+        use_hook(move || MOUNTED.with(|slot| *slot.borrow_mut() = Some(mounted)));
+        VNode::empty()
+    }
+
+    /// The app's shortcut engine, mounted and then driven from outside
+    /// the Dioxus runtime, the way the capture-phase listeners drive it.
+    struct Engine {
+        dom: VirtualDom,
+        keys: InputHandle,
+        which_key: Memo<Option<WhichKeyView>>,
+    }
+
+    /// What typing a sequence left behind.
+    struct Typed {
+        /// Every action fired, across all of the sequence's keydowns.
+        actions: Vec<String>,
+        /// The last keydown claimed the event.
+        claims: bool,
+        /// The overlay's view after the last keyup.
+        which_key: Option<WhichKeyView>,
+    }
+
+    fn engine(prioritize_app: bool) -> Engine {
+        let mut dom = VirtualDom::new(Keys);
+        dom.rebuild_in_place();
+        let (keys, which_key) = MOUNTED
+            .with(|slot| slot.borrow_mut().take())
+            .expect("mounted");
+        // As the "prioritize app shortcuts" pref effect does.
+        keys.reload_config(keymap_config(prioritize_app))
+            .expect("keymap compiles");
+        Engine {
+            dom,
+            keys,
+            which_key,
+        }
+    }
+
+    /// Press then release every chord of `seq` the way the DOM does.
+    fn type_seq(engine: &Engine, seq: &str) -> Typed {
+        let mut actions = Vec::new();
+        let mut claims = false;
         for token in seq.split(' ') {
             let chord = parse_key_chord(token).expect("chord parses");
             let key = KeyEvent {
                 key: chord.key.clone(),
                 modifiers: chord.modifiers,
             };
-            last = Some(press(engine, key, &labels));
-            let _ = engine.notify_key_release(&chord);
+            let press = key_down(&engine.keys, key);
+            claims = press.claims_event();
+            actions.extend(press.actions);
+            key_up(&engine.keys, &chord);
         }
-        last.expect("a non-empty sequence")
+        let which_key = engine.dom.in_runtime(|| engine.which_key.read().clone());
+        Typed {
+            actions,
+            claims,
+            which_key,
+        }
     }
 
     #[test]
@@ -977,7 +1017,8 @@ mod tests {
 
     #[test]
     fn full_keymap_compiles_into_a_processor() {
-        assert!(InputProcessor::<String>::from_config(keymap_config(true)).is_ok());
+        assert!(keymap_processor(true).is_ok());
+        assert!(keymap_processor(false).is_ok());
     }
 
     #[test]
@@ -997,7 +1038,7 @@ mod tests {
     fn every_binding_fires_its_action() {
         for b in BINDINGS {
             let seq = effective_sequence(b);
-            let got = type_seq(&mut engine(true), seq);
+            let got = type_seq(&engine(true), seq);
             assert_eq!(got.actions, vec![b.action.to_owned()], "{seq}");
             assert!(got.which_key.is_none(), "{seq} leaves nothing pending");
         }
@@ -1018,47 +1059,73 @@ mod tests {
 
     #[test]
     fn priority_off_leaves_browser_combos_to_the_browser() {
-        let mut keys = engine(false);
-        let got = type_seq(&mut keys, "ctrl+p");
+        let keys = engine(false);
+        let got = type_seq(&keys, "ctrl+p");
         assert!(got.actions.is_empty());
-        assert!(!got.claims_event());
+        assert!(!got.claims);
         assert_eq!(
-            type_seq(&mut keys, "ctrl+\\").actions,
+            type_seq(&keys, "ctrl+\\").actions,
             vec![actions::TOGGLE_SIDEBAR.to_owned()]
         );
     }
 
     #[test]
     fn a_leader_prefix_claims_the_key_and_shows_which_key() {
-        let got = type_seq(&mut engine(true), "space");
+        let got = type_seq(&engine(true), "space");
         assert!(got.actions.is_empty());
-        assert!(got.claims_event(), "space must not scroll mid-leader");
+        assert!(got.claims, "space must not scroll mid-leader");
         assert_eq!(got.which_key.expect("pending").prefix, "SPC");
     }
 
     #[test]
     fn space_space_searches_everything() {
         assert_eq!(
-            type_seq(&mut engine(true), "space space").actions,
+            type_seq(&engine(true), "space space").actions,
             vec![actions::SEARCH_ALL.to_owned()]
         );
     }
 
     #[test]
+    fn space_space_with_keyups_fires_once_and_clears_the_overlay() {
+        let keys = engine(true);
+        let leader = type_seq(&keys, "space");
+        assert!(leader.claims);
+        assert_eq!(leader.which_key.expect("leader pending").prefix, "SPC");
+        let got = type_seq(&keys, "space");
+        assert_eq!(got.actions, vec![actions::SEARCH_ALL.to_owned()]);
+        assert!(got.which_key.is_none(), "nothing pending after the leaf");
+        assert!(keys.keys.processor().sequence_timeout().is_none());
+    }
+
+    #[test]
+    fn macro_keys_are_ordinary_keys() {
+        let keys = engine(true);
+        let q = type_seq(&keys, "q");
+        assert!(q.actions.is_empty());
+        assert!(!q.claims, "an unbound `q` is left to the browser");
+        assert!(!keys.keys.is_recording());
+        assert_eq!(
+            type_seq(&keys, "g h").actions,
+            vec![actions::NAV_HOME.to_owned()],
+            "`g` after `q` is a key, not a register name"
+        );
+    }
+
+    #[test]
     fn a_miss_ends_the_sequence() {
-        let mut keys = engine(true);
-        let got = type_seq(&mut keys, "g x");
+        let keys = engine(true);
+        let got = type_seq(&keys, "g x");
         assert!(got.actions.is_empty());
         assert!(got.which_key.is_none());
         assert_eq!(
-            type_seq(&mut keys, "g h").actions,
+            type_seq(&keys, "g h").actions,
             vec![actions::NAV_HOME.to_owned()]
         );
     }
 
     #[test]
     fn whichkey_lists_leader_group() {
-        let view = type_seq(&mut engine(true), "space")
+        let view = type_seq(&engine(true), "space")
             .which_key
             .expect("leader has entries");
         assert_eq!(view.prefix, "SPC");
@@ -1087,7 +1154,7 @@ mod tests {
 
     #[test]
     fn whichkey_descends_into_go_group() {
-        let view = type_seq(&mut engine(true), "space g")
+        let view = type_seq(&engine(true), "space g")
             .which_key
             .expect("go group entries");
         assert_eq!(view.prefix, "SPC g");
