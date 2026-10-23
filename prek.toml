@@ -1,0 +1,55 @@
+# This repo's git hooks, run by prek (https://github.com/j178/prek; the
+# dev shell carries the pinned release, nix/modules/prek.nix, bumped by
+# `just prek-bump`). Install once per clone: `just install-hooks`.
+#
+#   commit   rustfmt, shellcheck and actionlint on the STAGED files only.
+#            prek stashes unstaged edits while hooks run, so a hook sees
+#            exactly what is being committed. A hook that rewrites a file
+#            fails the commit: `git add` the result and commit again.
+#   push     local CI (scripts/ci-local-hook.sh): the clippy, wasm and
+#            tests `cargo rail plan` says the change affects, on this
+#            machine's warm target dir, then the `local-ci` status on the
+#            pushed commit, which main requires (checks.yml header).
+#
+# Skip one hook: `SKIP=local-ci git push` (the PR then waits on local-ci
+# until a checked push or `gh workflow run checks.yml --ref <branch>`).
+default_install_hook_types = ["pre-commit", "pre-push"]
+
+[[repos]]
+repo = "local"
+
+# Each file through rustfmt's stdin: `rustfmt <file>` would follow `mod`
+# declarations and rewrite files that aren't staged.
+[[repos.hooks]]
+id = "rustfmt"
+name = "rustfmt (staged files)"
+language = "system"
+entry = "bash scripts/rustfmt-files.sh"
+types = ["rust"]
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "shellcheck"
+name = "shellcheck"
+language = "system"
+entry = "shellcheck"
+types = ["shell"]
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "actionlint"
+name = "actionlint (workflows)"
+language = "system"
+entry = "actionlint"
+files = "^\\.github/workflows/.*\\.ya?ml$"
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "local-ci"
+name = "local CI (rail-planned clippy + tests) -> local-ci"
+language = "system"
+entry = "bash scripts/ci-local-hook.sh"
+always_run = true
+pass_filenames = false
+require_serial = true
+stages = ["pre-push"]

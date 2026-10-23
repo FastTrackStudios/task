@@ -61,6 +61,10 @@
         type = lib.types.nullOr lib.types.package;
         description = "cargo-rail built from its release tag (null disables it in the shells).";
       };
+      prek = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        description = "prek, the git hook manager, from its release binary (null on systems it doesn't ship for).";
+      };
     };
   });
 }

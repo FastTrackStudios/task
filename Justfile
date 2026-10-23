@@ -506,14 +506,40 @@ sweep-status:
 
 # ── Git hooks ────────────────────────────────────────────────────────────
 
-# Install the hooks (rustfmt of the staged files on commit, `ci-local` on
-# push). Run once per clone.
+# Install the git hooks (prek.toml: rustfmt/shellcheck/actionlint on the
+# staged files at commit, `ci-local` at push) into .git/hooks. Run once
+# per clone; worktrees share them. A clone from before prek pointed
+# core.hooksPath at .githooks (capn), which would shadow prek's shims.
 install-hooks:
-    ./.githooks/install.sh
+    -git config --unset core.hooksPath
+    prek install --force
 
-# Run capn pre-commit checks manually (without committing).
-capn-precommit:
-    capn
+# Run the commit hooks on every file (prek's `--all-files`), e.g. after
+# changing prek.toml.
+hooks-all:
+    prek run --all-files
+
+# Move nix/modules/prek.nix to prek's newest release (or VERSION, e.g.
+# 0.5.7): rewrites the version and every platform's sha256 from the
+# release's own `.sha256` files. Then re-enter the shell and
+# `just install-hooks` (the shims name the prek they were installed with).
+prek-bump VERSION="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v="{{VERSION}}"
+    if [ -z "$v" ]; then
+        v="$(curl -fsSL https://api.github.com/repos/j178/prek/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')"
+    fi
+    [ -n "$v" ] || { echo "could not read prek's latest release" >&2; exit 1; }
+    f=nix/modules/prek.nix
+    sed -i "s/version = \"[^\"]*\";/version = \"$v\";/" "$f"
+    for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+        sum="$(curl -fsSL "https://github.com/j178/prek/releases/download/v$v/prek-$t.tar.gz.sha256" | cut -d' ' -f1)"
+        [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "no sha256 for $t at v$v" >&2; exit 1; }
+        sed -i "s|target = \"$t\"; sha256 = \"[0-9a-f]*\"|target = \"$t\"; sha256 = \"$sum\"|" "$f"
+    done
+    git diff --stat -- "$f"
+    echo "prek -> $v"
 
 # The PR gate's clippy + tests + wasm, for what the change affects (`cargo
 # rail plan` from BASE, default the merge-base with origin/main). The
