@@ -166,6 +166,38 @@ jobs:
           kind: release
           shared-key: release
           sccache: "true"
+      # dioxus-cli and wasm-bindgen-cli (the `.#default` shell's dx) are
+      # built from source and are in neither cache.nixos.org nor the FTS
+      # cachix: entering the shell cold compiled them for 18 min of a 56 min
+      # hosted build. As the action does for cargo-rail: keep their store
+      # paths in the Actions cache as a file:// binary cache, keyed on the
+      # paths, written from main only.
+      - name: dx store paths
+        id: dx
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          set -uo pipefail
+          # Fail open: no paths = no cache, the shell builds dx as before.
+          out="$(nix eval --raw .#devShells.x86_64-linux.default --apply \
+            'sh: toString (builtins.filter (p: builtins.elem (p.pname or "") [ "dioxus-cli" "wasm-bindgen-cli" ]) (sh.nativeBuildInputs ++ sh.buildInputs))')" || out=""
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+          echo "hash=$(printf '%s' "$out" | sha256sum | cut -c1-32)" >> "$GITHUB_OUTPUT"
+          echo "dx: ${out:-<not in the shell>}"
+      - name: Restore dx
+        id: dx-cache
+        if: ${{ steps.dx.outputs.out != '' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/nix-file-cache-dx
+          key: nix-dx-${{ steps.dx.outputs.hash }}
+      - name: Import dx
+        if: ${{ steps.dx-cache.outputs.cache-hit == 'true' }}
+        env:
+          OUT: ${{ steps.dx.outputs.out }}
+        run: |
+          # shellcheck disable=SC2086
+          nix copy --no-check-sigs --from "file://$HOME/.cache/nix-file-cache-dx" $OUT \
+            || echo "::warning::dx import failed; the shell builds it"
       - name: Placement
         run: |
           if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
@@ -223,6 +255,21 @@ jobs:
           # The image's payload reports the release's version, and
           # answering `--version` must not boot it.
           bash scripts/check-versions.sh --bin "$dir/release/task-server"
+
+      - name: Export dx
+        id: dx-export
+        if: ${{ steps.dx.outputs.out != '' && steps.dx-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        env:
+          OUT: ${{ steps.dx.outputs.out }}
+        run: |
+          # shellcheck disable=SC2086
+          nix copy --to "file://$HOME/.cache/nix-file-cache-dx" $OUT
+      - name: Save dx
+        if: ${{ steps.dx-export.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/nix-file-cache-dx
+          key: nix-dx-${{ steps.dx.outputs.hash }}
 
       - name: Push images
         if: ${{ !inputs.dry_run }}
