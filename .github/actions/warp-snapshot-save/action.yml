@@ -1,0 +1,37 @@
+# Save this WarpBuild runner's disk as the snapshot the next run of the
+# same job restores (.github/actions/warp-nix). The caller decides when
+# (`save`): pushes to main, and a dispatch with `seed=true` (to warm a
+# new alias before the merge that needs it, instead of paying the cold
+# build on main). Never an ordinary PR or branch run: one alias per build
+# kind, and every run starts from whatever was saved last.
+#
+# Bound the target dir BEFORE this (scripts/target-sweep.py sweep): the
+# snapshot keeps whatever is on disk, and storage is billed.
+name: Save the WarpBuild snapshot
+description: Clean credentials and scratch off the disk, then save it under one alias.
+inputs:
+  alias:
+    description: Snapshot alias; the job's `snapshot.key`.
+    required: true
+  save:
+    description: "'true' to save; anything else does nothing."
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Clean up before the snapshot
+      if: ${{ inputs.save == 'true' }}
+      shell: bash
+      run: |
+        # The checkouts use persist-credentials: false, so no token is
+        # left in .git/config.
+        rm -rf "$HOME/.ssh" "$HOME/.aws" "$HOME/rail-evidence"
+        git clean -ffdx
+        du -sh "${CARGO_TARGET_DIR:-$HOME/.cache/cargo-target}" /nix/store 2>/dev/null || true
+    - name: Save the WarpBuild snapshot
+      if: ${{ inputs.save == 'true' }}
+      uses: WarpBuilds/snapshot-save@v1
+      with:
+        alias: ${{ inputs.alias }}
+        fail-on-error: false
+        wait-timeout-minutes: 60

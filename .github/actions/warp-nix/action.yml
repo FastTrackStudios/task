@@ -1,0 +1,58 @@
+# Set up a WarpBuild runner with a snapshot (`runs-on: warp-…;snapshot.key=<k>`)
+# for one build kind of checks.yml: nix (restored from the snapshot, or
+# installed on a cold runner), the repo's `.#ci` dev shell exported into
+# the job's environment, and a CARGO_TARGET_DIR the snapshot keeps.
+#
+# WHY A SNAPSHOT, NOT rust-cache: the snapshot is the whole disk, so it
+# keeps /nix (the shell's ~3 GB closure) and the target dir WITH the
+# workspace's own crates, which rust-cache drops. A warm run compiles only
+# what changed since the last save. Snapshots are saved from main only
+# (.github/actions/warp-snapshot-save), so every run starts from main's.
+#
+# A restored snapshot already has nix in /nix, and installing over it
+# fails, so the install runs only when /nix is missing. If a restored
+# store won't answer, the job fails rather than reinstalling over it:
+# delete the snapshot alias on the WarpBuild dashboard and the next run
+# is cold again.
+name: WarpBuild nix + snapshot target dir
+description: nix from the snapshot or installed, .#ci entered, a target dir under ~/.cache that the snapshot keeps.
+runs:
+  using: composite
+  steps:
+    - name: Nix from the snapshot?
+      id: nix
+      shell: bash
+      run: |
+        if [ -x /nix/var/nix/profiles/default/bin/nix ]; then
+          sudo systemctl start nix-daemon.socket nix-daemon.service 2>/dev/null || true
+          export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+          if ! nix store info >/dev/null 2>&1; then
+            echo "::error::the snapshot's /nix does not answer (nix store info). Delete this job's snapshot alias on the WarpBuild dashboard; the next run starts cold."
+            exit 1
+          fi
+          echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
+          echo "have=true" >> "$GITHUB_OUTPUT"
+          echo "nix restored from the snapshot ($(du -sh /nix/store 2>/dev/null | cut -f1))"
+        else
+          echo "no snapshot nix: cold run"
+        fi
+    - uses: cachix/install-nix-action@v31
+      if: ${{ steps.nix.outputs.have != 'true' }}
+      with:
+        extra_nix_config: |
+          accept-flake-config = true
+          extra-substituters = https://fasttrackstudio.cachix.org
+          extra-trusted-public-keys = fasttrackstudio.cachix.org-1:r7v7WXBeSZ7m5meL6w0wttnvsOltRvTpXeVNItcy9f4=
+    # Outside $GITHUB_WORKSPACE: actions/checkout runs `git clean -ffdx`.
+    - name: Target dir
+      shell: bash
+      run: |
+        dir="$HOME/.cache/cargo-target"
+        mkdir -p "$dir"
+        echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+        echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+        df -h "$dir" | tail -1
+    - name: Enter .#ci
+      uses: nicknovitski/nix-develop@v1
+      with:
+        arguments: --accept-flake-config .#ci

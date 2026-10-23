@@ -5,9 +5,11 @@
 #   `task-tests`  the Mac Pro VM's warm test-build runner (checks.yml tests)
 #   `task-deploy` the release deploy (deploy.yml)
 #   `airlock`     the Mac that builds and signs the Apple apps.
+#   `warp-*`      WarpBuild runners (checks.yml lint + tests, full runs).
 self-hosted-runner:
   labels:
     - task
     - task-deploy
     - task-tests
     - airlock
+    - warp-*
