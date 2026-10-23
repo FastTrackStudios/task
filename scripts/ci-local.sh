@@ -14,7 +14,7 @@
 # the wasm check for what the change affects: `cargo rail plan` from BASE (default: the merge-base with
 # origin/main) through cargo's reverse-dependency graph, turned into gates
 # by scripts/ci-rail-plan.py, the same script CI plans with. The full set
-# runs on WarpBuild after every merge to main, which is what catches two
+# runs on GitHub's free hosted runners after every merge to main, which is what catches two
 # PRs that pass alone and break together.
 #
 # Order is the Justfile's: the test build does the codegen clippy reuses.

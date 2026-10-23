@@ -121,12 +121,12 @@ jobs:
     name: Build + push to GHCR
     needs: plan
     if: ${{ needs.plan.outputs.build == 'true' }}
-    # WarpBuild 8x, cold (no snapshot): a release is a few a month, and a
-    # snapshot of a release target dir would be stale by the next one
-    # while storage is billed every day. The nix closure comes from the
-    # FTS cachix. It needs internet, nothing on the LAN.
-    runs-on: warp-ubuntu-latest-x64-8x
-    timeout-minutes: 120
+    # A free hosted runner (the repo is public), cold: a release is a few a
+    # month. The nix closure comes from the FTS cachix. It needs internet,
+    # nothing on the LAN. `just release-tag` waits for these images, so a
+    # release takes as long as this build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: write
@@ -139,6 +139,13 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
+      # The image's unused toolchains (Android SDK, .NET, GHC, CodeQL, ~30 GB):
+      # a release build of the server and the web bundle needs the disk.
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |

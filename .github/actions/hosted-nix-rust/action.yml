@@ -5,8 +5,7 @@
 # After this action every later step of the job runs inside the dev shell
 # (nicknovitski/nix-develop writes its PATH and env to $GITHUB_PATH /
 # $GITHUB_ENV), so steps call `just ci-*` directly, with no `nix develop`
-# prefix. The WarpBuild jobs (full-run lint and tests) use
-# .github/actions/warp-nix instead: their snapshot keeps the target dir.
+# prefix. Every build kind of checks.yml (lint, tests, wasm) uses it.
 #
 # CACHE BUDGET: the repo gets 10 GB of Actions cache, evicted LRU across
 # every branch. So rust-cache SAVES only on main (`save-if`), and PRs
@@ -18,7 +17,7 @@ name: Hosted nix + rust cache
 description: Free disk, install nix with the FTS cachix, enter .#ci, restore the rust cache for one build kind.
 inputs:
   kind:
-    description: Build kind; the rust-cache shared-key (lint, wasm).
+    description: Build kind; the rust-cache shared-key (lint, tests, wasm).
     required: true
 runs:
   using: composite

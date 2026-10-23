@@ -1,10 +1,7 @@
 # actionlint: the self-hosted runner labels this repo's workflows use.
-# Light jobs run on hosted ubuntu-latest (free: the repo is public); the
-# jobs that build the workspace run on WarpBuild (checks.yml header).
+# Everything else runs on GitHub's free hosted ubuntu-latest (the repo is
+# public; checks.yml header).
 #   `airlock`     the Mac that builds and signs the Apple apps.
-#   `warp-*`      WarpBuild runners (checks.yml lint + tests on full runs,
-#                 images.yml publish, desktop-cache.yml).
 self-hosted-runner:
   labels:
     - airlock
-    - warp-*

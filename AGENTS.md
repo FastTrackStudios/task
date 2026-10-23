@@ -152,7 +152,8 @@ follows `skills/ship-stack.md`. In short:
   GitHub). With no hook, a dirty tree or `SKIP=local-ci`, run
   `gh workflow run checks.yml --ref <branch>` instead:
   it posts `Local CI` when green. PRs squash-merge, and the full set
-  (clippy, docs, every test) runs on WarpBuild after every merge to `main`.
+  (clippy, docs, every test) runs on GitHub's free hosted runners after
+  every merge to `main`.
 - A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
   `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
   a push to `main` deploys nothing.

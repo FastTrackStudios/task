@@ -16,11 +16,12 @@
 # `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
 # already cached is harmless to re-run: cachix skips paths it holds.
 #
-# WHERE: WarpBuild 8x, cold. The package is a pure Nix build of the whole
-# workspace (cargoArtifacts = null): ~61 min cold on the Mac Pro, the
-# better part of an hour or more and ~30 GB of disk on a 4-vCPU hosted
-# runner. It runs once per release, so no snapshot: the result lives in
-# cachix, which is the point of the job.
+# WHERE: a free hosted runner (the repo is public), cold. The package is a
+# pure Nix build of the whole workspace (cargoArtifacts = null): ~61 min
+# cold on the Mac Pro, the better part of an hour or more and ~30 GB of
+# disk on a 4-vCPU hosted runner, so the image's unused SDKs are deleted
+# first. It runs once per release and nobody waits on it; the result lives
+# in cachix, which is the point of the job.
 #
 # SECRET: CACHIX_AUTH_TOKEN, a repo Actions secret (owned by Keeper; a
 # cachix token with write access to `fasttrackstudio`). It reaches cachix
@@ -60,13 +61,20 @@ env:
 jobs:
   cache:
     name: task-desktop -> cachix
-    runs-on: warp-ubuntu-latest-x64-8x
-    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+      # The image's unused toolchains (Android SDK, .NET, GHC, CodeQL, ~30 GB):
+      # the whole-workspace nix build needs the disk.
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
