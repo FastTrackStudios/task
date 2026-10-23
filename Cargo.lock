@@ -19708,7 +19708,7 @@ dependencies = [
 name = "task-app-desktop"
 version = "0.2.4"
 dependencies = [
- "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.24)",
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.26)",
  "architect-telemetry",
  "block2",
  "bzip2",
