@@ -1195,32 +1195,30 @@ impl Pages for WikiBackend {
         if !root.is_dir() {
             return Ok(out);
         }
-        for entry in walkdir::WalkDir::new(&root)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            let p = entry.path();
-            if !p.is_file() || p.extension().and_then(|s| s.to_str()) != Some("md") {
+        // The wiki root's cached vault snapshot (zero-copy audit W1):
+        // only pages changed since the last list are read from disk,
+        // where this walked and read every page on every call. The
+        // vault walk prunes what a vault never shows (dot-directories,
+        // `trash/`, node-private directories, a nested shelf); the
+        // filters below keep this list's own rules on top.
+        let vault = vault_live::Vault::snapshot(&root).map_err(|e| WikiError::Io(e.to_string()))?;
+        for page in &vault.pages {
+            let rel = &page.rel_path;
+            if !rel.ends_with(".md") {
                 continue;
             }
-            let Ok(rel) = p.strip_prefix(&root) else {
-                continue;
-            };
-            let rel = rel.to_string_lossy().replace('\\', "/");
             if PAGE_SKIP_PREFIXES.iter().any(|pre| rel.starts_with(pre)) {
                 continue;
             }
-            let Ok(body) = std::fs::read_to_string(p) else {
-                continue;
-            };
-            let (title, page_type) = page_title_and_type(&rel, &body);
-            let (ai_generated, generated_by) = page_provenance(&body);
+            let body: &str = &page.raw;
+            let (title, page_type) = page_title_and_type(rel, body);
+            let (ai_generated, generated_by) = page_provenance(body);
             out.push(ptypes::PageInfo {
-                path: rel,
+                path: rel.clone(),
                 title,
                 page_type,
                 size: body.len() as u64,
-                modified: mtime_utc(p),
+                modified: chrono::DateTime::<Utc>::from(page.mtime),
                 ai_generated,
                 generated_by,
             });

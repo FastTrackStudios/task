@@ -1,6 +1,7 @@
 //! In-memory snapshot of a vault root.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use rayon::prelude::*;
@@ -28,7 +29,12 @@ pub struct VaultPage {
     pub folder: String,
     /// Raw file bytes at scan time. The editor sees this string;
     /// edits replace ranges within it.
-    pub raw: String,
+    ///
+    /// Shared, not owned: the snapshot cache ([`crate::snapshot`]) hands
+    /// the same text to every snapshot until the file changes, and a
+    /// cloned page or [`Vault`] bumps a count instead of copying it. To
+    /// edit, build the new text and assign it (`page.raw = text.into()`).
+    pub raw: Arc<str>,
     /// `mtime` snapshot. The watcher uses it to detect external
     /// edits on reload.
     pub mtime: SystemTime,
@@ -49,15 +55,15 @@ impl VaultPage {
             rel_path: self.rel_path.clone(),
             basename: self.basename.clone(),
             folder: self.folder.clone(),
-            raw: self.raw.clone(),
+            raw: self.raw.to_string(),
             mtime_ms,
         }
     }
 
-    /// [`Self::to_proto`] by value: the strings move, nothing is cloned.
-    /// For a caller that owns the page it converts (a scan over a
-    /// freshly opened [`crate::Vault`]), where `to_proto` would copy
-    /// every page's whole text to drop the original a line later.
+    /// [`Self::to_proto`] by value: the path strings move. The text is
+    /// copied out of its shared `Arc<str>` (the wire shape owns a
+    /// `String`); a scan over a snapshot should borrow the page instead
+    /// (`parse_str(&page.rel_path, &page.basename, &page.raw)`).
     #[must_use]
     pub fn into_proto(self) -> vault_proto::VaultPage {
         let mtime_ms = self
@@ -69,7 +75,7 @@ impl VaultPage {
             rel_path: self.rel_path,
             basename: self.basename,
             folder: self.folder,
-            raw: self.raw,
+            raw: self.raw.to_string(),
             mtime_ms,
         }
     }
@@ -84,7 +90,8 @@ pub struct VaultBase {
     pub rel_path: String,
     pub basename: String,
     pub folder: String,
-    pub raw: String,
+    /// Shared, as [`VaultPage::raw`].
+    pub raw: Arc<str>,
     /// `Err` keeps the file visible (so editors can show a
     /// parse-error chip rather than hiding it).
     pub parsed: Result<crate::bases::ParsedBase, String>,
@@ -106,7 +113,7 @@ pub struct Vault {
 /// Property type registry parsed from `.obsidian/types.json`.
 /// Maps frontmatter key → declared type ("text", "number",
 /// "date", "checkbox", "multitext", "tags", "aliases").
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PropertyTypes {
     pub map: std::collections::HashMap<String, String>,
 }
@@ -139,6 +146,19 @@ impl Vault {
     /// during the walk (see [`crate::walker::walk_vault`]).
     pub fn open(root: &Path) -> Result<Self, LoadError> {
         Self::from_entries(root, walk_vault(root))
+    }
+
+    /// The cached snapshot of `root`: what [`Self::open`] returns, but
+    /// re-reading only the files that changed since the last call for
+    /// the same root, and sharing the rest (see [`crate::snapshot`]).
+    /// The read path for every list and search; [`Self::open`] stays for
+    /// a caller that needs a private, mutable copy.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn snapshot(root: &Path) -> Result<Arc<Self>, LoadError> {
+        crate::snapshot::snapshot(root)
     }
 
     /// Build a snapshot from a pre-resolved entry list. Useful
@@ -208,7 +228,7 @@ impl Vault {
     }
 }
 
-enum LoadedEntry {
+pub(crate) enum LoadedEntry {
     Page(VaultPage),
     Base(VaultBase),
 }
@@ -225,7 +245,7 @@ fn split_by_kind(entries: Vec<LoadedEntry>) -> (Vec<VaultPage>, Vec<VaultBase>) 
     (pages, bases)
 }
 
-fn load_entry(entry: VaultEntry) -> Result<LoadedEntry, std::io::Error> {
+pub(crate) fn load_entry(entry: VaultEntry) -> Result<LoadedEntry, std::io::Error> {
     let VaultEntry {
         abs_path,
         rel_path,
@@ -241,7 +261,7 @@ fn load_entry(entry: VaultEntry) -> Result<LoadedEntry, std::io::Error> {
             rel_path,
             basename,
             folder,
-            raw,
+            raw: raw.into(),
             mtime,
         }),
         VaultEntryKind::Base => {
@@ -250,7 +270,7 @@ fn load_entry(entry: VaultEntry) -> Result<LoadedEntry, std::io::Error> {
                 rel_path,
                 basename,
                 folder,
-                raw,
+                raw: raw.into(),
                 parsed,
                 mtime,
             })
@@ -298,7 +318,7 @@ fn name_parts(rel: &str) -> (&str, &str) {
 }
 
 /// Read `.obsidian/types.json` if present. Empty map otherwise.
-fn read_property_types(root: &Path) -> PropertyTypes {
+pub(crate) fn read_property_types(root: &Path) -> PropertyTypes {
     #[derive(serde::Deserialize)]
     struct Wrapper {
         #[serde(default)]
@@ -376,7 +396,7 @@ mod tests {
                     p.rel_path.as_str(),
                     p.basename.as_str(),
                     p.folder.as_str(),
-                    p.raw.as_str(),
+                    &*p.raw,
                 )
             })
             .collect();

@@ -65,6 +65,9 @@ pub use vault_live::bases;
 /// the validation a write goes through.
 #[cfg(feature = "live")]
 pub use vault_live::property_schema;
+/// The cached `Vault` snapshot per root (`Vault::snapshot`).
+#[cfg(feature = "live")]
+pub use vault_live::snapshot;
 /// Sub-module access into the live backend implementation, when
 /// callers need `vault::sync::WatcherHandle` or the like.
 #[cfg(feature = "live")]

@@ -346,7 +346,7 @@ impl ShoppingService for Store {
         list.path = guard.pages[idx].rel_path.clone();
         list.date_modified = Some(Utc::now());
         let body = serialize(&list)?;
-        guard.pages[idx].raw = body;
+        guard.pages[idx].raw = body.into();
         let path = list.path.clone();
         vault::save_page(&mut guard, &path).map_err(map_io)?;
         Ok(list)

@@ -773,10 +773,11 @@ impl VaultSync for Backend {
                 pages: Vec::new(),
             });
         }
-        // `Vault::open` walks every `.md` page and hands back the
-        // raw bytes + derived basename, so we parse frontmatter
-        // once here rather than re-walking the tree.
-        let vault = Vault::open(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
+        // The cached snapshot holds every `.md` page's raw bytes +
+        // derived basename (re-reading only what changed since the last
+        // call), so we parse frontmatter once here rather than
+        // re-walking the tree.
+        let vault = Vault::snapshot(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
         let pages = vault
             .pages
             .iter()
@@ -837,7 +838,7 @@ impl VaultSync for Backend {
 
     fn base_views(&self, vault_id: &str, base_path: &str) -> Result<Vec<BaseView>, VaultSyncError> {
         let dir = self.root(vault_id)?;
-        let vault = Vault::open(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
+        let vault = Vault::snapshot(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
 
         // Find + resolve the requested base.
         let parsed = vault
@@ -941,7 +942,7 @@ impl VaultSync for Backend {
         if words.is_empty() || !dir.exists() {
             return Ok(Vec::new());
         }
-        let vault = Vault::open(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
+        let vault = Vault::snapshot(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
         let mut hits: Vec<(bool, TextHit)> = vault
             .pages
             .iter()
@@ -1508,6 +1509,9 @@ fn forward_watcher_events(
             watcher::VaultEvent::Changed { abs_path } => abs_path,
             watcher::VaultEvent::Removed { abs_path } => abs_path,
         };
+        // The snapshot cache re-reads this file on its next call even if
+        // its stamp did not move (see `crate::snapshot`).
+        crate::snapshot::invalidate_path(&abs);
         let Ok(rel_path) = abs
             .strip_prefix(&root)
             .or_else(|_| abs.strip_prefix(&canonical))

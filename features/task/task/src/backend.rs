@@ -12,7 +12,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::TaskInfo;
-use crate::parse::{looks_like_task_raw, parse_page};
+use crate::parse::{looks_like_task_raw, parse_str};
 use crate::service::{
     ClaimResult, TaskError, TaskEvent, TaskListFilter, TaskReverseRelations, TaskService,
 };
@@ -143,26 +143,24 @@ impl TaskBackend {
     }
 
     fn list_inner(&self) -> Result<Vec<TaskInfo>, TaskError> {
-        let vault = Vault::open(&self.vault_root)
+        // The cached snapshot: only pages changed since the last list are
+        // read from disk (zero-copy audit V12).
+        let vault = Vault::snapshot(&self.vault_root)
             .map_err(|e| TaskError::Io(format!("open vault {}: {e}", self.vault_root.display())))?;
         let mut out = Vec::new();
-        // By value, and tested on the raw text first: a page that is not
-        // a task is dropped without being copied, and one that is moves
-        // into the proto shape instead of being cloned into it. This
-        // runs over the whole vault on every list and every get.
-        for page in vault.pages {
+        // Borrowed, and tested on the raw text first: a page that is not
+        // a task is skipped without a copy, and one that is is parsed in
+        // place. This runs over the whole vault on every list and get.
+        for page in &vault.pages {
             if !looks_like_task_raw(&page.raw) {
                 continue;
             }
-            // The parser consumes the wasm-clean
-            // `vault_proto::VaultPage`; convert the live page first.
-            let proto = page.into_proto();
-            match parse_page(&proto) {
+            match parse_str(&page.rel_path, &page.basename, &page.raw) {
                 Ok(t) => {
                     self.remember(&t.path, t.id);
                     out.push(t);
                 }
-                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "task parse failed"),
+                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "task parse failed"),
             }
         }
         Ok(out)

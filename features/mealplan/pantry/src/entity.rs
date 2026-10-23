@@ -214,7 +214,7 @@ mod tests {
             rel_path: "Operations/Inventory/Pantry/rice.md".into(),
             basename: "rice".into(),
             folder: "Operations/Inventory/Pantry".into(),
-            raw: raw.to_string(),
+            raw: raw.into(),
             mtime: std::time::SystemTime::UNIX_EPOCH,
         }
     }

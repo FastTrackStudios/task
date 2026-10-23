@@ -15,7 +15,14 @@ use crate::model::Milestone;
 /// True when `page` carries `type: milestone` (or the tag).
 #[must_use]
 pub fn looks_like_milestone(page: &VaultPage) -> bool {
-    vault_entity::frontmatter::has_type(&page.raw, Milestones::TYPE)
+    looks_like_milestone_raw(&page.raw)
+}
+
+/// [`looks_like_milestone`] on a page's raw text, for a scan that borrows
+/// the cached vault snapshot instead of building a `VaultPage`.
+#[must_use]
+pub fn looks_like_milestone_raw(raw: &str) -> bool {
+    vault_entity::frontmatter::has_type(raw, Milestones::TYPE)
 }
 
 pub fn parse_page(page: &VaultPage) -> Result<Milestone, ParseError> {

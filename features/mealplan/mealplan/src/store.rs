@@ -164,7 +164,7 @@ impl MealplanService for Store {
         meal.path = guard.pages[idx].rel_path.clone();
         meal.date_modified = Some(chrono::Utc::now());
         let body = serialize_meal(&meal).map_err(map_io)?;
-        guard.pages[idx].raw = body;
+        guard.pages[idx].raw = body.into();
         let path = meal.path.clone();
         vault::save_page(&mut guard, &path).map_err(map_io)?;
         Ok(meal)

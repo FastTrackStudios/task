@@ -2,14 +2,15 @@
 //! [`NamedVersion`] / [`ProjectVersion`] entities that reference a
 //! root's commits (issue #261).
 //!
-//! **Live scan, no index.** Every call opens the org vault fresh
-//! (`Vault::open`) and scans it, exactly like `WorkstreamBackend` and
+//! **Live scan, no index.** Every call takes the org vault's snapshot
+//! (`Vault::snapshot`, which re-reads whatever changed on disk since
+//! the last call) and scans it, exactly like `WorkstreamBackend` and
 //! the other vault-backed slices — there is no second authority to
 //! keep in sync, and an entity that arrived by vault replication (or a
 //! producer's own text editor) is visible on the very next call. That
 //! is what "replicate with the Vault and re-resolve on any device"
-//! means concretely: these are ordinary vault files, and nothing
-//! caches them.
+//! means concretely: these are ordinary vault files, and the snapshot
+//! is checked against the disk on every call.
 //!
 //! The generic CRUD comes from `vault-entity`'s
 //! [`VaultEntityStore`]; the per-root path layout, the per-root name
@@ -74,9 +75,15 @@ impl VaultVersions {
     /// an error rather than an empty list.
     fn write_store<E: VaultEntity>(&self) -> Result<VaultEntityStore<E>> {
         std::fs::create_dir_all(&self.vault_root)?;
-        let vault = Vault::open(&self.vault_root)
+        // A private copy of the cached snapshot: the store mutates its
+        // vault, the cache must not see that. The copy shares every
+        // page's text with the cache (`Arc<str>`), so it costs the path
+        // strings, not the vault.
+        let vault = Vault::snapshot(&self.vault_root)
             .map_err(|e| Error::Repo(format!("open vault {}: {e}", self.vault_root.display())))?;
-        Ok(VaultEntityStore::new(vault))
+        Ok(VaultEntityStore::new(std::sync::Arc::unwrap_or_clone(
+            vault,
+        )))
     }
 
     /// Every version entity of `root_id`, from **one** vault scan — the

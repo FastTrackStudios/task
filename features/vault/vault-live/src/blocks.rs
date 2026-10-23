@@ -198,7 +198,7 @@ mod tests {
             rel_path: "p.md".into(),
             basename: "p".into(),
             folder: String::new(),
-            raw: raw.to_string(),
+            raw: raw.into(),
             mtime: SystemTime::UNIX_EPOCH,
         }
     }

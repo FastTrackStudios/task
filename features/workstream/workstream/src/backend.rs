@@ -10,7 +10,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::{Status, Workstream};
-use crate::parse::{looks_like_workstream, parse_page};
+use crate::parse::{looks_like_workstream_raw, parse_workstream};
 use crate::rollup::rollup_with;
 use crate::service::{WorkstreamError, WorkstreamEvent, WorkstreamService, WorkstreamWithRollup};
 use crate::write::{default_workstream_path, write_workstream};
@@ -64,8 +64,11 @@ impl WorkstreamBackend {
         let _ = event;
     }
 
-    fn open_vault(&self) -> Result<Vault, WorkstreamError> {
-        Vault::open(&self.vault_root).map_err(|e| {
+    /// The cached snapshot: only pages changed since the last call are
+    /// read from disk, and the scans below borrow it (zero-copy audit
+    /// V12).
+    fn open_vault(&self) -> Result<std::sync::Arc<Vault>, WorkstreamError> {
+        Vault::snapshot(&self.vault_root).map_err(|e| {
             WorkstreamError::Io(format!("open vault {}: {e}", self.vault_root.display()))
         })
     }
@@ -73,14 +76,13 @@ impl WorkstreamBackend {
     fn list_inner(&self) -> Result<Vec<Workstream>, WorkstreamError> {
         let vault = self.open_vault()?;
         let mut out = Vec::new();
-        for page in vault.pages {
-            let proto = page.into_proto();
-            if !looks_like_workstream(&proto) {
+        for page in &vault.pages {
+            if !looks_like_workstream_raw(&page.raw) {
                 continue;
             }
-            match parse_page(&proto) {
+            match parse_workstream(&page.rel_path, &page.basename, &page.raw) {
                 Ok(w) => out.push(w),
-                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "workstream parse failed"),
+                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "workstream parse failed"),
             }
         }
         Ok(out)
@@ -97,14 +99,13 @@ impl WorkstreamBackend {
     fn org_tasks(&self) -> Result<Vec<task::TaskInfo>, WorkstreamError> {
         let vault = self.open_vault()?;
         let mut out = Vec::new();
-        for page in vault.pages {
-            let proto = page.into_proto();
-            if !task::parse::looks_like_task(&proto) {
+        for page in &vault.pages {
+            if !task::parse::looks_like_task_raw(&page.raw) {
                 continue;
             }
-            match task::parse_page(&proto) {
+            match task::parse::parse_str(&page.rel_path, &page.basename, &page.raw) {
                 Ok(t) => out.push(t),
-                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "task parse failed"),
+                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "task parse failed"),
             }
         }
         Ok(out)
@@ -119,16 +120,15 @@ impl WorkstreamBackend {
     {
         let vault = self.open_vault()?;
         let mut out = std::collections::HashMap::new();
-        for page in vault.pages {
-            let proto = page.into_proto();
-            if !project::looks_like_project(&proto) {
+        for page in &vault.pages {
+            if !project::looks_like_project_raw(&page.raw) {
                 continue;
             }
-            match project::parse_page(&proto) {
+            match project::parse_str(&page.rel_path, &page.basename, &page.raw) {
                 Ok(p) => {
                     out.insert(p.id, p.states);
                 }
-                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "project parse failed"),
+                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "project parse failed"),
             }
         }
         Ok(out)

@@ -384,7 +384,7 @@ impl<E: VaultEntity> VaultEntityStore<E> {
         E::on_update(&mut model, Utc::now());
 
         let body = E::to_markdown(&model)?;
-        vault.pages[idx].raw = body;
+        vault.pages[idx].raw = body.into();
         // The disk write happens with the vault lock *released*, and
         // under a lock on this page alone.
         //

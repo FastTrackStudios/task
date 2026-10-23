@@ -12,7 +12,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::Goal;
-use crate::parse::{looks_like_goal, parse_page};
+use crate::parse::{looks_like_goal_raw, parse_goal};
 use crate::service::{GoalError, GoalService};
 use crate::write::{default_goal_path, write_goal};
 
@@ -68,17 +68,18 @@ impl GoalBackend {
     }
 
     fn list_inner(&self) -> Result<Vec<Goal>, GoalError> {
-        let vault = Vault::open(&self.vault_root)
+        // The cached snapshot, borrowed: only pages changed since the
+        // last list are read, and none is copied (zero-copy audit V12).
+        let vault = Vault::snapshot(&self.vault_root)
             .map_err(|e| GoalError::Io(format!("open vault {}: {e}", self.vault_root.display())))?;
         let mut out = Vec::new();
-        for page in vault.pages {
-            let proto = page.into_proto();
-            if !looks_like_goal(&proto) {
+        for page in &vault.pages {
+            if !looks_like_goal_raw(&page.raw) {
                 continue;
             }
-            match parse_page(&proto) {
+            match parse_goal(&page.rel_path, &page.basename, &page.raw) {
                 Ok(g) => out.push(g),
-                Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "goal parse failed"),
+                Err(e) => tracing::warn!(path = %page.rel_path, ?e, "goal parse failed"),
             }
         }
         Ok(out)
