@@ -170,11 +170,14 @@ aggregate. `just release-tag` requires it.
   nextest config) always run the full set, locally and after merge.
 
 **WarpBuild** (billed per started minute: 2x $0.004, 8x $0.016, 16x $0.032)
-- Snapshots `task-lint` and `task-tests` are saved only from main, or from
-  a dispatch with `-f seed=true`. Seed a new or broken alias before the
-  merge that needs it: `gh workflow run checks.yml --ref <top branch> -f seed=true`.
-- If a restored snapshot's nix won't answer, the job says so. Delete the
-  alias on the WarpBuild dashboard and the next run starts cold.
+- Snapshots `task-lint` and `task-tests` are saved only by a SEED run (the
+  Sunday cron, or `gh workflow run checks.yml --ref main -f seed=true`),
+  which boots from WarpBuild's base image. Every other run only restores.
+  Never make a restored runner save: a snapshot of a snapshot boots runners
+  that never pick up a job.
+- If WarpBuild jobs sit queued while runners appear and get purged, or a
+  restored snapshot's nix won't answer: delete the alias (WarpBuild MCP
+  `DELETE /runner-images/<id>`, or the dashboard), then reseed.
 
 **False alarms**
 - A failed or cancelled check from a run that a newer run on the same

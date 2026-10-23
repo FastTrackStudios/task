@@ -1,9 +1,10 @@
-# Save this WarpBuild runner's disk as the snapshot the next run of the
-# same job restores (.github/actions/warp-nix). The caller decides when
-# (`save`): pushes to main, and a dispatch with `seed=true` (to warm a
-# new alias before the merge that needs it, instead of paying the cold
-# build on main). Never an ordinary PR or branch run: one alias per build
-# kind, and every run starts from whatever was saved last.
+# Save this WarpBuild runner's disk as the snapshot later runs of the same
+# job restore (.github/actions/warp-nix). The caller decides when (`save`):
+# SEED runs only (checks.yml: the weekly seed, or a dispatch with
+# `seed=true`), whose runner booted from the BASE image
+# (`snapshot.enabled=true`). Never save from a runner that was itself
+# restored from a snapshot: a snapshot of a snapshot booted runners that
+# never picked up a job (2026-10-23).
 #
 # Bound the target dir BEFORE this (scripts/target-sweep.py sweep): the
 # snapshot keeps whatever is on disk, and storage is billed.

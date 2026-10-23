@@ -6,8 +6,9 @@
 # WHY A SNAPSHOT, NOT rust-cache: the snapshot is the whole disk, so it
 # keeps /nix (the shell's ~3 GB closure) and the target dir WITH the
 # workspace's own crates, which rust-cache drops. A warm run compiles only
-# what changed since the last save. Snapshots are saved from main only
-# (.github/actions/warp-snapshot-save), so every run starts from main's.
+# what changed since the last seed. Only seed runs save (from the base
+# image; .github/actions/warp-snapshot-save), so every run starts from the
+# latest seed of main.
 #
 # A restored snapshot already has nix in /nix, and installing over it
 # fails, so the install runs only when /nix is missing. If a restored
