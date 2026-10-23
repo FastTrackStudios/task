@@ -83,7 +83,7 @@ if cargo rail plan --from "$base" --to HEAD "${ev[@]}" --json >"$plan"; then
 fi
 [ -n "$gates" ] || { echo "ci-local: no plan; running everything"; gates=$'cargo=true\nclippy=true\ntests=true\ntest_filter=\nwasm=true'; }
 gate() { sed -n "s/^$1=//p" <<<"$gates" | head -1; }
-echo "ci-local: clippy=$(gate clippy) tests=$(gate tests) wasm=$(gate wasm) filter=$(gate test_filter)"
+echo "ci-local: clippy=$(gate clippy) tests=$(gate tests) wasm=$(gate wasm) ($(gate wasm_packages)) filter=$(gate test_filter)"
 
 if [ "$(gate tests)" = true ]; then
   TASK_CI_TEST_FILTER="$(gate test_filter)" just ci-tests
@@ -95,7 +95,8 @@ if [ "$(gate clippy)" = true ]; then
   just ci-clippy
 fi
 if [ "$(gate wasm)" = true ]; then
-  just ci-wasm
+  # shellcheck disable=SC2046 # a space-separated package list, split on purpose
+  just ci-wasm $(gate wasm_packages)
 fi
 
 # Remember the pass for this exact commit (only if the tree is clean, so

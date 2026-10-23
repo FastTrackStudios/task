@@ -458,15 +458,21 @@ clippy-copies *ARGS:
         2>&1 | grep -oE 'rust-clippy/[^ ]*#(redundant_clone|implicit_clone|needless_pass_by_value|large_types_passed_by_value)' \
         | sed 's/.*#//' | sort | uniq -c | sort -rn || true
 
-ci-wasm: css
-    cargo check --target wasm32-unknown-unknown -p task-app-web
-    # The browser dial is what an app outside this repo depends on, so the
-    # gate checks it on its own too: `task-app-web` would keep compiling
-    # if `task-dial` grew a native-only dependency behind a cfg.
-    cargo check --target wasm32-unknown-unknown -p task-dial
-    # Likewise the Files client apps use as their store — a browser app
-    # needs it as much as the dial.
-    cargo check --target wasm32-unknown-unknown -p files-client
+# The wasm32 check, one package at a time: every row of
+# .config/rail-wasm.json by default, or the PACKAGES `cargo rail plan`
+# selected (`ci-local`). `task-app-web` is the browser app. The browser
+# dial (`task-dial`) is what an app outside this repo depends on, so it is
+# checked on its own too: `task-app-web` would keep compiling if it grew a
+# native-only dependency behind a cfg. Likewise `files-client`, the store
+# Files client apps use. A new row goes in the catalog, which this reads.
+ci-wasm *PACKAGES: css
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkgs="{{PACKAGES}}"
+    [ -n "$pkgs" ] || pkgs="$(python3 -c 'import json; print(" ".join(v["cargo_roots"][0]["package"] for v in json.load(open(".config/rail-wasm.json"))["variants"]))')"
+    for p in $pkgs; do
+        cargo check --target wasm32-unknown-unknown -p "$p"
+    done
 
 ci-docs: css
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
