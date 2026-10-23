@@ -138,12 +138,13 @@ follows `skills/ship-stack.md`. In short:
   are prek's (`prek.toml`; `just install-hooks` once per clone). A commit
   runs rustfmt, shellcheck and actionlint on the staged files; a hook that
   rewrites a file fails the commit, so `git add` and commit again. A push
-  runs `just ci-local`, which
-  covers fmt, change files, and the clippy, wasm and tests that
-  `cargo rail plan` says the change affects. It runs on the warm local
-  target dir and, when green, marks the pushed commits with the `local-ci`
-  status. `checks` on the PR then runs only the free hosted checks that
-  compile nothing (fmt, change files, versions, manifests, rail routes). A
+  runs `just ci-local`, which covers fmt, change files, the static guards
+  (one version everywhere, manifests + lockfile, the architect-ui sheet),
+  and the clippy, wasm and tests that `cargo rail plan` says the change
+  affects. It runs on the warm local target dir and, when green, marks the
+  pushed commits with the `local-ci` status. `checks` on the PR then runs
+  only a minimal free backstop on rustup, no nix (fmt, change files, rail
+  routes). A
   stack is vouched for when you push it from its TOP branch. For a long
   run, `just ci-local` BEFORE pushing: the hook then finds the pass and
   the push is instant (a long hook can outlast git's connection to
