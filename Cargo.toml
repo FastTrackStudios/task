@@ -475,26 +475,26 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 # The primitives architect-ui is built on — the same git source and
 # branch, so cargo unifies them. Task renders its own toasts from these
 # (`crates/ui/src/toasts.rs`) to show toast action buttons.
 dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", branch = "main", default-features = false }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 # The keymap engine (key trie, input processor, which-key) behind the
 # app-wide shortcuts (`crates/ui/src/shortcuts.rs`).
-architect-input = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.26" }
+architect-input = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.27" }
 # The device database engine (offline.md) — Turso's LOCAL engine only;
 # its sync is never used. Default features off: `mimalloc` would install
 # a global allocator from inside a library.
