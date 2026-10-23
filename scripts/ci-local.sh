@@ -7,10 +7,11 @@
 #                                     once GitHub has it (the pre-push hook
 #                                     runs this detached, after the push)
 #
-# PRs into main run only the free hosted checks (checks.yml: fmt, change
-# files, versions, manifests, boundaries) plus the `local-ci` status this
-# posts. Clippy, the tests and the wasm check run HERE, for what the change
-# affects: `cargo rail plan` from BASE (default: the merge-base with
+# PRs into main run only a minimal free hosted job (checks.yml: fmt, change
+# files, rail route cases) plus the `local-ci` status this posts. The rest
+# of the PR gate runs HERE: the static guards (one version everywhere,
+# manifests + lockfile, the architect-ui sheet), then clippy, the tests and
+# the wasm check for what the change affects: `cargo rail plan` from BASE (default: the merge-base with
 # origin/main) through cargo's reverse-dependency graph, turned into gates
 # by scripts/ci-rail-plan.py, the same script CI plans with. The full set
 # runs on WarpBuild after every merge to main, which is what catches two
@@ -55,6 +56,12 @@ echo "ci-local: $(git rev-parse --short HEAD) against $(git rev-parse --short "$
 
 just ci-fmt
 just ci-changes "$base"
+# Static guards, seconds each: every artifact reports the release version,
+# Cargo.lock matches the manifests, the token sheet comes through the
+# architect-ui link (STA-392).
+just ci-versions
+just ci-manifests
+just ci-architect-css
 
 # Rail evidence for the base, if `just rail-evidence` recorded it on this
 # machine: without it a changed file outside a crate's sources (docs,
@@ -80,9 +87,6 @@ echo "ci-local: clippy=$(gate clippy) tests=$(gate tests) wasm=$(gate wasm) filt
 
 if [ "$(gate tests)" = true ]; then
   TASK_CI_TEST_FILTER="$(gate test_filter)" just ci-tests
-fi
-if [ "$(gate cargo)" = true ]; then
-  just ci-manifests
 fi
 # rail decides WHETHER clippy runs; it always runs --workspace (a `-p`
 # subset changes feature unification and leaves a second artifact set),
