@@ -14,11 +14,24 @@
 # store won't answer, the job fails rather than reinstalling over it:
 # delete the snapshot alias on the WarpBuild dashboard and the next run
 # is cold again.
+#
+# A restored runner also carries the SAVING job's environment: the `.#ci`
+# shell's PATH (steps run the store's bash) and its TMPDIR, a
+# `nix-shell.XXXXXX` dir under the old job's _temp that no longer exists.
+# `nix develop` then fails creating its temp file there (first warm run,
+# 2026-10-23). So the temp vars point at this job's RUNNER_TEMP first.
 name: WarpBuild nix + snapshot target dir
 description: nix from the snapshot or installed, .#ci entered, a target dir under ~/.cache that the snapshot keeps.
 runs:
   using: composite
   steps:
+    - name: Temp dirs from this job, not the snapshot's
+      shell: bash
+      run: |
+        for v in TMPDIR TMP TEMP TEMPDIR; do
+          echo "$v=$RUNNER_TEMP" >> "$GITHUB_ENV"
+        done
+        echo "TMPDIR was ${TMPDIR:-<unset>}; now $RUNNER_TEMP"
     - name: Nix from the snapshot?
       id: nix
       shell: bash
