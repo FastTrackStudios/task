@@ -49,7 +49,7 @@ deploys the newest tag; rolling back is a new release).
 
 ## Branch protection
 
-`main`: squash-only PRs, required checks `CI passed` (checks.yml's aggregate),
-`Release guard` and `local-ci` (the pre-push hook's status); no direct pushes, no force-push, no deletion. Repository settings:
+`main`: squash-only PRs, required checks `PR checks` (pr.yml), `Release
+guard` and `local-ci` (the pre-push hook's status); no direct pushes, no force-push, no deletion. Repository settings:
 squash merges only, message = PR title + body, delete branch on merge,
 auto-merge on.
