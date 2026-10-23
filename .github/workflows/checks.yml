@@ -58,7 +58,7 @@
 # only writer the budget holds one entry per kind (+ the tiny rail
 # evidence and cargo-rail entries).
 
-name: checks
+name: CI
 
 # WHEN THIS RUNS:
 #
@@ -133,7 +133,7 @@ jobs:
   # rust-rail), not the dev shell's ~3 GB closure, and installs them only
   # when it actually has to narrow (a dispatch with `base`).
   plan:
-    name: Plan affected crates
+    name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -269,7 +269,7 @@ jobs:
   # restore (the 10 GB Actions cache budget): fetched once per lockfile,
   # on a free runner, and no job waits on it.
   deps-cache:
-    name: Cargo dependency cache
+    name: Dependency cache
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -285,7 +285,7 @@ jobs:
   # tests and the static guards (versions, manifests, the architect-ui
   # sheet) are the pre-push hook's (`just ci-local`, the `local-ci` status).
   pr-checks:
-    name: PR checks (fmt + change files + rail routes)
+    name: PR checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: plan
@@ -317,7 +317,7 @@ jobs:
   # check-mode units are not the test build's units). So they run side by
   # side, each with its own snapshot or cache.
   lint:
-    name: Lint (fmt + clippy + docs)
+    name: Lint
     runs-on: warp-ubuntu-latest-x64-8x;snapshot.key=task-lint
     timeout-minutes: 60
     needs: plan
@@ -448,7 +448,7 @@ jobs:
           save: ${{ env.SAVE_SNAPSHOT }}
 
   wasm:
-    name: wasm check (task-app-web)
+    name: Wasm
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: plan
@@ -473,13 +473,15 @@ jobs:
       - name: wasm check (task-app-web)
         run: just ci-wasm
 
-  # The REQUIRED check (its name is the main ruleset's required check,
-  # unchanged from the single-job days; `local-ci` is the other). A
-  # required check that is skipped counts as passing, so this never skips:
-  # it fails unless every job the plan asked for succeeded. A job may only
-  # be skipped when the plan said it had no work.
+  # The REQUIRED check: `CI passed` is a required check of the main
+  # ruleset (with `local-ci` and `Release guard`), and scripts/release.sh
+  # (CHECK_NAME) refuses to tag a commit where it isn't green. Rename it in
+  # all three places at once. A required check that is skipped counts as
+  # passing, so this never skips: it fails unless every job the plan asked
+  # for succeeded. A job may only be skipped when the plan said it had no
+  # work.
   checks-passed:
-    name: Checks (fmt + tests + clippy + wasm + docs)
+    name: CI passed
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [plan, pr-checks, lint, tests, wasm]

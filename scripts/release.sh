@@ -72,9 +72,10 @@ MAIN="${MAIN_BRANCH:-main}"
 # hotfix). One fixed name: the guard and release-only key on it, and two
 # releases can never be in flight at once.
 RELEASE_BRANCH="release/pending"
-# The required check on main (checks.yml's aggregator job). `tag` refuses
-# a commit on which it is not green.
-CHECK_NAME="Checks (fmt + tests + clippy + wasm + docs)"
+# The required check on main (checks.yml's aggregator job, `CI passed`;
+# also named in the main ruleset). `tag` refuses a commit on which it is
+# not green.
+CHECK_NAME="CI passed"
 # The Helm chart: the release commit sets its version and appVersion, and
 # appVersion is the image tag the chart at the tag renders
 # (scripts/ghcr-images.sh).
@@ -406,7 +407,7 @@ release_commit() { # <cur> <next> <from-tag> <preamble> <computed next, when ove
     # The chart's version and appVersion: the image tag Argo pulls at the tag.
     sed -i.bak -E "s/^version: *\"?$cur\"?[[:space:]]*$/version: $next/; s/^appVersion: *\"?$cur\"?[[:space:]]*$/appVersion: \"$next\"/" "$CHART"
     rm -f "$CHART.bak"
-    grep -qx "appVersion: \"$next\"" "$CHART" && grep -qx "version: $next" "$CHART" \
+    { grep -qx "appVersion: \"$next\"" "$CHART" && grep -qx "version: $next" "$CHART"; } \
         || die "failed to rewrite $CHART version/appVersion ($cur -> $next)"
 
     d="$(today)"
