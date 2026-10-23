@@ -135,5 +135,8 @@ runs:
           echo "SCCACHE_GHA_ENABLED=true"
           echo "SCCACHE_GHA_RW_MODE=${RW}"
           echo "RUSTC_WRAPPER=sccache"
+          # Never idle out: a test phase is longer than the default 10 min,
+          # and a restarted server reports zeroed stats at the end.
+          echo "SCCACHE_IDLE_TIMEOUT=0"
         } >> "$GITHUB_ENV"
         echo "sccache: ${RW}"

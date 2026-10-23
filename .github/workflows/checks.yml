@@ -501,12 +501,15 @@ jobs:
       # only means later plans against this commit widen.
       #
       # `macpro-*` runners (Lima VMs on the Mac Pro) get half the test
-      # threads, and test scratch is on the unit's tmpfs RuntimeDirectory
+      # threads, hosted runners one per vCPU, and test scratch is on the unit's tmpfs RuntimeDirectory
       # where there is one (`.config/nextest.toml`, `ci-test-tmpdir`;
       # hosted: none, $TMPDIR as is). STA-369.
       - name: Tests
         env:
-          TASK_CI_TEST_THREADS: ${{ startsWith(runner.name, 'macpro-') && '8' || '16' }}
+          # Hosted: one per vCPU (4). At 16 on 4 vCPU the restart/peer
+          # integration tests timed out by the dozen (13 in one run), the same
+          # starvation the Mac Pro's 8 avoids under load.
+          TASK_CI_TEST_THREADS: ${{ runner.environment == 'github-hosted' && '4' || (startsWith(runner.name, 'macpro-') && '8' || '16') }}
           TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
           TASK_CI_TEST_FILTER: ${{ needs.plan.outputs.test_filter }}
           RECORD: ${{ needs.plan.outputs.record }}
@@ -518,14 +521,9 @@ jobs:
           rm -rf "${EVIDENCE_DIR}"
           # IN_SHELL / SWEEP: the Placement step (both empty when hosted).
           # shellcheck disable=SC2086
+          # Both recipes depend on `css` (the apps' generated tailwind sheets).
           ${IN_SHELL} ${SWEEP} bash -c '
-            if [ "${RECORD}" = "true" ]; then
-              mkdir -p "${EVIDENCE_DIR}"
-              cargo rail plan evidence --work cargo.test \
-                --output "${EVIDENCE_DIR}/cargo.test.json" \
-                -- test --workspace --locked --no-run \
-                || echo "::warning::rail evidence not recorded; later plans against this commit widen"
-            fi
+            if [ "${RECORD}" = "true" ]; then just ci-evidence "${EVIDENCE_DIR}"; fi
             just ci-tests'
       - name: Evidence key
         id: evidence

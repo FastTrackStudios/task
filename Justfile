@@ -412,6 +412,23 @@ ci-boundaries:
 ci-versions:
     bash scripts/check-versions.sh
 
+# Full CI runs only: one `cargo test --workspace --no-run` under rail's
+# recorder, so a later plan against this commit can narrow on non-Rust
+# changes. Depends on `css` like `ci-tests`: the test build compiles the
+# apps, whose `asset!("/assets/tailwind.css")` needs the generated sheets;
+# without them the recorded build failed at task-app-mobile and no
+# evidence was written. Best effort: a failure only means later plans widen.
+#
+# Record cargo-rail evidence for this commit into DIR/cargo.test.json.
+ci-evidence DIR: css
+    #!/usr/bin/env bash
+    set -u
+    mkdir -p "{{ DIR }}"
+    cargo rail plan evidence --work cargo.test \
+      --output "{{ DIR }}/cargo.test.json" \
+      -- test --workspace --locked --no-run \
+      || echo "::warning::rail evidence not recorded; later plans against this commit widen"
+
 # `TASK_CI_TEST_THREADS` lets one runner ask for fewer test threads than
 # the profile's 16 (the workflow sets it for the Mac Pro VM runner, STA-369:
 # at 16 two tests that dial by endpoint id time out under load, at 8 the
