@@ -2,26 +2,31 @@
 # nightly (fleet flow v4: the `release-workflow` skill,
 # references/ci-gates.md).
 #
-# WHERE EACH JOB RUNS: only the heavy job stays on the Mac Pro.
+# WHERE EACH JOB RUNS: every job is GitHub-hosted by default.
 #
 #   plan            ubuntu-latest  rustup + the released cargo-rail binary
 #   lint            ubuntu-latest  nix .#ci + rust-cache (checks-lint)
 #   wasm            ubuntu-latest  nix .#ci + rust-cache (checks-wasm)
-#   tests           [self-hosted, task-tests]  the Mac Pro VM: the full
-#                   nextest build (codegen of every unit, ~18 GB warm), which
-#                   a cold 4-vCPU hosted runner would take far longer to do
+#   tests           vars.TASK_TESTS_RUNS_ON, default ubuntu-latest: nix .#ci
+#                   + rust-cache (checks-tests) + sccache. Set the variable
+#                   to ["self-hosted","task-tests"] to run it on the Mac Pro
+#                   VM's warm target dir instead (no code change).
 #   checks-passed   ubuntu-latest  the required aggregator
-#   Queue timeout   ubuntu-latest  watches the self-hosted job(s) only
+#   Queue timeout   ubuntu-latest  watches self-hosted job(s), if any
 #
 # The repo is public, so hosted standard runners cost nothing; the org has
-# ~20 concurrent Linux jobs. The hosted jobs only check (no codegen of
-# Task's crates), which a rust-cache of main's dependencies keeps short.
+# ~20 concurrent Linux jobs. Why tests left the Mac Pro: its one
+# `task-tests` instance runs one job at a time, so PRs queued behind each
+# other (up to ~95 min queued on 2026-10-22) while the box's build gate
+# also served studio and the deploys. Hosted jobs never queue on each
+# other; main's caches keep them warm.
 #
 # Toolchain comes from the repo flake: the hosted lint/wasm jobs enter
 # `.#ci` once (.github/actions/hosted-nix-rust: rust 1.98 pin, wasm target,
 # clang env for ring, native headers, tailwindcss, cargo-rail) and every
-# later step runs inside it. The self-hosted tests job runs each step under
-# `nix develop .#ci -c` (${NIX_DEV}); its store is already warm.
+# later step runs inside it (tests too, when hosted). On the Mac Pro the
+# tests job runs each step under `nix develop .#ci -c` (${NIX_DEV}); its
+# store is already warm.
 #
 # CHANGE SELECTION: the `plan` job asks `cargo rail plan` (the version
 # nix/modules/cargo-rail.nix pins, installed from its release) which
@@ -45,7 +50,11 @@
 # and the budget holds one entry per kind (+ the tiny rail evidence,
 # architect xtask and cargo-rail entries).
 #
-# CACHE (tests, self-hosted): none. The instance keeps its CARGO_TARGET_DIR
+# The tests kind also gets sccache on the GHA cache (read-write on main,
+# read-only elsewhere): rust-cache keeps only dependencies, so without it
+# every run would recompile all of Task's ~190 workspace crates.
+#
+# CACHE (tests, on the Mac Pro): none. The instance keeps its CARGO_TARGET_DIR
 # in $CI_CACHE_DIR (durable, on the big disk, OUTSIDE $GITHUB_WORKSPACE:
 # `actions/checkout` runs `git clean -ffdx`), so an ordinary PR compiles
 # only what it changed; scripts/target-sweep.py bounds it.
@@ -316,7 +325,7 @@ jobs:
   #
   #   lint   hosted        fmt, manifests, Boundaries, architect-ui, clippy,
   #                        docs: check/doc mode, no codegen.
-  #   tests  [task-tests]  the nextest build (full codegen) + rail evidence.
+  #   tests  hosted/MacPro the nextest build (full codegen) + rail evidence.
   #   wasm   hosted        the wasm32 check (another target triple).
   #
   # The three kinds share NO artifacts except build scripts and proc
@@ -413,17 +422,61 @@ jobs:
           du -sh target ~/.cargo /nix/store 2>/dev/null || true
           df -h / | tail -1
 
+  # Where this runs is a REPO VARIABLE, not code: unset = GitHub-hosted
+  # ubuntu-latest; `TASK_TESTS_RUNS_ON='["self-hosted","task-tests"]'`
+  # puts it back on the Mac Pro VM (gh variable set TASK_TESTS_RUNS_ON
+  # -R FastTrackStudios/task --body '["self-hosted","task-tests"]').
+  #
+  #   hosted        .github/actions/hosted-nix-rust (kind tests): nix +
+  #                 cachix, `.#ci` exported into the job, rust-cache
+  #                 `checks-tests` (main's dependency build) and sccache
+  #                 (main's workspace crates), both written on main only.
+  #                 Target dir ./target, scratch in $TMPDIR.
+  #   self-hosted   the warm per-instance target dir in $CI_CACHE_DIR,
+  #                 every step under `nix develop .#ci -c`, the
+  #                 target-sweep bound, test scratch on the unit's tmpfs.
+  #
+  # Each placement's steps are guarded by `runner.environment`, so the
+  # same job works on both.
   tests:
     name: Tests
-    runs-on: [self-hosted, task-tests]
-    timeout-minutes: 60
+    runs-on: ${{ fromJSON(vars.TASK_TESTS_RUNS_ON || '"ubuntu-latest"') }}
+    # A cold hosted build (no cache yet, 4 vCPU) is far longer than a warm
+    # one; the budget is for that first run.
+    timeout-minutes: 150
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.tests == 'true' }}
+    env:
+      # Same as profile.dev's own setting; explicit so a hosted runner never
+      # builds full DWARF (the disk and the cache both pay for it).
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
+      - uses: ./.github/actions/hosted-nix-rust
+        if: ${{ runner.environment == 'github-hosted' }}
+        with:
+          kind: tests
+          sccache: "true"
+      - name: Machine
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          nproc; free -m; df -h / /mnt 2>/dev/null || true
+      # How each later step enters the dev shell, and whether it records
+      # into the target-sweep. Hosted: already inside `.#ci` (the action
+      # above), throwaway target dir, nothing to bound.
+      - name: Placement
+        run: |
+          if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
+            echo "IN_SHELL=" >> "$GITHUB_ENV"
+            echo "SWEEP=" >> "$GITHUB_ENV"
+          else
+            echo "IN_SHELL=${NIX_DEV}" >> "$GITHUB_ENV"
+            echo "SWEEP=${SWEEP_RUN} checks-tests --" >> "$GITHUB_ENV"
+          fi
       - name: Persistent target dir
+        if: ${{ runner.environment == 'self-hosted' }}
         run: |
           # Outside $GITHUB_WORKSPACE (actions/checkout runs `git clean
           # -ffdx`, /target is gitignored). $CI_CACHE_DIR is this runner
@@ -443,7 +496,8 @@ jobs:
       #
       # `macpro-*` runners (Lima VMs on the Mac Pro) get half the test
       # threads, and test scratch is on the unit's tmpfs RuntimeDirectory
-      # (`.config/nextest.toml`, `ci-test-tmpdir`). STA-369.
+      # where there is one (`.config/nextest.toml`, `ci-test-tmpdir`;
+      # hosted: none, $TMPDIR as is). STA-369.
       - name: Tests
         env:
           TASK_CI_TEST_THREADS: ${{ startsWith(runner.name, 'macpro-') && '8' || '16' }}
@@ -456,7 +510,9 @@ jobs:
           # can never save the previous run's evidence under this commit.
           export EVIDENCE_DIR="$HOME/rail-evidence"
           rm -rf "${EVIDENCE_DIR}"
-          ${NIX_DEV} ${SWEEP_RUN} checks-tests -- bash -c '
+          # IN_SHELL / SWEEP: the Placement step (both empty when hosted).
+          # shellcheck disable=SC2086
+          ${IN_SHELL} ${SWEEP} bash -c '
             if [ "${RECORD}" = "true" ]; then
               mkdir -p "${EVIDENCE_DIR}"
               cargo rail plan evidence --work cargo.test \
@@ -471,11 +527,12 @@ jobs:
         run: |
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           [ -f "$HOME/rail-evidence/cargo.test.json" ] && echo "have=true" >> "$GITHUB_OUTPUT" || true
-      # actions/cache also versions an entry by its compression: this VM has
-      # no zstd on PATH, so it saved gzip entries that a hosted runner (zstd)
-      # never matches. Put the pinned nixpkgs' zstd on PATH for the save.
+      # actions/cache also versions an entry by its compression: the Mac Pro
+      # VM has no zstd on PATH, so it saved gzip entries that a hosted
+      # runner (zstd) never matches. Put the pinned nixpkgs' zstd on PATH for
+      # the save. Hosted images ship zstd.
       - name: zstd for the evidence cache
-        if: ${{ always() && steps.evidence.outputs.have == 'true' }}
+        if: ${{ always() && steps.evidence.outputs.have == 'true' && runner.environment == 'self-hosted' }}
         run: |
           z="$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#zstd^bin' \
                || nix build --no-link --print-out-paths 'nixpkgs#zstd^bin')"
@@ -495,6 +552,15 @@ jobs:
           path: ${{ runner.temp }}/nextest-ci.log
           if-no-files-found: ignore
           retention-days: 7
+      # Hosted: what the build cost in disk and memory, and what sccache
+      # served. rust-cache's own post step saves (main only).
+      - name: Disk, memory, sccache
+        if: ${{ always() && runner.environment == 'github-hosted' }}
+        run: |
+          du -sh target ~/.cargo /nix/store 2>/dev/null || true
+          df -h / | tail -1
+          free -m
+          sccache --show-stats 2>/dev/null || true
       # Cargo never collects stale artifacts, and a persistent dir grows
       # without bound (167 GB in two runs once). Keep exactly the latest
       # build of each kind this instance runs and nothing else
@@ -502,7 +568,7 @@ jobs:
       # the run's own dependencies). always(): a red run gives the disk
       # back too.
       - name: Bound the target dir
-        if: ${{ always() }}
+        if: ${{ always() && runner.environment == 'self-hosted' }}
         run: |
           # The tmpfs test scratch is RAM: give it back even after a red
           # run (tests killed by a timeout leave their worlds behind).

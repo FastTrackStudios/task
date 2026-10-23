@@ -1,25 +1,42 @@
 # Set up a GitHub-HOSTED runner (ubuntu-latest) for one build kind of
 # checks.yml: the repo's `.#ci` dev shell exported into the job's
-# environment, and a Swatinem/rust-cache of that kind's dependencies.
+# environment, a Swatinem/rust-cache of that kind's dependencies and,
+# for the codegen kinds (tests), sccache on the GitHub Actions cache.
 #
 # After this action every later step of the job runs inside the dev shell
 # (nicknovitski/nix-develop writes its PATH and env to $GITHUB_PATH /
 # $GITHUB_ENV), so steps call `just ci-*` directly, with no `nix develop`
-# prefix. The self-hosted `tests` job does not use this: it keeps its warm
-# target dir on the Mac Pro.
+# prefix.
 #
 # CACHE BUDGET: the repo gets 10 GB of Actions cache, evicted LRU across
-# every branch. So rust-cache SAVES only on main (`save-if`), and PRs
-# restore main's entry without writing their own; each kind has its own
-# `shared-key` so lint (check-mode metadata) and wasm (wasm32) never
-# overwrite each other. The cargo-rail store path below is ~50 MB and is
-# saved from any ref (only when missing).
+# every branch. So every writer here SAVES ONLY ON MAIN: rust-cache
+# (`save-if`), sccache (READ_ONLY off main) and the cargo-rail store path
+# (~370 MB). PRs restore main's entries (a PR may read its base branch's
+# cache) and write none, so the budget holds one rust-cache entry per
+# kind plus main's sccache objects, never one copy per open PR. Each kind
+# has its own `shared-key` so lint (check-mode metadata), wasm (wasm32)
+# and tests (full codegen) never overwrite each other.
+#
+# Two caches, two jobs: rust-cache restores the DEPENDENCIES' target dir
+# (it drops the workspace's own crates before saving), so cargo never even
+# calls rustc for them; sccache then serves the workspace crates a change
+# did not touch. The checkout path is the same on every hosted runner
+# (/home/runner/work/task/task), which is what lets sccache hit at all:
+# its keys include absolute paths.
 name: Hosted nix + rust cache
-description: Free disk, install nix with the FTS cachix, enter .#ci, restore the rust cache for one build kind.
+description: Free disk, install nix with the FTS cachix, enter .#ci, restore the rust cache for one build kind, optionally sccache.
 inputs:
   kind:
-    description: Build kind; the rust-cache shared-key (lint, wasm).
+    description: Build kind (lint, wasm, tests); the rust-cache shared-key is checks-<kind> unless shared-key is given.
     required: true
+  shared-key:
+    description: Override the rust-cache shared-key.
+    required: false
+    default: ""
+  sccache:
+    description: "true: install sccache and wrap rustc with it (GHA backend; read-write on main, read-only elsewhere)."
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -45,7 +62,9 @@ runs:
     # cargo-rail (nix/modules/cargo-rail.nix) is built from source and is in
     # neither cache.nixos.org nor the FTS cachix, so entering the shell
     # would compile it on every run. Its store path is kept in the Actions
-    # cache as a file:// binary cache, keyed on the path itself.
+    # cache as a file:// binary cache, keyed on the path itself. Saved from
+    # main only: when it was saved from any ref that missed, every open PR
+    # wrote its own ~370 MB copy (four at once, 1.5 GB of the 10 GB).
     - name: cargo-rail store path
       id: rail
       shell: bash
@@ -77,7 +96,7 @@ runs:
 
     - name: Export cargo-rail
       id: rail-export
-      if: ${{ steps.rail.outputs.out != '' && steps.rail-cache.outputs.cache-hit != 'true' }}
+      if: ${{ steps.rail.outputs.out != '' && steps.rail-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
       shell: bash
       env:
         OUT: ${{ steps.rail.outputs.out }}
@@ -94,6 +113,27 @@ runs:
     # Dependencies only: rust-cache drops the workspace's own crates.
     - uses: Swatinem/rust-cache@v2
       with:
-        shared-key: checks-${{ inputs.kind }}
+        shared-key: ${{ inputs.shared-key != '' && inputs.shared-key || format('checks-{0}', inputs.kind) }}
         save-if: ${{ github.ref == 'refs/heads/main' }}
         cache-on-failure: true
+
+    # sccache on the GitHub Actions cache. Read-write on main only (the same
+    # budget rule as above). CARGO_INCREMENTAL is already 0 in the
+    # workflows: sccache cannot cache incremental builds. It cannot cache
+    # proc-macro dylibs or links either; those are rust-cache's (deps) or
+    # always rebuilt (the workspace's own few).
+    - name: sccache
+      if: ${{ inputs.sccache == 'true' }}
+      uses: mozilla-actions/sccache-action@v0.0.11
+    - name: Wrap rustc with sccache
+      if: ${{ inputs.sccache == 'true' }}
+      shell: bash
+      env:
+        RW: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+      run: |
+        {
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "SCCACHE_GHA_RW_MODE=${RW}"
+          echo "RUSTC_WRAPPER=sccache"
+        } >> "$GITHUB_ENV"
+        echo "sccache: ${RW}"

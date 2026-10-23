@@ -2,8 +2,9 @@
 # Only the heavy jobs are self-hosted; everything light runs on hosted
 # ubuntu-latest (checks.yml header).
 #   `task`        the Mac Pro VM's general Task runner (desktop-cache.yml)
-#   `task-tests`  the Mac Pro VM's warm test-build runner (checks.yml tests)
-#   `task-deploy` the release deploy (deploy.yml)
+#   `task-tests`  the Mac Pro VM's warm test-build runner (checks.yml tests, opt-in
+#                 via the TASK_TESTS_RUNS_ON repo variable; hosted by default)
+#   `task-deploy` the release deploy (deploy.yml; images.yml via TASK_RELEASE_RUNS_ON)
 #   `airlock`     the Mac that builds and signs the Apple apps.
 self-hosted-runner:
   labels:
