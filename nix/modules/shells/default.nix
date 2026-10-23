@@ -32,6 +32,12 @@
       # (`cargo rail plan`), so a local plan gives CI's answer. Pinned
       # build, NOT nixpkgs' stale 0.7.0 (nix/modules/cargo-rail.nix).
       ++ lib.optionals (config.fts.cargoRail != null) [ config.fts.cargoRail ]
+      # prek — the git hooks (prek.toml): rustfmt on commit, local CI on
+      # push. The release binary, kept current by `just prek-bump`
+      # (nix/modules/prek.nix). shellcheck + actionlint are its hooks for
+      # shell scripts and workflows.
+      ++ lib.optionals (config.fts.prek != null) [ config.fts.prek ]
+      ++ (with pkgs; [ shellcheck actionlint ])
       ++ lib.optionals pkgs.stdenv.isLinux [
         # linuxdeploy — dx's AppImage bundler (`dx bundle --package-types
         # appimage`) shells out to it. Not in the flake's (older) nixpkgs

@@ -471,10 +471,10 @@ ci-wasm: css
 ci-docs: css
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Everything the PR checks run, in their order (CI runs only the affected
-# tests; this runs them all). Optional before pushing: the PR's checks
-# are the gate. (`ci-docs` runs on PRs into main and full runs; `just
-# ci-release` adds it. `ci-changes` is separate: it needs cargo-rail.)
+# Everything the full run after a merge checks, in its order (all the
+# tests, not just the affected ones). The PR gate is `ci-local`, below.
+# (`ci-docs` runs on full runs; `just ci-release` adds it. `ci-changes` is
+# separate: it needs cargo-rail.)
 ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
@@ -504,19 +504,62 @@ sweep-local *args:
 sweep-status:
     python3 scripts/target-sweep.py status
 
-# ── Git hooks (capn) ─────────────────────────────────────────────────────
+# ── Git hooks ────────────────────────────────────────────────────────────
 
-# Install the capn pre-commit + pre-push hooks. Run once per clone.
+# Install the git hooks (prek.toml: rustfmt/shellcheck/actionlint on the
+# staged files at commit, `ci-local` at push) into .git/hooks. Run once
+# per clone; worktrees share them. A clone from before prek pointed
+# core.hooksPath at .githooks (capn), which would shadow prek's shims.
 install-hooks:
-    ./.githooks/install.sh
+    -git config --unset core.hooksPath
+    prek install --force
 
-# Run capn pre-commit checks manually (without committing).
-capn-precommit:
-    capn
+# Run the commit hooks on every file (prek's `--all-files`), e.g. after
+# changing prek.toml.
+hooks-all:
+    prek run --all-files
 
-# Run capn pre-push checks manually (without pushing).
-capn-prepush:
-    capn pre-push
+# Move nix/modules/prek.nix to prek's newest release (or VERSION, e.g.
+# 0.5.7): rewrites the version and every platform's sha256 from the
+# release's own `.sha256` files. Then re-enter the shell and
+# `just install-hooks` (the shims name the prek they were installed with).
+prek-bump VERSION="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v="{{VERSION}}"
+    if [ -z "$v" ]; then
+        v="$(curl -fsSL https://api.github.com/repos/j178/prek/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')"
+    fi
+    [ -n "$v" ] || { echo "could not read prek's latest release" >&2; exit 1; }
+    f=nix/modules/prek.nix
+    sed -i "s/version = \"[^\"]*\";/version = \"$v\";/" "$f"
+    for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+        sum="$(curl -fsSL "https://github.com/j178/prek/releases/download/v$v/prek-$t.tar.gz.sha256" | cut -d' ' -f1)"
+        [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "no sha256 for $t at v$v" >&2; exit 1; }
+        sed -i "s|target = \"$t\"; sha256 = \"[0-9a-f]*\"|target = \"$t\"; sha256 = \"$sum\"|" "$f"
+    done
+    git diff --stat -- "$f"
+    echo "prek -> $v"
+
+# The PR gate's clippy + tests + wasm, for what the change affects (`cargo
+# rail plan` from BASE, default the merge-base with origin/main). The
+# pre-push hook runs this and marks the pushed commits `local-ci`.
+ci-local BASE="":
+    bash scripts/ci-local.sh {{BASE}}
+
+# Record rail's observed-input evidence for HEAD (clean, normally main
+# after a pull), so `ci-local` against this commit narrows a docs or
+# fixture change instead of running everything. Kept in the git dir,
+# keyed by commit. Costs one test build + one clippy, both warm.
+rail-evidence: css
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$(git rev-parse --git-common-dir)/rail-evidence"
+    mkdir -p "$dir"
+    ev="$dir/$(git rev-parse HEAD).json"
+    cargo rail plan evidence --work cargo.test -o "$ev" -- test --workspace --locked --no-run
+    cargo rail plan evidence --work cargo.clippy -o "$ev" -- clippy --workspace --all-targets -- -D warnings
+    echo "rail evidence: $ev"
 
 # ── Aliases ──────────────────────────────────────────────────────────────
 
