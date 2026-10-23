@@ -1,4 +1,4 @@
-# CI — the full suite after every merge, the nightly, hotfix PRs and runs
+# CI — the full suite after every merge, on hotfix PRs, and runs
 # by hand (fleet flow v4: the `release-workflow` skill,
 # references/ci-gates.md).
 #
@@ -71,8 +71,9 @@ name: CI
 #                       branch's head (for a push the hook couldn't vouch
 #                       for); add `-f base=main` to check only what the
 #                       branch changed.
-#   nightly             the FULL set on main, unless a push run already
-#                       passed at main's head (nothing merged since).
+#
+# No schedule: every main commit already gets its run when it merges, so a
+# nightly re-run of an unchanged main would only repeat it.
 #
 # A merge never deploys: production changes only when a v* tag is pushed
 # (deploy.yml).
@@ -89,12 +90,9 @@ on:
         description: "Only check crates affected since this ref (e.g. main). Empty = everything."
         required: false
         default: ""
-  schedule:
-    # Nightly (skipped when nothing merged since main's last green run).
-    - cron: "17 10 * * *"
 
-# Nothing on main is ever cancelled by a newer run: every push, dispatch
-# and nightly gets its own group (the run id), so each merge's full suite
+# Nothing on main is ever cancelled by a newer run: every push and
+# dispatch gets its own group (the run id), so each merge's full suite
 # runs to the end and every main commit gets its own `CI passed`. Only a
 # hotfix PR's newer push cancels its older run.
 concurrency:
@@ -169,7 +167,6 @@ jobs:
       - name: Plan affected crates
         id: filter
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE: ${{ steps.base.outputs.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -208,13 +205,6 @@ jobs:
               run_all "PR into ${BASE_REF} (hotfix): full set" ;;
             push)
               record; run_all "push to ${GITHUB_REF_NAME}: full set after every merge" ;;
-            schedule)
-              # Nothing merged since the last green push run: nothing new
-              # to learn, and every full run is billed.
-              green="$(gh run list --workflow checks.yml --commit "${GITHUB_SHA}" --event push \
-                --status success --json databaseId -q length 2>/dev/null || echo 0)"
-              [ "${green:-0}" -gt 0 ] && skip_all "nightly: a push run already passed at ${GITHUB_SHA:0:8}"
-              record; run_all "nightly" ;;
             workflow_dispatch)
               [ -n "${BASE}" ] || { record; run_all "manual dispatch"; } ;;
             *) run_all "event ${GITHUB_EVENT_NAME:-?}" ;;
@@ -277,7 +267,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # Empty = the event's own ref (a hotfix PR's merge ref, a
-          # dispatched branch, main for the nightly).
+          # dispatched branch, a push's commit).
           ref: ${{ needs.plan.outputs.ref }}
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
       - uses: ./.github/actions/hosted-nix-rust

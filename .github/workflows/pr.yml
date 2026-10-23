@@ -9,8 +9,8 @@
 # dependency cache), for a push that skipped the hook.
 #
 # Main requires `PR checks` (this job), `Local CI` and `Release guard`.
-# The full set (CI, checks.yml) runs after every merge to main, nightly,
-# on hotfix PRs into release/**, and by hand:
+# The full set (CI, checks.yml) runs after every merge to main, on hotfix
+# PRs into release/**, and by hand:
 #
 #   gh workflow run checks.yml --ref <branch>     (posts Local CI when green)
 
