@@ -20,7 +20,7 @@
 # updater follows. No `paths:` filter (tag pushes ignore them).
 # workflow_dispatch forces a build (select the tag as the ref).
 
-name: task-macos
+name: macOS
 
 on:
   push:

@@ -33,7 +33,7 @@
 # task-server and task-web public once, or the cluster cannot pull them
 # (and `ghcr-images.sh check`, which is anonymous, fails).
 
-name: images
+name: Images
 
 on:
   push:

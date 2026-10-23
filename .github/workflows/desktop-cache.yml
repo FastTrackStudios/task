@@ -27,7 +27,7 @@
 # only through the environment. Without it the job fails loudly rather
 # than reporting a release cached that is not.
 
-name: desktop-cache
+name: Desktop cache
 
 on:
   workflow_call:
@@ -86,9 +86,11 @@ jobs:
             || { echo "::error::no tag $tag — this caches a release that has been tagged (release.yml)"; exit 1; }
           v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
           [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "flake=github:${GITHUB_REPOSITORY}/${rev}#packages.x86_64-linux.task-desktop" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "version=$v"
+            echo "flake=github:${GITHUB_REPOSITORY}/${rev}#packages.x86_64-linux.task-desktop"
+          } >> "$GITHUB_OUTPUT"
           echo "release $tag = $rev"
 
       - name: Build
@@ -129,7 +131,7 @@ jobs:
           set -euo pipefail
           hash="$(basename "$OUT" | cut -d- -f1)"
           url="https://$CACHE.cachix.org/$hash.narinfo"
-          for i in $(seq 1 10); do
+          for _ in $(seq 1 10); do
             code="$(curl -s -o /dev/null -w '%{http_code}' -I "$url" || true)"
             [ "$code" = 200 ] && break
             sleep 6

@@ -20,7 +20,7 @@
 # always contains what production runs. workflow_dispatch forces a build
 # (select the tag as the ref to rebuild a release).
 
-name: task-ios
+name: iOS
 
 on:
   push:

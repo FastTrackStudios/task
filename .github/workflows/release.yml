@@ -24,7 +24,7 @@
 # `just release-tag` pushes the tag (as the fts-forge App or a person: a tag
 # pushed with GITHUB_TOKEN starts no workflow).
 
-name: release
+name: Release
 
 on:
   pull_request:
