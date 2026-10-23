@@ -10,8 +10,8 @@ set -euo pipefail
 # add`. It is also the ONLY thing this script does — the hooks
 # themselves are the tracked files in this directory.
 #
-# Installing these makes `capn fmt` / `capn pre-push` run for every
-# commit in this repo. Uninstall with:
+# Installing these makes `capn fmt` run on every commit and local CI
+# (scripts/ci-local.sh) on every push in this repo. Uninstall with:
 #
 #   git config --unset core.hooksPath
 

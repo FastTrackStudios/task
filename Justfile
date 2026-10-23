@@ -471,10 +471,10 @@ ci-wasm: css
 ci-docs: css
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Everything the PR checks run, in their order (CI runs only the affected
-# tests; this runs them all). Optional before pushing: the PR's checks
-# are the gate. (`ci-docs` runs on PRs into main and full runs; `just
-# ci-release` adds it. `ci-changes` is separate: it needs cargo-rail.)
+# Everything the full run after a merge checks, in its order (all the
+# tests, not just the affected ones). The PR gate is `ci-local`, below.
+# (`ci-docs` runs on full runs; `just ci-release` adds it. `ci-changes` is
+# separate: it needs cargo-rail.)
 ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
@@ -504,9 +504,10 @@ sweep-local *args:
 sweep-status:
     python3 scripts/target-sweep.py status
 
-# ── Git hooks (capn) ─────────────────────────────────────────────────────
+# ── Git hooks ────────────────────────────────────────────────────────────
 
-# Install the capn pre-commit + pre-push hooks. Run once per clone.
+# Install the hooks (capn fmt on commit, `ci-local` on push). Run once per
+# clone.
 install-hooks:
     ./.githooks/install.sh
 
@@ -514,9 +515,11 @@ install-hooks:
 capn-precommit:
     capn
 
-# Run capn pre-push checks manually (without pushing).
-capn-prepush:
-    capn pre-push
+# The PR gate's clippy + tests + wasm, for what the change affects (`cargo
+# rail plan` from BASE, default the merge-base with origin/main). The
+# pre-push hook runs this and marks the pushed commits `local-ci`.
+ci-local BASE="":
+    bash scripts/ci-local.sh {{BASE}}
 
 # ── Aliases ──────────────────────────────────────────────────────────────
 
