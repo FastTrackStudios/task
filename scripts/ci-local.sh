@@ -24,7 +24,16 @@ cd "$(git rev-parse --show-toplevel)"
 if [ "${1:-}" = "--post" ]; then
   shift
   repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
-  desc="clippy + rail-planned tests passed on $(hostname -s)"
+  # How long the run took, from the pass record of the tree that ran it
+  # (the hook posts right after, so HEAD is still that tree). GitHub caps
+  # a status description at 140 characters.
+  pf="$(git rev-parse --git-common-dir)/ci-local-pass/$(git rev-parse HEAD)"
+  if [ -f "$pf" ] && [ -n "$(sed -n 2p "$pf")" ]; then
+    desc="passed in $(sed -n 2p "$pf") on $(hostname -s): $(sed -n 3p "$pf")"
+  else
+    desc="clippy + rail-planned tests passed on $(hostname -s)"
+  fi
+  desc="${desc:0:140}"
   # Every layer's push re-posts the whole stack; post each commit once.
   # Keyed by the status name too, so a rename re-posts under the new one.
   posted="$(git rev-parse --git-common-dir)/ci-local-posted/Local-CI"
@@ -55,14 +64,29 @@ if [ -z "$base" ]; then
 fi
 echo "ci-local: $(git rev-parse --short HEAD) against $(git rev-parse --short "$base")"
 
-just ci-fmt
-just ci-changes "$base"
-# Static guards, seconds each: every artifact reports the release version,
-# Cargo.lock matches the manifests, the token sheet comes through the
-# architect-ui link (STA-392).
-just ci-versions
-just ci-manifests
-just ci-architect-css
+# Wall time per phase, for the summary line, the pass record and the
+# `Local CI` status description ("passed in 6m12s on host: tests 2m05s, …").
+start=$SECONDS
+timings=()
+dur() { if [ "$1" -ge 60 ]; then printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); else printf '%ds' "$1"; fi; }
+phase() {
+  local name="$1" t=$SECONDS
+  shift
+  "$@"
+  timings+=("$name $(dur $((SECONDS - t)))")
+}
+
+# fmt, change files, then the static guards (seconds each): every artifact
+# reports the release version, Cargo.lock matches the manifests, the token
+# sheet comes through the architect-ui link (STA-392).
+checks() {
+  just ci-fmt
+  just ci-changes "$base"
+  just ci-versions
+  just ci-manifests
+  just ci-architect-css
+}
+phase checks checks
 
 # Rail evidence for the base, if `just rail-evidence` recorded it on this
 # machine: without it a changed file outside a crate's sources (docs,
@@ -79,26 +103,32 @@ fi
 plan="$(mktemp)"
 trap 'rm -f "$plan"' EXIT
 gates=""
+t=$SECONDS
 if cargo rail plan --from "$base" --to HEAD "${ev[@]}" --json >"$plan"; then
   gates="$(python3 scripts/ci-rail-plan.py "$plan")" || gates=""
 fi
+timings+=("plan $(dur $((SECONDS - t)))")
 [ -n "$gates" ] || { echo "ci-local: no plan; running everything"; gates=$'cargo=true\nclippy=true\ntests=true\ntest_filter=\nwasm=true'; }
 gate() { sed -n "s/^$1=//p" <<<"$gates" | head -1; }
 echo "ci-local: clippy=$(gate clippy) tests=$(gate tests) wasm=$(gate wasm) ($(gate wasm_packages)) filter=$(gate test_filter)"
 
 if [ "$(gate tests)" = true ]; then
-  TASK_CI_TEST_FILTER="$(gate test_filter)" just ci-tests
+  phase tests env TASK_CI_TEST_FILTER="$(gate test_filter)" just ci-tests
 fi
 # rail decides WHETHER clippy runs; it always runs --workspace (a `-p`
 # subset changes feature unification and leaves a second artifact set),
 # and on a warm tree that re-lints only what changed anyway.
 if [ "$(gate clippy)" = true ]; then
-  just ci-clippy
+  phase clippy just ci-clippy
 fi
 if [ "$(gate wasm)" = true ]; then
   # shellcheck disable=SC2046 # a space-separated package list, split on purpose
-  just ci-wasm $(gate wasm_packages)
+  phase wasm just ci-wasm $(gate wasm_packages)
 fi
+
+total="$(dur $((SECONDS - start)))"
+breakdown="$(printf '%s, ' "${timings[@]}")"
+breakdown="${breakdown%, }"
 
 # Remember the pass for this exact commit (only if the tree is clean, so
 # the pass is the commit's): the pre-push hook then vouches without
@@ -113,9 +143,11 @@ elif [ -n "$dirty" ]; then
   echo "ci-local: the tree changed, so no pass recorded for $(git rev-parse --short HEAD):"
   echo "$dirty"
 else
+  # Line 1 when, line 2 the total, line 3 the per-phase breakdown (the
+  # poster reads 2 and 3 into the status description).
   pass="$(git rev-parse --git-common-dir)/ci-local-pass"
   mkdir -p "$pass"
-  date -Is > "$pass/$(git rev-parse HEAD)"
+  printf '%s\n%s\n%s\n' "$(date -Is)" "$total" "$breakdown" > "$pass/$(git rev-parse HEAD)"
   echo "ci-local: pass recorded for $(git rev-parse --short HEAD)"
 fi
-echo "ci-local: green"
+echo "ci-local: green in $total ($breakdown)"
