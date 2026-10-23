@@ -9,7 +9,7 @@
 #   PR into main   free hosted checks that compile nothing (fmt, change
 #                  files, versions, manifests, boundaries, architect-ui
 #                  sheet), plus the `local-ci` commit status: the
-#                  pre-push hook (.githooks/pre-push -> scripts/ci-local.sh)
+#                  pre-push hook (prek.toml -> scripts/ci-local.sh)
 #                  ran clippy, the wasm check and the tests `cargo rail
 #                  plan` says the change affects, and posted it. Both are
 #                  required on main.
@@ -549,7 +549,7 @@ jobs:
           check wasm  "$WASM"  "$WANT_WASM"
           exit "$fail"
       # The escape hatch for a push the pre-push hook couldn't vouch for (a
-      # contributor without the hook, a dirty tree, NO_LOCAL_CI=1): a green
+      # contributor without the hook, a dirty tree, SKIP=local-ci): a green
       # dispatched FULL run on the branch stands in for it.
       - name: Post local-ci for a green dispatched full run
         if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.base == '' }}
