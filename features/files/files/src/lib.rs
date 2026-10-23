@@ -71,7 +71,7 @@ pub use backend::{
     Captured, FilesBackend, LocationBoundaries, MaterializeReport, OpLogCompaction, SyncTreeMeta,
 };
 pub use dialled::Dialled;
-pub use remotes::{AddressBook, IrohRemotes, bind_endpoint};
+pub use remotes::{AddressBook, IrohRemotes, bind_endpoint, bind_local_endpoint};
 // The cadence engine moved to `files-domain`: it is a state machine
 // about time, and needs neither jj-lib nor the version store. Re-exported
 // here so callers and mount sites are unaffected.

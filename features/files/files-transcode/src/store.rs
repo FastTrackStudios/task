@@ -129,7 +129,14 @@ impl RenditionStore {
             len: bytes.len() as u64,
         };
         let path = self.record_path(key);
-        let tmp = path.with_extension("json.tmp");
+        // A temp name of this write's own. Two writers of one key (the
+        // checkpoint warm-up and a request that missed the cache) each
+        // write and rename; with one shared `.json.tmp` the first rename
+        // took the other's file and the second failed `NotFound`. Both
+        // records are the same bytes, so whichever lands last is fine.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}-{seq}.tmp", std::process::id()));
         tokio::fs::write(
             &tmp,
             serde_json::to_vec_pretty(&record).map_err(|e| Error::Index(e.to_string()))?,
