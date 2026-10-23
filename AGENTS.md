@@ -142,7 +142,7 @@ follows `skills/ship-stack.md`. In short:
   (one version everywhere, manifests + lockfile, the architect-ui sheet),
   and the clippy, wasm and tests that `cargo rail plan` says the change
   affects. It runs on the warm local target dir and, when green, marks the
-  pushed commits with the `local-ci` status. `checks` on the PR then runs
+  pushed commits with the `local-ci` status. `CI` on the PR then runs
   only a minimal free backstop on rustup, no nix (fmt, change files, rail
   routes). A
   stack is vouched for when you push it from its TOP branch. For a long
