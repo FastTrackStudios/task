@@ -22,7 +22,7 @@ hotfix while main can't ship: release/v<latest tag> <-- cherry-pick -x from main
 | Event | What runs |
 |---|---|
 | push of a PR branch | the pre-push hook: `just ci-local` (fmt, change files, and the clippy / tests / wasm that `cargo rail plan` from the merge-base says are affected) on the local warm tree; when green it posts the **`local-ci`** status (required) on the pushed commits. Without the hook: `gh workflow run checks.yml --ref <branch>` posts it |
-| PR into `main` | `checks`: the free hosted checks that compile nothing (fmt, `cargo rail change check`, versions, manifests, boundaries, architect-ui sheet); aggregator **`Checks (fmt + tests + clippy + wasm + docs)`** (required); `release` guard (passes at once unless the head is `release/pending`) |
+| PR into `main` | `checks`: the free hosted checks that compile nothing (fmt, `cargo rail change check`, versions, manifests, rail route cases, architect-ui sheet); aggregator **`Checks (fmt + tests + clippy + wasm + docs)`** (required); `release` guard (passes at once unless the head is `release/pending`) |
 | PR `release/pending` → `main` (one commit) | release guard (from the BASE commit's `scripts/release.sh`); `checks` skips the heavy jobs (version + changelog only) |
 | PR into `release/v*` (hotfix) | the FULL `checks`, release guard |
 | push to `main` or `release/v*` | FULL `checks` (lint and tests on WarpBuild, from their main-saved snapshots) + rail evidence for the commit; `release-tag` needs its aggregator green. If the push is a release commit (the version changed): `images` builds and pushes `ghcr.io/fasttrackstudios/task-{server,web}:<version>`; `release-tag` needs those too |

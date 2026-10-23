@@ -138,7 +138,7 @@ Task's specifics are in `skills/release-workflow.md`. In short:
   `cargo rail plan` says the change affects. It runs on the warm local
   target dir and, when green, marks the pushed commits with the `local-ci`
   status. `checks` on the PR then runs only the free hosted checks that
-  compile nothing (fmt, change files, versions, manifests, boundaries). A
+  compile nothing (fmt, change files, versions, manifests, rail routes). A
   stack is vouched for when you push it from its TOP branch. For a long
   run, `just ci-local` BEFORE pushing: the hook then finds the pass and
   the push is instant (a long hook can outlast git's connection to
