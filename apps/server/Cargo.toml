@@ -40,11 +40,6 @@ async-trait.workspace = true
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-# `self-update`: release signatures (minisign, key pinned in
-# self_update.rs) and the staged download (an unpredictable name, created
-# exclusively, so a planted symlink cannot redirect the write).
-minisign-verify = "0.2"
-tempfile = "3"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 base64 = { workspace = true }
@@ -223,7 +218,9 @@ vault-collab = { workspace = true }
 # The doc ⇄ markdown codec (the device replica, the records' documents).
 vault-doc = { workspace = true }
 chrono.workspace = true
-architect = { workspace = true, features = ["server", "local"] }
+# `release`: `task-server self-update` (signed release check, verify and
+# swap; the key is pinned in self_update.rs).
+architect = { workspace = true, features = ["server", "local", "release"] }
 architect-auth = { workspace = true, features = ["full"] }
 architect-permissions.workspace = true
 architect-permissions-proto.workspace = true

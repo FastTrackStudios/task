@@ -18,6 +18,56 @@
 //!
 //! macOS only, and only for an app running from a `.app` bundle: a `dx
 //! serve` or `cargo run` build has nothing to replace.
+//!
+//! Release discovery and version order are `architect::release`'s (the
+//! same as `task-server self-update`). Its signed install does not fit a
+//! bundle: it swaps one bare binary checked by a minisign-signed
+//! `SHA256SUMS`, while an update here is a whole notarized `.app` whose
+//! authenticity is Apple's code signature (our team, Gatekeeper), staged
+//! and swapped after the process exits. That half stays in this file.
+
+use architect::release::{self, GithubRelease};
+
+/// The release tag prefix desktop builds use.
+const TAG_PREFIX: &str = "desktop-v";
+/// The asset that describes a desktop release (`macos/build-dmg.sh`).
+const MANIFEST_ASSET: &str = "latest-macos.json";
+
+/// A published desktop release and where its manifest is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct DesktopRelease {
+    version: String,
+    manifest_url: String,
+}
+
+/// The newest `desktop-vX.Y.Z` release that is neither a draft nor a
+/// prerelease and carries [`MANIFEST_ASSET`]. Server (`vX.Y.Z`) releases
+/// never match.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn newest_release(releases: &[GithubRelease]) -> Option<DesktopRelease> {
+    releases
+        .iter()
+        .filter(|r| !r.draft && !r.prerelease)
+        .filter_map(|r| {
+            let version = r
+                .tag_name
+                .strip_prefix(TAG_PREFIX)
+                .filter(|v| release::is_release_version(v))?;
+            let manifest = r.assets.iter().find(|a| a.name == MANIFEST_ASSET)?;
+            Some(DesktopRelease {
+                version: version.to_owned(),
+                manifest_url: manifest.browser_download_url.clone(),
+            })
+        })
+        .reduce(|best, r| {
+            if release::newer(&r.version, &best.version) {
+                r
+            } else {
+                best
+            }
+        })
+}
 
 #[cfg(target_os = "macos")]
 mod imp {
@@ -26,10 +76,12 @@ mod imp {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    use architect::release::{self, newer};
+
+    use super::{DesktopRelease, newest_release};
+
     /// Where releases live (a public repo: no token needed).
     const REPO: &str = "FastTrackStudios/task";
-    /// The release tag prefix desktop builds use.
-    const TAG_PREFIX: &str = "desktop-v";
     /// The team every update must be signed by.
     const TEAM_ID: &str = "28C2G63DA7";
     /// How often a running app looks again.
@@ -65,20 +117,6 @@ mod imp {
             &bundle()?.join("Contents/Info.plist"),
             "CFBundleShortVersionString",
         )
-    }
-
-    /// `1.2.3` as numbers; anything unparsable is lowest.
-    pub fn parse(v: &str) -> Vec<u64> {
-        v.trim()
-            .trim_start_matches('v')
-            .split(['.', '-', '+'])
-            .take(3)
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    }
-
-    pub fn newer(candidate: &str, current: &str) -> bool {
-        parse(candidate) > parse(current)
     }
 
     fn cache_dir() -> PathBuf {
@@ -117,34 +155,14 @@ mod imp {
         sha256: String,
     }
 
-    /// The newest published `desktop-v*` release's manifest URL.
-    fn newest_manifest_url() -> Result<Option<(String, String)>, String> {
+    /// The newest published desktop release, from the releases API.
+    fn newest_published() -> Result<Option<DesktopRelease>, String> {
         let body = curl(&[&format!(
-            "https://api.github.com/repos/{REPO}/releases?per_page=30"
+            "{}/repos/{REPO}/releases?per_page=30",
+            release::GITHUB_API
         )])?;
-        let releases: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|e| format!("releases: {e}"))?;
-        let mut best: Option<(String, String)> = None;
-        for r in releases.as_array().into_iter().flatten() {
-            if r["draft"].as_bool() == Some(true) || r["prerelease"].as_bool() == Some(true) {
-                continue;
-            }
-            let Some(tag) = r["tag_name"].as_str().filter(|t| t.starts_with(TAG_PREFIX)) else {
-                continue;
-            };
-            let version = tag.trim_start_matches(TAG_PREFIX).to_owned();
-            let Some(url) = r["assets"].as_array().into_iter().flatten().find_map(|a| {
-                (a["name"].as_str() == Some("latest-macos.json"))
-                    .then(|| a["browser_download_url"].as_str().map(str::to_owned))
-                    .flatten()
-            }) else {
-                continue;
-            };
-            if best.as_ref().is_none_or(|(v, _)| newer(&version, v)) {
-                best = Some((version, url));
-            }
-        }
-        Ok(best)
+        let releases = release::parse_releases(&body).map_err(|e| format!("releases: {e}"))?;
+        Ok(newest_release(&releases))
     }
 
     fn sha256(path: &Path) -> Result<String, String> {
@@ -221,7 +239,11 @@ mod imp {
         let Some(current) = current_version() else {
             return Ok(None);
         };
-        let Some((version, manifest_url)) = newest_manifest_url()? else {
+        let Some(DesktopRelease {
+            version,
+            manifest_url,
+        }) = newest_published()?
+        else {
             return Ok(None);
         };
         if !newer(&version, &current) {
@@ -317,7 +339,7 @@ mod imp {
             .flatten()
             .filter_map(|e| e.file_name().into_string().ok())
             .filter(|v| newer(v, &current) && staged_app(v).is_dir())
-            .max_by(|a, b| parse(a).cmp(&parse(b)));
+            .reduce(|best, v| if newer(&v, &best) { v } else { best });
         let Some(version) = best else {
             // Nothing newer: clear what earlier installs left.
             let _ = std::fs::remove_dir_all(cache_dir());
@@ -353,20 +375,6 @@ mod imp {
             }
         });
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn versions_compare_as_numbers() {
-            assert!(newer("0.0.10", "0.0.9"));
-            assert!(newer("0.1.0", "0.0.99"));
-            assert!(!newer("0.0.3", "0.0.3"));
-            assert!(!newer("0.0.2", "0.0.3"));
-            assert!(newer("v1.0.0", "0.9.9"));
-        }
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -389,4 +397,45 @@ pub fn check() -> Result<Option<String>, String> {
 #[cfg(not(target_os = "macos"))]
 pub fn install_and_relaunch(_version: &str) -> Result<(), String> {
     Err("updates install on macOS only".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn published(tag: &str, assets: &[&str]) -> GithubRelease {
+        GithubRelease {
+            tag_name: tag.to_owned(),
+            draft: false,
+            prerelease: false,
+            assets: assets
+                .iter()
+                .map(|a| release::GithubAsset {
+                    name: (*a).to_owned(),
+                    browser_download_url: format!("https://example/{tag}/{a}"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_newest_desktop_release_with_a_manifest_wins() {
+        let mut draft = published("desktop-v9.0.0", &[MANIFEST_ASSET]);
+        draft.draft = true;
+        let releases = [
+            published("v9.9.9", &[MANIFEST_ASSET]), // the server's
+            published("desktop-v0.0.10", &[MANIFEST_ASSET]),
+            published("desktop-v0.0.9", &[MANIFEST_ASSET]),
+            published("desktop-v0.1.0", &["Task-macos.dmg"]), // no manifest
+            draft,
+        ];
+        assert_eq!(
+            newest_release(&releases),
+            Some(DesktopRelease {
+                version: "0.0.10".into(),
+                manifest_url: "https://example/desktop-v0.0.10/latest-macos.json".into(),
+            })
+        );
+        assert_eq!(newest_release(&[]), None);
+    }
 }
