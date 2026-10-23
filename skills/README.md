@@ -27,6 +27,11 @@ on the CLI for idempotence + audit.
 
 ## Current skills
 
+- [`ship-stack.md`](ship-stack.md) — shipping a change through the
+  `local-ci` gate as a gh stack: hooks, one concern per layer, `just
+  ci-local` on the top, `gh stack submit`, normal or forced merge, green
+  main. Symlinked as `.claude/skills/ship-stack/SKILL.md` for Claude Code.
+
 - [`release-workflow.md`](release-workflow.md) — Task's specifics of
   fleet flow v4 (the fleet `release-workflow` skill is the source of
   truth): branch from main, PR into main with a cargo-rail change file,

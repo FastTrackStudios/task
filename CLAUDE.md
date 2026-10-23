@@ -116,7 +116,9 @@ enough for git). Add new songs there, never by hand.
 
 Fleet flow v4: the **`release-workflow` fleet skill** is the source of
 truth (branch names, PR titles, change files, CalVer, hotfixes, rollback);
-Task's specifics are in `skills/release-workflow.md`. In short:
+Task's specifics are in `skills/release-workflow.md`. Shipping any change,
+from first branch through stack, local CI, PRs and merge to a green main,
+follows `skills/ship-stack.md`. In short:
 
 - `main` is the only long-lived branch. Branch from `origin/main`
   (`<type>/<sta-123|no-issue>-<slug>`), open a draft PR **into `main`** with
