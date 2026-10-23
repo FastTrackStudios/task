@@ -158,6 +158,7 @@ on GitHub for that branch, which posts `Local CI` when green:
 
 ```bash
 gh stack merge <top pr> --yes --squash      # all-or-nothing, bottom-up
+gh pr merge <n> --squash                    # a single PR (one-layer "stacks" aren't stacked on GitHub)
 ```
 
 A wake-up or notification that says the checks passed is a hint, not proof.
@@ -198,12 +199,14 @@ gh api -X PUT repos/FastTrackStudios/task/rulesets/25572114 --input /tmp/rs-put.
 ### 7. Main is green
 
 Each merge to main starts a full `CI` run (Lint and Tests on WarpBuild,
-restored warm from the seeded snapshots). Cancel the ones the last merge
-superseded, so the suite runs once, on the top commit:
+restored warm from the seeded snapshots). A newer merge never cancels an
+older run: each main commit gets its own run and its own `CI passed`. After
+merging a whole stack, cancel the runs below the top commit only to save
+their minutes:
 
 ```bash
 gh run list -b main -w checks.yml -L 5 --json databaseId,status,headSha
-gh run cancel <older in-progress id>
+gh run cancel <older in-progress id>     # optional
 ```
 
 Done when the run on main's head commit has a green `CI passed`.
@@ -239,7 +242,15 @@ $0.032; check spend with the WarpBuild MCP: `GET /reports/billing/ci`)
     restored runner save: a snapshot of a snapshot boots runners that never
     pick up a job.
   - **Expiry:** snapshots expire after 15 days, which the weekly seed
-    covers. Reseed by hand after a toolchain or lockfile change that makes
+    covers.
+  - **A missing alias does not fall back to a cold boot.** Restores of a
+    deleted alias are purged (`timeout_allocated`) and the job waits. After
+    deleting an alias, reseed before anything merges.
+- **Jobs queued and NO runner appears at all:** check billing first. The
+  WarpBuild MCP's `get_onboarding_status` reports `jobs_blocked_reason`
+  (e.g. `no_payment_method`). Only a person can fix it, at
+  https://app.warpbuild.com/settings/billing. GitHub keeps queued jobs for
+  24 h, so they start once it's fixed. Reseed by hand after a toolchain or lockfile change that makes
     warm runs slow.
 - **Jobs stuck queued** while WarpBuild boots runners that are purged within
   a minute (`cleanup_hook`; `GET /runner_instance` in the WarpBuild MCP
