@@ -27,12 +27,19 @@
 # The repo is public, so hosted standard runners cost nothing; WarpBuild
 # bills per started minute (2x $0.004, 8x $0.016, 16x $0.032 in 2026-10),
 # so only the two jobs that build the workspace run there. Their snapshots
-# (.github/actions/warp-nix) keep /nix and the target dir, saved from main
-# only (.github/actions/warp-snapshot-save), so a run after a merge
-# compiles what the merge changed. Seed a missing alias before the merge
-# that needs it, rather than paying the cold build on main:
+# (.github/actions/warp-nix) keep /nix and the target dir, so a run after a
+# merge compiles only what changed since the snapshot.
 #
-#   gh workflow run checks.yml --ref <branch> -f seed=true
+# SNAPSHOTS ARE SEEDED, NEVER CHAINED. Only a SEED run saves one: the
+# weekly seed (Sunday cron below) or a dispatch with `-f seed=true`. It
+# boots from WarpBuild's base image (`snapshot.enabled=true`), builds cold
+# and saves. Every other run restores (`snapshot.key=<alias>`) and saves
+# nothing. Saving from a runner that was itself restored built a snapshot
+# of a snapshot, and its runners never picked up a job (2026-10-23).
+# Snapshots expire after 15 days, so weekly keeps them alive. Reseed by
+# hand after a toolchain or lockfile change that makes warm runs slow:
+#
+#   gh workflow run checks.yml --ref main -f seed=true
 #
 # Toolchain comes from the repo flake: every job enters `.#ci` once (rust
 # 1.98 pin, wasm target, clang env for ring, native headers, tailwindcss,
@@ -71,9 +78,11 @@ name: CI
 #                       everything and, when green, posts `local-ci` on the
 #                       branch's head (for a push the hook couldn't vouch
 #                       for); add `-f base=main` to check only what the
-#                       branch changed, `-f seed=true` to save the snapshots.
+#                       branch changed, `-f seed=true` to reseed the snapshots.
 #   nightly             the FULL set on main, unless a push run already
 #                       passed at main's head (nothing merged since).
+#   weekly seed         Sunday: the FULL set on main from the base image,
+#                       saving fresh snapshots.
 #
 # A merge never deploys: production changes only when a v* tag is pushed
 # (deploy.yml).
@@ -91,12 +100,16 @@ on:
         required: false
         default: ""
       seed:
-        description: "Save the WarpBuild snapshots from this run (warms a new alias before a merge)."
+        description: "Seed: boot from the base image, build cold, save fresh WarpBuild snapshots."
         type: boolean
         required: false
         default: false
   schedule:
+    # Nightly (skipped when nothing merged since main's last green run).
     - cron: "17 10 * * *"
+    # Weekly seed: fresh snapshots from the base image. The plan job
+    # matches this exact string (SEED_CRON).
+    - cron: "37 9 * * 0"
 
 concurrency:
   group: checks-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'schedule' && 'nightly' || 'run' }}
@@ -121,8 +134,6 @@ env:
   # --record-failed: a red test run still compiled, and its artifacts are
   # what the next run needs warm.
   SWEEP_RUN: python3 scripts/target-sweep.py run --record-failed
-  # The WarpBuild jobs save their snapshot on these runs only.
-  SAVE_SNAPSHOT: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.seed) }}
 
 jobs:
   # Hosted, and without nix: the plan only resolves cargo's graph and
@@ -142,11 +153,27 @@ jobs:
       skip: ${{ steps.filter.outputs.skip }}
       ref: ${{ steps.filter.outputs.ref }}
       record: ${{ steps.filter.outputs.record }}
+      # A seed run: the WarpBuild jobs boot from the base image and save.
+      seed: ${{ steps.seed.outputs.seed }}
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history: the plan needs both diff endpoints' ancestry.
           fetch-depth: 0
+      - name: Seed run?
+        id: seed
+        env:
+          INPUT_SEED: ${{ inputs.seed }}
+          SCHEDULE: ${{ github.event.schedule }}
+          SEED_CRON: "37 9 * * 0"
+        run: |
+          seed=false
+          case "${GITHUB_EVENT_NAME:-}" in
+            workflow_dispatch) [ "${INPUT_SEED}" = true ] && seed=true ;;
+            schedule) [ "${SCHEDULE}" = "${SEED_CRON}" ] && seed=true ;;
+          esac
+          echo "seed=${seed}" >> "$GITHUB_OUTPUT"
+          echo "seed: ${seed}"
       # Which commit to plan against (only a dispatch with `base` narrows),
       # decided before the evidence restore (its cache key is that commit).
       - name: Choose the comparison base
@@ -182,6 +209,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE: ${{ steps.base.outputs.sha }}
+          SEED: ${{ steps.seed.outputs.seed }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -220,6 +248,7 @@ jobs:
             push)
               record; run_all "push to ${GITHUB_REF_NAME}: full set after every merge" ;;
             schedule)
+              [ "${SEED}" = true ] && { record; run_all "weekly seed: fresh snapshots from the base image"; }
               # Nothing merged since the last green push run: nothing new
               # to learn, and every full run is billed.
               green="$(gh run list --workflow checks.yml --commit "${GITHUB_SHA}" --event push \
@@ -280,7 +309,8 @@ jobs:
   # side, each with its own snapshot or cache.
   lint:
     name: Lint
-    runs-on: warp-ubuntu-latest-x64-8x;snapshot.key=task-lint
+    # A seed boots from the base image and saves; every other run restores.
+    runs-on: ${{ needs.plan.outputs.seed == 'true' && 'warp-ubuntu-latest-x64-8x;snapshot.enabled=true' || 'warp-ubuntu-latest-x64-8x;snapshot.key=task-lint' }}
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' }}
@@ -328,11 +358,11 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           alias: task-lint
-          save: ${{ env.SAVE_SNAPSHOT }}
+          save: ${{ needs.plan.outputs.seed }}
 
   tests:
     name: Tests
-    runs-on: warp-ubuntu-latest-x64-16x;snapshot.key=task-tests
+    runs-on: ${{ needs.plan.outputs.seed == 'true' && 'warp-ubuntu-latest-x64-16x;snapshot.enabled=true' || 'warp-ubuntu-latest-x64-16x;snapshot.key=task-tests' }}
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.tests == 'true' }}
@@ -407,7 +437,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           alias: task-tests
-          save: ${{ env.SAVE_SNAPSHOT }}
+          save: ${{ needs.plan.outputs.seed }}
 
   wasm:
     name: Wasm
