@@ -92,12 +92,10 @@ pub async fn bind_endpoint(
     secret_key: iroh::SecretKey,
     book: Option<AddressBook>,
 ) -> Result<iroh::Endpoint, iroh::endpoint::BindError> {
-    let mut builder = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
-        .secret_key(secret_key)
-        .alpns(vec![
-            iroh_link::VOX_ALPN.to_vec(),
-            iroh_blobs::ALPN.to_vec(),
-        ]);
+    let mut builder = with_files_alpns(
+        iroh::Endpoint::builder(iroh::endpoint::presets::N0),
+        secret_key,
+    );
     if let Some(book) = book {
         builder = builder
             .address_lookup(book)
@@ -121,6 +119,51 @@ pub async fn bind_endpoint(
             );
     }
     builder.bind().await
+}
+
+/// Bind an endpoint that finds peers through `book` and nothing else.
+///
+/// [`bind_endpoint`] minus the n0 preset: no relay, no pkarr publishing,
+/// no n0 DNS lookup. It is for a world that is one machine with no
+/// internet to discover over, such as the integration suite, where every
+/// peer is in the book and nothing outside it can be reached.
+///
+/// Dialling stays by bare id: the book is still the endpoint's address
+/// lookup, resolved beneath `connect`.
+///
+/// The n0 services are worse than useless there. iroh runs one address
+/// lookup per remote at a time, and the lookup stream lasts until its
+/// slowest service answers. When the book has already answered, n0 DNS
+/// can still take seconds to fail with no network. A redial in that
+/// window starts no new lookup, so it never reads the book again. After
+/// a peer restarts on new ports, the dial goes to the dead process's
+/// ports until the handshake times out (30 s). Only n0's public relay
+/// could rescue it. A reachable relay hid this on a laptop; on a
+/// GitHub-hosted runner the restart chapters failed every time.
+pub async fn bind_local_endpoint(
+    secret_key: iroh::SecretKey,
+    book: AddressBook,
+) -> Result<iroh::Endpoint, iroh::endpoint::BindError> {
+    with_files_alpns(
+        iroh::Endpoint::builder(iroh::endpoint::presets::Minimal),
+        secret_key,
+    )
+    .relay_mode(iroh::RelayMode::Disabled)
+    .address_lookup(book)
+    .bind()
+    .await
+}
+
+/// The key and the two protocols every files endpoint speaks. See
+/// [`bind_endpoint`] for why it is two.
+fn with_files_alpns(
+    builder: iroh::endpoint::Builder,
+    secret_key: iroh::SecretKey,
+) -> iroh::endpoint::Builder {
+    builder.secret_key(secret_key).alpns(vec![
+        iroh_link::VOX_ALPN.to_vec(),
+        iroh_blobs::ALPN.to_vec(),
+    ])
 }
 
 /// How long a dial may take before the origin counts as unreachable.
