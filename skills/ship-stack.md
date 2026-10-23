@@ -11,7 +11,7 @@ the clippy, wasm and tests `cargo rail plan` says the change affects, on
 the warm local target dir. When it's green, the hook posts the
 **`local-ci`** commit status. **GitHub** runs only free checks on a PR,
 then the full set on WarpBuild once per merge to main. Main requires
-`CI passed`, `Release guard` and
+`PR checks` (pr.yml), `Release guard` and
 `local-ci`.
 
 One green run on the top of a stack vouches for every layer below it,
@@ -177,7 +177,7 @@ aggregate. `just release-tag` requires it.
   alias on the WarpBuild dashboard and the next run starts cold.
 
 **False alarms**
-- A failed `CI passed` from a run that was cancelled: a newer run on the
-  same commit superseded it, and that run's result replaces it.
+- A failed or cancelled check from a run that a newer run on the same
+  commit superseded: the newer run's result replaces it.
 - prek hands a pre-push hook only the first pushed ref. The stack lookup
   covers the other layers, so this matters only outside a gh stack.

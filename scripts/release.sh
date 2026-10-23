@@ -72,9 +72,8 @@ MAIN="${MAIN_BRANCH:-main}"
 # hotfix). One fixed name: the guard and release-only key on it, and two
 # releases can never be in flight at once.
 RELEASE_BRANCH="release/pending"
-# The required check on main (checks.yml's aggregator job, `CI passed`;
-# also named in the main ruleset). `tag` refuses a commit on which it is
-# not green.
+# The full suite's verdict on a main commit (checks.yml's aggregator job,
+# `CI passed`). `tag` refuses a commit on which it is not green.
 CHECK_NAME="CI passed"
 # The Helm chart: the release commit sets its version and appVersion, and
 # appVersion is the image tag the chart at the tag renders

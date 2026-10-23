@@ -1,27 +1,24 @@
-# Task Checks — the PR gate, the full suite after every merge, and the
-# nightly (fleet flow v4: the `release-workflow` skill,
+# CI — the full suite after every merge, the nightly, hotfix PRs and runs
+# by hand (fleet flow v4: the `release-workflow` skill,
 # references/ci-gates.md).
 #
 # WHO CHECKS WHAT. Every CI minute of a Rust workspace this size is a
 # build, so the expensive half of the PR gate runs on the developer's own
 # warm target dir, and CI pays for builds once per merge:
 #
-#   PR into main   a minimal free hosted backstop that compiles nothing
-#                  (fmt, change files), plus the `local-ci` commit
-#                  status: the pre-push hook (prek.toml ->
-#                  scripts/ci-local.sh) ran the static guards (versions,
-#                  manifests, the architect-ui sheet), clippy, the wasm
-#                  check and the tests `cargo rail plan` says the change
-#                  affects, and posted it. Both are required on main.
+#   PR into main   NOT this workflow: pr.yml (`PR checks`, a free backstop
+#                  that compiles nothing) plus the `local-ci` commit
+#                  status the pre-push hook posts (prek.toml ->
+#                  scripts/ci-local.sh: the static guards, clippy, wasm and
+#                  the rail-planned tests). Main requires both.
 #   push to main   the FULL set on WarpBuild, once per merge. It catches two
 #                  PRs that each passed alone but break together, and its
-#                  green aggregator is what `just release-tag` requires.
+#                  green `CI passed` is what `just release-tag` requires.
 #
 # WHERE EACH JOB RUNS:
 #
 #   plan            ubuntu-latest   rustup + cargo-rail (rust-rail), to narrow only
-#   pr-checks       ubuntu-latest   rustup + cargo-rail + just (rust-rail), no nix
-#   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for PRs
+#   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for pr.yml
 #   lint            warp 8x  + snapshot task-lint    clippy, docs (check mode)
 #   tests           warp 16x + snapshot task-tests   the nextest build
 #   wasm            ubuntu-latest   nix .#ci + rust-cache (checks-wasm): 3 min
@@ -62,12 +59,12 @@ name: CI
 
 # WHEN THIS RUNS:
 #
-#   PR into main        the free checks above (pr-checks). A release PR
-#                       (release/pending: version + changelog only, proved
-#                       by the BASE commit's release.sh) skips everything.
+#   PR into main        never (pr.yml).
 #   PR into release/**  a hotfix: the FULL set (no narrowing, and nothing
 #                       left to a hook, on a branch that ships straight to
-#                       production).
+#                       production). A hotfix release PR (release/pending:
+#                       version + changelog only, proved by the BASE commit's
+#                       release.sh) skips everything.
 #   push to main        the FULL set, once per merge, and records rail
 #   or release/v*       evidence for that commit.
 #   by hand             `gh workflow run checks.yml --ref <branch>` runs
@@ -82,7 +79,7 @@ name: CI
 # (deploy.yml).
 on:
   pull_request:
-    branches: [main, "release/**"]
+    branches: ["release/**"]
   push:
     # release/v* (hotfix branches), not release/pending: a release PR's
     # head is version + changelog only and gets no full run of its own.
@@ -137,8 +134,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      # A PR into main: the free checks only (pr-checks).
-      light: ${{ steps.filter.outputs.light }}
       full: ${{ steps.filter.outputs.full }}
       cargo: ${{ steps.filter.outputs.cargo }}
       tests: ${{ steps.filter.outputs.tests }}
@@ -206,11 +201,6 @@ jobs:
             printf 'skip=true\nfull=false\ncargo=false\ntests=false\ntest_filter=\nwasm=false\n' >> "$GITHUB_OUTPUT"
             exit 0
           }
-          light() {
-            echo "plan: $1 — the free checks; clippy and the tests ran in the pre-push hook (local-ci)"
-            printf 'light=true\nfull=false\ncargo=false\ntests=false\ntest_filter=\nwasm=false\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          }
           # Full runs record evidence for the commit they check, so later
           # plans against it can narrow.
           record() { echo "record=true" >> "$GITHUB_OUTPUT"; }
@@ -225,10 +215,8 @@ jobs:
               if bash "${RUNNER_TEMP}/release-base.sh" release-only; then
                 skip_all "release commit only (${HEAD_REF})"
               fi
-              case "${BASE_REF}" in
-                release/*) run_all "PR into ${BASE_REF} (hotfix): full set" ;;
-              esac
-              light "PR into ${BASE_REF}" ;;
+              # Only PRs into release/** reach this workflow (pr.yml has main).
+              run_all "PR into ${BASE_REF} (hotfix): full set" ;;
             push)
               record; run_all "push to ${GITHUB_REF_NAME}: full set after every merge" ;;
             schedule)
@@ -279,38 +267,6 @@ jobs:
         with:
           save-deps: "true"
 
-  # A PR into main: the minimal free backstop for a push the hook vouched
-  # for. Nothing here compiles, so no nix: rustup + cargo-rail + main's
-  # cargo-dependency cache (.github/actions/rust-rail). Clippy, wasm, the
-  # tests and the static guards (versions, manifests, the architect-ui
-  # sheet) are the pre-push hook's (`just ci-local`, the `local-ci` status).
-  pr-checks:
-    name: PR checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: plan
-    if: ${{ needs.plan.outputs.light == 'true' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # The merge commit plus its parents: the change check diffs
-          # against the first parent (the base it merges into).
-          fetch-depth: 2
-      - uses: ./.github/actions/rust-rail
-      - name: fmt
-        run: just ci-fmt
-      # Every crate the PR changes needs a cargo-rail change file
-      # (.changes/README), against the base this PR merges into.
-      - name: Change files
-        if: ${{ !cancelled() }}
-        run: just ci-changes "$(git rev-parse HEAD^1)"
-      # The local hook trusts `cargo rail plan` to pick what runs; these pin
-      # its routes (.config/rail-cases.toml), so a rail bump or a rail.toml
-      # edit that re-routes one fails here. Plans only; compiles nothing.
-      - name: rail route cases
-        if: ${{ !cancelled() }}
-        run: just rail-cases
-
   # THREE full-run jobs, one per BUILD KIND.
   #
   #   lint   warp 8x   fmt, manifests, architect-ui, clippy, docs:
@@ -327,7 +283,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-8x;snapshot.key=task-lint
     timeout-minutes: 60
     needs: plan
-    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.light != 'true' }}
+    if: ${{ needs.plan.outputs.skip != 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -379,7 +335,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-16x;snapshot.key=task-tests
     timeout-minutes: 60
     needs: plan
-    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.light != 'true' && needs.plan.outputs.tests == 'true' }}
+    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.tests == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -458,7 +414,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: plan
-    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.light != 'true' && needs.plan.outputs.wasm == 'true' }}
+    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.wasm == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -479,18 +435,16 @@ jobs:
       - name: wasm check (task-app-web)
         run: just ci-wasm
 
-  # The REQUIRED check: `CI passed` is a required check of the main
-  # ruleset (with `local-ci` and `Release guard`), and scripts/release.sh
-  # (CHECK_NAME) refuses to tag a commit where it isn't green. Rename it in
-  # all three places at once. A required check that is skipped counts as
-  # passing, so this never skips: it fails unless every job the plan asked
-  # for succeeded. A job may only be skipped when the plan said it had no
-  # work.
+  # The aggregate: scripts/release.sh (CHECK_NAME) refuses to tag a commit
+  # on main where `CI passed` isn't green, so rename both together. (PRs
+  # into main are gated by pr.yml's `PR checks` + `local-ci` instead.)
+  # This never skips: it fails unless every job the plan asked for
+  # succeeded. A job may only be skipped when the plan said it had no work.
   checks-passed:
     name: CI passed
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [plan, pr-checks, lint, tests, wasm]
+    needs: [plan, lint, tests, wasm]
     if: ${{ always() }}
     permissions:
       # A green dispatched full run posts `local-ci` (below).
@@ -500,8 +454,6 @@ jobs:
         env:
           PLAN: ${{ needs.plan.result }}
           SKIP: ${{ needs.plan.outputs.skip }}
-          LIGHT: ${{ needs.plan.outputs.light }}
-          PR_CHECKS: ${{ needs.pr-checks.result }}
           LINT: ${{ needs.lint.result }}
           TESTS: ${{ needs.tests.result }}
           WANT_TESTS: ${{ needs.plan.outputs.tests }}
@@ -514,11 +466,6 @@ jobs:
           [ "$PLAN" = success ] || bad "plan: $PLAN"
           if [ "$SKIP" = "true" ]; then
             echo "plan: nothing to run"; exit "$fail"
-          fi
-          if [ "$LIGHT" = "true" ]; then
-            [ "$PR_CHECKS" = success ] || bad "pr-checks: $PR_CHECKS"
-            echo "pr-checks: $PR_CHECKS (clippy and the tests: the local-ci status)"
-            exit "$fail"
           fi
           check() { # name result wanted
             if [ "$3" = "true" ]; then

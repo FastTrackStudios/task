@@ -142,9 +142,10 @@ follows `skills/ship-stack.md`. In short:
   (one version everywhere, manifests + lockfile, the architect-ui sheet),
   and the clippy, wasm and tests that `cargo rail plan` says the change
   affects. It runs on the warm local target dir and, when green, marks the
-  pushed commits with the `local-ci` status. `CI` on the PR then runs
-  only a minimal free backstop on rustup, no nix (fmt, change files, rail
-  routes). A
+  pushed commits with the `local-ci` status. The PR then gets only the
+  `PR` workflow's `PR checks`, a minimal free backstop on rustup, no nix
+  (fmt, change files, rail routes). The `CI` workflow (the full set)
+  runs after the merge. A
   stack is vouched for when you push it from its TOP branch. For a long
   run, `just ci-local` BEFORE pushing: the hook then finds the pass and
   the push is instant (a long hook can outlast git's connection to

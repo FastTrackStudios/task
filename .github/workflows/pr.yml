@@ -1,0 +1,71 @@
+# PR — the free backstop every PR into main gets, and nothing else.
+#
+# The expensive half of the PR gate runs on the author's machine: the prek
+# pre-push hook (prek.toml -> scripts/ci-local.sh) runs the static guards,
+# clippy, the wasm check and the tests `cargo rail plan` says the change
+# affects, and posts the `local-ci` status. This workflow re-checks the
+# cheap, compile-nothing part on a free hosted runner, without nix
+# (.github/actions/rust-rail: rustup + cargo-rail + just + main's cargo
+# dependency cache), for a push that skipped the hook.
+#
+# Main requires `PR checks` (this job), `local-ci` and `Release guard`.
+# The full set (CI, checks.yml) runs after every merge to main, nightly,
+# on hotfix PRs into release/**, and by hand:
+#
+#   gh workflow run checks.yml --ref <branch>     (posts local-ci when green)
+
+name: PR
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-checks:
+    name: PR checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The merge commit plus its parents: the change check diffs
+          # against the first parent (the base it merges into). A release
+          # PR needs full history for the release-only test below.
+          fetch-depth: ${{ github.head_ref == 'release/pending' && 0 || 2 }}
+      # A release PR (release/pending: version + changelog only) was checked
+      # commit by commit before it. The BASE commit's release.sh decides,
+      # never the PR's own copy: a release/pending branch that edited the
+      # script must not be able to skip the checks.
+      - name: Release commit?
+        id: release
+        if: ${{ github.head_ref == 'release/pending' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git show "$BASE_SHA:scripts/release.sh" > "$RUNNER_TEMP/release-base.sh"
+          if bash "$RUNNER_TEMP/release-base.sh" release-only; then
+            echo "only=true" >> "$GITHUB_OUTPUT"
+            echo "release commit only: nothing to check"
+          fi
+      - uses: ./.github/actions/rust-rail
+        if: ${{ steps.release.outputs.only != 'true' }}
+      - name: fmt
+        if: ${{ steps.release.outputs.only != 'true' }}
+        run: just ci-fmt
+      # Every crate the PR changes needs a cargo-rail change file
+      # (.changes/README), against the base this PR merges into.
+      - name: Change files
+        if: ${{ !cancelled() && steps.release.outputs.only != 'true' }}
+        run: just ci-changes "$(git rev-parse HEAD^1)"
+      # The local hook trusts `cargo rail plan` to pick what runs; these pin
+      # its routes (.config/rail-cases.toml), so a rail bump or a rail.toml
+      # edit that re-routes one fails here. Plans only; compiles nothing.
+      - name: rail route cases
+        if: ${{ !cancelled() && steps.release.outputs.only != 'true' }}
+        run: just rail-cases
