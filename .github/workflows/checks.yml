@@ -469,8 +469,14 @@ jobs:
       - name: Placement
         run: |
           if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
-            echo "IN_SHELL=" >> "$GITHUB_ENV"
-            echo "SWEEP=" >> "$GITHUB_ENV"
+            # Test scratch: nix-develop exports TMPDIR under
+            # /home/runner/work/_temp, and `rename_org` needs the scratch
+            # dir to sort AFTER /mnt/storage (.config/nextest.toml,
+            # ci-test-tmpdir). /tmp does.
+            mkdir -p /tmp/task-ci
+            { echo "IN_SHELL="
+              echo "SWEEP="
+              echo "TASK_CI_TMPDIR=/tmp/task-ci"; } >> "$GITHUB_ENV"
           else
             echo "IN_SHELL=${NIX_DEV}" >> "$GITHUB_ENV"
             echo "SWEEP=${SWEEP_RUN} checks-tests --" >> "$GITHUB_ENV"
