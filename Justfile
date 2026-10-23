@@ -553,6 +553,12 @@ prek-bump VERSION="":
 ci-local BASE="":
     bash scripts/ci-local.sh {{BASE}}
 
+# The route pins in .config/rail-cases.toml: for a change to each path,
+# the work `cargo rail plan` must require or skip (CI's pr-checks runs it).
+# Plans synthetic commits on top of HEAD; touches nothing.
+rail-cases:
+    cargo rail plan --cases .config/rail-cases.toml
+
 # Record rail's observed-input evidence for HEAD (clean, normally main
 # after a pull), so `ci-local` against this commit narrows a docs or
 # fixture change instead of running everything. Kept in the git dir,

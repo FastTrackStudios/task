@@ -304,6 +304,12 @@ jobs:
       - name: Change files
         if: ${{ !cancelled() }}
         run: just ci-changes "$(git rev-parse HEAD^1)"
+      # The local hook trusts `cargo rail plan` to pick what runs; these pin
+      # its routes (.config/rail-cases.toml), so a rail bump or a rail.toml
+      # edit that re-routes one fails here. Plans only; compiles nothing.
+      - name: rail route cases
+        if: ${{ !cancelled() }}
+        run: just rail-cases
 
   # THREE full-run jobs, one per BUILD KIND.
   #

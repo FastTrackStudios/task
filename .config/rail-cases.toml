@@ -1,0 +1,67 @@
+# Route pins for `cargo rail plan` (`just rail-cases`; CI's pr-checks runs
+# it): for a change to each path, which work must be required or skipped.
+# They hold the CI design to what .config/rail.toml says, so a rail bump or
+# a config edit that re-routes one of these fails loudly instead of
+# silently running too little (or everything).
+#
+# A passing case is a diagnostic, not evidence: without recorded evidence a
+# change outside a crate's sources still widens Cargo work (rail docs,
+# planning.md "Check route parity"). These pin the work-level routes; the
+# package-level selection is what scripts/ci-rail-plan.py reads.
+
+# CI inputs mean the full set.
+[[case]]
+name = "a workflow is a CI input"
+change = [".github/workflows/checks.yml"]
+required = ["ci-infra"]
+
+[[case]]
+name = "a CI script is a CI input"
+change = ["scripts/ci-local.sh"]
+required = ["ci-infra"]
+
+[[case]]
+name = "nextest configuration means every test"
+change = [".config/nextest.toml"]
+required = ["test-runner"]
+
+# The wasm check runs only where the wasm32 graph reaches.
+[[case]]
+name = "the web app reaches wasm"
+change = ["apps/web/src/main.rs"]
+required = ["wasm", "cargo.test"]
+
+[[case]]
+name = "the browser dial reaches wasm"
+change = ["crates/task-dial/src/lib.rs"]
+required = ["wasm"]
+
+[[case]]
+name = "files-proto reaches wasm through files-client"
+change = ["features/files/files-proto/src/lib.rs"]
+required = ["wasm", "cargo.test"]
+
+[[case]]
+name = "the server never reaches wasm"
+change = ["apps/server/src/main.rs"]
+required = ["cargo.test"]
+skipped = ["wasm", "ci-infra"]
+
+[[case]]
+name = "files-transcode is native only"
+change = ["features/files/files-transcode/src/store.rs"]
+required = ["cargo.test"]
+skipped = ["wasm"]
+
+# Content the server embeds (include_dir! of examples/studio, through
+# apps/server/build.rs) must route to the tests that load it.
+[[case]]
+name = "the seeded example routes to the tests"
+change = ["examples/studio/acme-audio/AssetGroups/charts/track-one.md"]
+required = ["cargo.test"]
+skipped = ["ci-infra"]
+
+[[case]]
+name = "prose is not a CI input"
+change = ["docs/observability.md"]
+skipped = ["ci-infra", "test-runner", "wasm"]
