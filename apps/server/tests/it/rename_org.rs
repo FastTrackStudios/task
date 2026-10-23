@@ -131,16 +131,18 @@ async fn a_rename_moves_the_directory_manifest_roots_and_memberships() {
     //    tree does not — that tree is the deployment's, and the command
     //    says so rather than guessing.
     let registry = files::registry::Registry::open(&new.path().join("files")).unwrap();
+    // Both sides sorted: the scratch dir is wherever `TMPDIR` points (a
+    // runner's tmpfs, a nix shell's temp dir), so it may sort before or
+    // after the media tree.
     let mut paths: Vec<String> = registry.list().into_iter().filter_map(|r| r.path).collect();
     paths.sort();
-    assert_eq!(
-        paths,
-        vec![
-            "/mnt/storage/Task/fasttrackstudios/Projects".to_owned(),
-            new.path().join("vault").to_string_lossy().into_owned(),
-            new.path().join("wikis/docs").to_string_lossy().into_owned(),
-        ]
-    );
+    let mut expected = vec![
+        "/mnt/storage/Task/fasttrackstudios/Projects".to_owned(),
+        new.path().join("vault").to_string_lossy().into_owned(),
+        new.path().join("wikis/docs").to_string_lossy().into_owned(),
+    ];
+    expected.sort();
+    assert_eq!(paths, expected);
 
     // 4. Every membership row moved, whoever granted it.
     let members = Memberships::open(&home.memberships_db()).await.unwrap();

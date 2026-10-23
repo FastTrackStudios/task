@@ -20,6 +20,8 @@ use task_dial::{Account, AccountDevice, NodePrefs, Resolved, Via};
 use task_server::local_node::{JoinSpec, LOCAL_ENDPOINT_FILE, LocalNode, NodeOptions};
 use vox_core::FromVoxLane;
 
+use crate::support;
+
 const ORG: &str = "the-band";
 
 fn opts(root: &std::path::Path, peers: bool) -> NodeOptions {
@@ -279,13 +281,20 @@ async fn an_app_dials_its_local_node_with_no_host_and_the_same_with_one() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_planted_studio_is_reached_through_the_local_node() {
     let root = tempfile::tempdir().unwrap();
-    let node = LocalNode::open(NodeOptions {
-        plant_example: true,
-        peers: false,
-        ..NodeOptions::at(root.path())
-    })
-    .await
-    .expect("the desktop's node with the example studio");
+    let node = {
+        let _env = support::env_lock().await;
+        // SAFETY: under the binary's env lock. The plant would otherwise
+        // install the Bible and the study texts (~50 MB, the slowest part
+        // of a plant); this test reads one seeded task.
+        unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+        LocalNode::open(NodeOptions {
+            plant_example: true,
+            peers: false,
+            ..NodeOptions::at(root.path())
+        })
+        .await
+        .expect("the desktop's node with the example studio")
+    };
     node.serve_loopback().await.expect("served on loopback");
     let slug = node.owner().org.clone();
     let id = node.manifest(&slug).expect("the planted org").id;

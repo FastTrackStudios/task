@@ -839,6 +839,12 @@ fn synth_video(dest: &std::path::Path, cut: VideoCut) -> bool {
             "yuv420p",
             "-movflags",
             "+faststart",
+            // One encoder thread: a clip this small encodes in well under
+            // a second on one core, and libx264's default (a thread per
+            // core) let a dozen concurrent plants (the test suite) run
+            // ~50 encoders over 16 cores and time each other out.
+            "-threads",
+            "1",
         ])
         .arg(dest)
         .stdout(std::process::Stdio::null())
