@@ -8,6 +8,17 @@ release). Each release's section is built by `just release-prepare` from the
 cargo-rail change files (`.changes/*.md`) its PRs carried; never edit this
 file by hand outside a release PR.
 
+## [26.10.0] - 2026-10-23
+
+### Fixed and improved
+
+- Changed `task-server self-update` and the desktop updater to run on architect's shared release module; flags and the pinned release key are unchanged
+- Fixed: in the web app, pressing `q` or `@` outside a text field no longer swallows the next key, so a shortcut like `g h` typed after it still runs
+- Fixed: a video's proxy could fail with "No such file or directory" when it was requested while the checkpoint was still pre-generating it
+- The demo plant encodes its video deliverables on one ffmpeg thread each, so concurrent plants (the test suite, a reseed) stop oversubscribing the machine.
+- Vault snapshots are cached per root and pages share their text as Arc<str>, so loads stop cloning every note.
+- Vault sync moves stream instead of buffering, and Bases rows come straight from the frontmatter map, shared across views.
+
 ## [0.2.4] - 2026-10-22
 
 ### Features
