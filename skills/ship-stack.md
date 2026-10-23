@@ -33,7 +33,6 @@ worktree with its own `target/` costs a cold build.
 | PR into main | `PR / PR checks` (`pr.yml`) | free hosted, rustup + cargo-rail, no nix | fmt, change files, rail route cases |
 | PR into main | `Release / Release guard` | free hosted | judges `release/pending` PRs only; passes otherwise |
 | push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | free hosted, nix `.#ci` + a rust-cache per build kind saved on main | the full suite, once per merge |
-| nightly | `CI` | same | the full suite, skipped when main's head already passed |
 | PR into `release/**` | `CI` | same | a hotfix: the full suite |
 | release commit on main | `Images` (+ `Deploy` / `Desktop cache` at the tag) | free hosted | GHCR images; `release-tag` waits for them |
 
