@@ -1,0 +1,20 @@
+# Restore the architect xtask `just ci-boundaries` runs. It is `cargo
+# install`ed per architect tag into ~/.cache/architect-xtask (the recipe's
+# default without $CI_CACHE_DIR), and cached per tag AND flake.lock: the
+# binary links the dev shell's glibc, which a nixpkgs bump moves. A few
+# MB; saved from any ref when missing. Run inside `.#ci`.
+name: architect xtask
+description: Restore (or, when missing, save after the job) the pinned architect xtask binary.
+runs:
+  using: composite
+  steps:
+    - name: architect xtask pin
+      id: xtask
+      shell: bash
+      run: echo "tag=$(sed -n 's/^architect_xtask_tag *:= *"\([^"]*\)".*/\1/p' Justfile)" >> "$GITHUB_OUTPUT"
+    - name: Restore architect xtask
+      if: ${{ steps.xtask.outputs.tag != '' }}
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/architect-xtask
+        key: architect-xtask-${{ steps.xtask.outputs.tag }}-${{ hashFiles('flake.lock') }}
