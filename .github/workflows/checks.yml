@@ -501,9 +501,10 @@ jobs:
       # only means later plans against this commit widen.
       #
       # `macpro-*` runners (Lima VMs on the Mac Pro) get half the test
-      # threads, hosted runners one per vCPU, and test scratch is on the unit's tmpfs RuntimeDirectory
-      # where there is one (`.config/nextest.toml`, `ci-test-tmpdir`;
-      # hosted: none, $TMPDIR as is). STA-369.
+      # threads, hosted runners one per vCPU. Test scratch is on the unit's
+      # tmpfs RuntimeDirectory where there is one, else TASK_CI_TMPDIR
+      # (hosted: /tmp/task-ci, the Placement step); `.config/nextest.toml`,
+      # `ci-test-tmpdir`. STA-369.
       - name: Tests
         env:
           # Hosted: one per vCPU (4). At 16 on 4 vCPU the restart/peer
