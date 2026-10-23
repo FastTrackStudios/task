@@ -549,7 +549,7 @@ prek-bump VERSION="":
 
 # The PR gate's clippy + tests + wasm, for what the change affects (`cargo
 # rail plan` from BASE, default the merge-base with origin/main). The
-# pre-push hook runs this and marks the pushed commits `local-ci`.
+# pre-push hook runs this and marks the pushed commits `Local CI`.
 ci-local BASE="":
     bash scripts/ci-local.sh {{BASE}}
 

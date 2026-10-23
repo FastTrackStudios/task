@@ -7,7 +7,7 @@
 # warm target dir, and CI pays for builds once per merge:
 #
 #   PR into main   NOT this workflow: pr.yml (`PR checks`, a free backstop
-#                  that compiles nothing) plus the `local-ci` commit
+#                  that compiles nothing) plus the `Local CI` commit
 #                  status the pre-push hook posts (prek.toml ->
 #                  scripts/ci-local.sh: the static guards, clippy, wasm and
 #                  the rail-planned tests). Main requires both.
@@ -75,7 +75,7 @@ name: CI
 #   push to main        the FULL set, once per merge, and records rail
 #   or release/v*       evidence for that commit.
 #   by hand             `gh workflow run checks.yml --ref <branch>` runs
-#                       everything and, when green, posts `local-ci` on the
+#                       everything and, when green, posts `Local CI` on the
 #                       branch's head (for a push the hook couldn't vouch
 #                       for); add `-f base=main` to check only what the
 #                       branch changed, `-f seed=true` to reseed the snapshots.
@@ -467,7 +467,7 @@ jobs:
 
   # The aggregate: scripts/release.sh (CHECK_NAME) refuses to tag a commit
   # on main where `CI passed` isn't green, so rename both together. (PRs
-  # into main are gated by pr.yml's `PR checks` + `local-ci` instead.)
+  # into main are gated by pr.yml's `PR checks` + `Local CI` instead.)
   # This never skips: it fails unless every job the plan asked for
   # succeeded. A job may only be skipped when the plan said it had no work.
   checks-passed:
@@ -477,7 +477,7 @@ jobs:
     needs: [plan, lint, tests, wasm]
     if: ${{ always() }}
     permissions:
-      # A green dispatched full run posts `local-ci` (below).
+      # A green dispatched full run posts `Local CI` (below).
       statuses: write
     steps:
       - name: Every required job succeeded
@@ -512,13 +512,13 @@ jobs:
       # The escape hatch for a push the pre-push hook couldn't vouch for (a
       # contributor without the hook, a dirty tree, SKIP=local-ci): a green
       # dispatched FULL run on the branch stands in for it.
-      - name: Post local-ci for a green dispatched full run
+      - name: Post Local CI for a green dispatched full run
         if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.base == '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" --silent \
-            -f state=success -f context=local-ci \
+            -f state=success -f context="Local CI" \
             -f description="full run on GitHub (${GITHUB_RUN_ID})" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          echo "local-ci posted on ${GITHUB_SHA}"
+          echo "Local CI posted on ${GITHUB_SHA}"
