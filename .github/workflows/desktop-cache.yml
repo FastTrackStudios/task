@@ -16,11 +16,11 @@
 # `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
 # already cached is harmless to re-run: cachix skips paths it holds.
 #
-# WHERE: Task's self-hosted `task` runner on the Mac Pro VM — one of the
-# few jobs kept off GitHub's hosted runners on purpose. The package is a
-# pure Nix build of the whole workspace (cargoArtifacts = null): ~61 min
-# cold on the Mac Pro, the better part of an hour or more and ~30 GB of
-# disk on a 4-vCPU hosted runner, and the runner's store keeps the result.
+# WHERE: WarpBuild 8x, cold. The package is a pure Nix build of the whole
+# workspace (cargoArtifacts = null): ~61 min cold on the Mac Pro, the
+# better part of an hour or more and ~30 GB of disk on a 4-vCPU hosted
+# runner. It runs once per release, so no snapshot: the result lives in
+# cachix, which is the point of the job.
 #
 # SECRET: CACHIX_AUTH_TOKEN, a repo Actions secret (owned by Keeper; a
 # cachix token with write access to `fasttrackstudio`). It reaches cachix
@@ -60,12 +60,19 @@ env:
 jobs:
   cache:
     name: task-desktop -> cachix
-    runs-on: [self-hosted, task]
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://fasttrackstudio.cachix.org
+            extra-trusted-public-keys = fasttrackstudio.cachix.org-1:r7v7WXBeSZ7m5meL6w0wttnvsOltRvTpXeVNItcy9f4=
 
       - name: Which release
         id: plan

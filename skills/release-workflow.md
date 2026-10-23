@@ -21,11 +21,12 @@ hotfix while main can't ship: release/v<latest tag> <-- cherry-pick -x from main
 
 | Event | What runs |
 |---|---|
-| PR into `main` | `checks`: plan (`cargo rail plan` against the base), fmt, `cargo rail change check`, affected tests, clippy, wasm, docs; aggregator **`Checks (fmt + tests + clippy + wasm + docs)`** (required); `release` guard (passes at once unless the head is `release/pending`) |
+| push of a PR branch | the pre-push hook: `just ci-local` (fmt, change files, and the clippy / tests / wasm that `cargo rail plan` from the merge-base says are affected) on the local warm tree; when green it posts the **`local-ci`** status (required) on the pushed commits. Without the hook: `gh workflow run checks.yml --ref <branch>` posts it |
+| PR into `main` | `checks`: the free hosted checks that compile nothing (fmt, `cargo rail change check`, versions, manifests, boundaries, architect-ui sheet); aggregator **`Checks (fmt + tests + clippy + wasm + docs)`** (required); `release` guard (passes at once unless the head is `release/pending`) |
 | PR `release/pending` → `main` (one commit) | release guard (from the BASE commit's `scripts/release.sh`); `checks` skips the heavy jobs (version + changelog only) |
 | PR into `release/v*` (hotfix) | the FULL `checks`, release guard |
-| push to `main` or `release/v*` | FULL `checks` + rail evidence for the commit; `release-tag` needs its aggregator green. If the push is a release commit (the version changed): `images` builds and pushes `ghcr.io/fasttrackstudios/task-{server,web}:<version>`; `release-tag` needs those too |
-| nightly 10:17 UTC | FULL `checks` on `main` |
+| push to `main` or `release/v*` | FULL `checks` (lint and tests on WarpBuild, from their main-saved snapshots) + rail evidence for the commit; `release-tag` needs its aggregator green. If the push is a release commit (the version changed): `images` builds and pushes `ghcr.io/fasttrackstudios/task-{server,web}:<version>`; `release-tag` needs those too |
+| nightly 10:17 UTC | FULL `checks` on `main`, unless a push run already passed at its head |
 | tag `vYY.M.MICRO` | starcommand's Argo `task` app deploys the chart at the newest tag (images `:<appVersion>` = `:<version>`); `deploy` (tag guard → images on GHCR? → Verify live → GitHub Release → node binaries, desktop cache), `task-ios`, `task-macos` (TestFlight, `desktop-v*`) |
 
 Nothing deploys on a merge. Production is the latest `v*` tag.

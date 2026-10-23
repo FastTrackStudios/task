@@ -129,11 +129,17 @@ Task's specifics are in `skills/release-workflow.md`. In short:
   gh pr create --draft --base main --title "fix(files): …"
   ```
 
-- CI (`checks`: lint and wasm on GitHub-hosted runners, tests on the
-  Mac Pro's warm runner) is the gate: fmt,
-  `cargo rail change check`, the affected tests (`cargo rail plan`),
-  clippy, wasm, docs. A local `just ci` under the build lease is optional.
-  PRs squash-merge; the full suite runs after every merge to `main`.
+- The PR gate is split. Your push runs the expensive half: the pre-push
+  hook (`just install-hooks` once per clone) runs `just ci-local`, which
+  covers fmt, change files, and the clippy, wasm and tests that
+  `cargo rail plan` says the change affects. It runs on the warm local
+  target dir and, when green, marks the pushed commits with the `local-ci`
+  status. `checks` on the PR then runs only the free hosted checks that
+  compile nothing (fmt, change files, versions, manifests, boundaries). A
+  stack is vouched for when you push it from its TOP branch. With no hook
+  or a dirty tree, run `gh workflow run checks.yml --ref <branch>` instead:
+  it posts `local-ci` when green. PRs squash-merge, and the full set
+  (clippy, docs, every test) runs on WarpBuild after every merge to `main`.
 - A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
   `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
   a push to `main` deploys nothing.
