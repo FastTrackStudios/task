@@ -730,6 +730,48 @@ Tool: none (scripts/release.sh). Extent: generated. Human reviewed: no." | tail 
 # line, the workspace members' version lines in Cargo.lock, the chart's
 # version + appVersion lines, CHANGELOG.md and deleted .changes/*.md? (a version bump cannot change what the
 # checks tested)
+# true when <head>'s Cargo.lock is <base>'s with every workspace member's
+# version moved from <old> to <new> (its own `version` and the
+# `"name <old>"` references that disambiguate it), and nothing else:
+# packages are compared as sets, so a block Cargo re-sorted still matches.
+lock_is_version_bump() { # <base> <head> <old> <new>
+    local dir rc
+    dir="$(mktemp -d)"
+    git show "$1:Cargo.lock" > "$dir/base.lock" 2>/dev/null || { rm -rf "$dir"; return 1; }
+    git show "$2:Cargo.lock" > "$dir/head.lock" 2>/dev/null || { rm -rf "$dir"; return 1; }
+    python3 -I - "$dir/base.lock" "$dir/head.lock" "$3" "$4" <<'PY'
+import json, sys, tomllib
+
+base_path, head_path, old, new = sys.argv[1:5]
+base = tomllib.load(open(base_path, "rb"))
+head = tomllib.load(open(head_path, "rb"))
+# Workspace members: no `source`, at the old version.
+members = {p["name"] for p in base.get("package", []) if "source" not in p and p.get("version") == old}
+
+def bump(p):
+    p = dict(p)
+    if p["name"] in members and "source" not in p and p.get("version") == old:
+        p["version"] = new
+    if "dependencies" in p:
+        p["dependencies"] = sorted(
+            f"{d.split(' ', 1)[0]} {new}" if d.split(" ") == [d.split(" ", 1)[0], old] and d.split(" ", 1)[0] in members else d
+            for d in p["dependencies"]
+        )
+    return p
+
+def canon(pkgs):
+    return sorted(json.dumps(p, sort_keys=True) for p in pkgs)
+
+want = canon(bump(p) for p in base.get("package", []))
+got = canon({**p, "dependencies": sorted(p["dependencies"])} if "dependencies" in p else p for p in head.get("package", []))
+rest = lambda doc: {k: v for k, v in doc.items() if k != "package"}
+sys.exit(0 if want == got and rest(base) == rest(head) else 1)
+PY
+    rc=$?
+    rm -rf "$dir"
+    return "$rc"
+}
+
 release_diff_only() { # <base> <head>
     # No `... | grep -q` pipelines: under pipefail, grep -q exits at the first
     # match and the writer dies of SIGPIPE, which reads as "no match" on a
@@ -751,16 +793,16 @@ release_diff_only() { # <base> <head>
         [ "$(printf '%s\n' "$out" | grep -cE '^-version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' || true)" -eq 1 ] || return 1
         [ "$(printf '%s\n' "$out" | grep -cE '^\+version *= *"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$' || true)" -eq 1 ] || return 1
     fi
-    # Cargo.lock: only the old workspace version -> the new one. Cargo
-    # rewrites two kinds of line: the workspace members' own `version = "X"`
-    # and, where a member shares its name with another crate in the graph
-    # (inventory, notify), the references to it, ` "inventory X",`.
-    # Anything else (another crate, another version) is not a release.
-    local ob nb
-    ob="${vb//./\\.}"; nb="${vh//./\\.}"
-    out="$(git diff -U0 "$base" "$head" -- Cargo.lock | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
-        | grep -vE "^-version = \"$ob\"$|^\+version = \"$nb\"$|^- \"[A-Za-z0-9_.-]+ $ob\",?$|^\+ \"[A-Za-z0-9_.-]+ $nb\",?$" || true)"
-    [ -z "$out" ] || return 1
+    # Cargo.lock: only the old workspace version -> the new one. Compared by
+    # MEANING, not by line: where a member shares its name with another
+    # crate in the graph (inventory, notify), Cargo also rewrites the
+    # references to it (` "inventory X",`), and the new version can sort the
+    # member's block past the other crate's, so whole blocks move. Anything
+    # else (another crate, another version, a new dependency) is not a
+    # release.
+    lock_is_version_bump "$base" "$head" "$vb" "$vh" || return 1
+    local nb
+    nb="${vh//./\\.}"
     # Chart.yaml: only its version and appVersion lines, to the new version.
     out="$(git diff -U0 "$base" "$head" -- "$CHART" | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
         | grep -vE "^-(version|appVersion): \"?[0-9]+\.[0-9]+\.[0-9]+\"?$|^\+version: $nb$|^\+appVersion: \"$nb\"$" || true)"
