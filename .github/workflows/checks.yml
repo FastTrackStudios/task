@@ -111,13 +111,15 @@ on:
     # matches this exact string (SEED_CRON).
     - cron: "37 9 * * 0"
 
-# A newer run of the same kind cancels an older one, so main runs the suite
-# once, on its newest commit. A seed (dispatch `seed=true`) is its own kind:
-# a merge landing mid-seed must not cancel it (it did, 2026-10-23), and the
-# scheduled runs (nightly, the Sunday seed) are another.
+# Nothing on main is ever cancelled by a newer run: every push, dispatch,
+# nightly and seed gets its own group (the run id), so each merge's full
+# suite runs to the end and every main commit gets its own `CI passed`. (A
+# shared per-ref group with cancel-in-progress let a merge cancel a seed
+# mid-build, 2026-10-23.) Only a hotfix PR's newer push cancels its older
+# run. To save the minutes of a superseded main run, cancel it by hand.
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'schedule' && 'scheduled' || (inputs.seed && 'seed' || 'run') }}
-  cancel-in-progress: true
+  group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # mold for the host target only -- 326 test binaries get linked on a
