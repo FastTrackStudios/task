@@ -7,9 +7,11 @@
 # only the free hosted checks, so this is where clippy and the tests gate
 # a PR (checks.yml header).
 #
-# The pushed commit is prek's PRE_COMMIT_TO_REF. prek hands a hook only
-# the FIRST ref of a push, so `git push origin a b` vouches for `a` alone;
-# `gh stack submit` pushes one branch per push, so every layer gets one.
+# The pushed commit is prek's PRE_COMMIT_TO_REF (prek hands a hook only
+# the FIRST ref of a push). On a gh stack, the status also goes to every
+# open layer the checked-out tree contains (`targets` below), so a stack
+# pushed from its top gets local-ci on every PR from one run, however
+# its refs were pushed.
 #
 # It checks the CHECKED-OUT tree, so it vouches only for a pushed commit
 # that tree contains: HEAD or an ancestor, i.e. the layers of a stack
@@ -53,9 +55,34 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 COMMON_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 log="$COMMON_DIR/ci-local.log"
 
+# Which commits a green run at HEAD vouches for: the pushed one, plus every
+# open layer of the gh stack HEAD belongs to that HEAD contains. One run on
+# the top proves the whole stack (its tree holds every layer's change), so
+# each layer's PR gets local-ci however the push named its refs: prek
+# passes a hook only the first ref of a push, and `gh stack submit` pushes
+# layers one at a time. A layer pushed a moment later is still posted: the
+# poster waits for GitHub to have each commit.
+targets() {
+  echo "$sha"
+  command -v gh >/dev/null 2>&1 || return 0
+  gh stack view --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    stack = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for b in stack.get("branches") or []:
+    if not b.get("isMerged") and b.get("head"):
+        print(b["head"])
+' | while read -r h; do
+    git merge-base --is-ancestor "$h" "$head" 2>/dev/null && echo "$h"
+  done
+}
+
 post() {
-  nohup bash "$REPO_ROOT/scripts/ci-local.sh" --post "$sha" >>"$log" 2>&1 </dev/null &
-  echo >&2 "local-ci: green; posted to ${sha:0:8} once GitHub has it (log: $log)"
+  mapfile -t shas < <(targets | awk '!seen[$0]++')
+  nohup bash "$REPO_ROOT/scripts/ci-local.sh" --post "${shas[@]}" >>"$log" 2>&1 </dev/null &
+  echo >&2 "local-ci: green; posting to ${#shas[@]} commit(s) once GitHub has them (log: $log)"
 }
 
 # Already green at this exact HEAD (`just ci-local`, or the push of a

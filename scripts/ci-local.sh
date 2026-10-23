@@ -24,17 +24,24 @@ if [ "${1:-}" = "--post" ]; then
   shift
   repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
   desc="clippy + rail-planned tests passed on $(hostname -s)"
+  # Every layer's push re-posts the whole stack; post each commit once.
+  posted="$(git rev-parse --git-common-dir)/ci-local-posted"
+  mkdir -p "$posted"
   for sha in "$@"; do
+    [ -f "$posted/$sha" ] && continue
     # The hook runs before the push lands: wait for GitHub to know the
     # commit (a status on an unknown sha is a 422).
     for _ in $(seq 1 60); do
       gh api "repos/$repo/commits/$sha" --silent 2>/dev/null && break
       sleep 5
     done
-    gh api -X POST "repos/$repo/statuses/$sha" --silent \
-      -f state=success -f context=local-ci -f description="$desc" \
-      && echo "$(date -Is) local-ci: $sha" \
-      || echo "$(date -Is) local-ci: posting to $sha FAILED"
+    if gh api -X POST "repos/$repo/statuses/$sha" --silent \
+      -f state=success -f context=local-ci -f description="$desc"; then
+      date -Is > "$posted/$sha"
+      echo "$(date -Is) local-ci: $sha"
+    else
+      echo "$(date -Is) local-ci: posting to $sha FAILED"
+    fi
   done
   exit 0
 fi
@@ -93,9 +100,16 @@ fi
 # separately, and git holds the connection to GitHub open while the hook
 # runs, so a long first run can outlast it — the push fails, and the
 # retry finds this and goes through at once.
-if [ -z "${1:-}" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+dirty="$(git status --porcelain --untracked-files=no)"
+if [ -n "${1:-}" ]; then
+  echo "ci-local: BASE given, so no pass recorded (a narrower run doesn't vouch for the commit)"
+elif [ -n "$dirty" ]; then
+  echo "ci-local: the tree changed, so no pass recorded for $(git rev-parse --short HEAD):"
+  echo "$dirty"
+else
   pass="$(git rev-parse --git-common-dir)/ci-local-pass"
   mkdir -p "$pass"
   date -Is > "$pass/$(git rev-parse HEAD)"
+  echo "ci-local: pass recorded for $(git rev-parse --short HEAD)"
 fi
 echo "ci-local: green"
