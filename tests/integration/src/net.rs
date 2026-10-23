@@ -13,6 +13,18 @@
 //! suite has no internet and would not want to wait for one — so every
 //! endpoint carries a [`files::AddressBook`], seeded as each one binds.
 //!
+//! # The book is the only resolver
+//!
+//! Endpoints here are bound with [`files::bind_local_endpoint`]: the
+//! book, and no relay, no pkarr and no n0 DNS. With n0's services
+//! attached as well, the suite depended on the internet without saying
+//! so. A redial after a restart could wait behind a slow n0 DNS lookup,
+//! never read the book's new address, and get through only by n0's
+//! public relay. On a laptop the relay hid it; on a GitHub-hosted runner
+//! every restart chapter timed out at 30 s. The function's docs give the
+//! iroh detail. Now a chapter that passes here passes with the network
+//! cable out.
+//!
 //! The distinction that matters: the book is a property of the
 //! *endpoint*, resolved beneath `connect`, so nothing above it knows
 //! there is a book at all. [`files::IrohRemotes`] is the code a
@@ -50,7 +62,7 @@ pub fn book() -> AddressBook {
 /// stands in for the pkarr record a deployed endpoint writes as it
 /// binds, and happens at the same moment for the same reason.
 pub async fn bind(key: iroh::SecretKey) -> iroh::Endpoint {
-    let endpoint = files::bind_endpoint(key, Some(book()))
+    let endpoint = files::bind_local_endpoint(key, book())
         .await
         .expect("bind an endpoint");
     publish(&endpoint);
