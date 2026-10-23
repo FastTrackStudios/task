@@ -111,8 +111,12 @@ on:
     # matches this exact string (SEED_CRON).
     - cron: "37 9 * * 0"
 
+# A newer run of the same kind cancels an older one, so main runs the suite
+# once, on its newest commit. A seed (dispatch `seed=true`) is its own kind:
+# a merge landing mid-seed must not cancel it (it did, 2026-10-23), and the
+# scheduled runs (nightly, the Sunday seed) are another.
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'schedule' && 'nightly' || 'run' }}
+  group: checks-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'schedule' && 'scheduled' || (inputs.seed && 'seed' || 'run') }}
   cancel-in-progress: true
 
 env:

@@ -158,6 +158,7 @@ on GitHub for that branch, which posts `Local CI` when green:
 
 ```bash
 gh stack merge <top pr> --yes --squash      # all-or-nothing, bottom-up
+gh pr merge <n> --squash                    # a single PR (one-layer "stacks" aren't stacked on GitHub)
 ```
 
 A wake-up or notification that says the checks passed is a hint, not proof.
@@ -239,7 +240,8 @@ $0.032; check spend with the WarpBuild MCP: `GET /reports/billing/ci`)
     restored runner save: a snapshot of a snapshot boots runners that never
     pick up a job.
   - **Expiry:** snapshots expire after 15 days, which the weekly seed
-    covers. Reseed by hand after a toolchain or lockfile change that makes
+    covers. A seed has its own concurrency group, so a merge landing
+    mid-seed doesn't cancel it. Reseed by hand after a toolchain or lockfile change that makes
     warm runs slow.
 - **Jobs stuck queued** while WarpBuild boots runners that are purged within
   a minute (`cleanup_hook`; `GET /runner_instance` in the WarpBuild MCP
