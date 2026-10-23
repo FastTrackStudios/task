@@ -1,0 +1,84 @@
+# Set up a GitHub-HOSTED runner for a job that runs cargo but compiles
+# nothing of Task's (the plan job, the PR checks): no nix, which costs
+# ~80 s to install and enter the 3 GB `.#ci` shell.
+#
+#   rustc / cargo / rustfmt  rustup (preinstalled on the image), the
+#                            channel `rust-toolchain.toml` pins, minimal
+#                            profile + rustfmt. RUSTUP_TOOLCHAIN is set so
+#                            the toolchain file doesn't auto-install its
+#                            other components (clippy, rust-src, wasm32).
+#                            rust-toolchain.toml and nix/modules/toolchain.nix
+#                            are one pin, so this is the shell's compiler.
+#   cargo-rail               the RELEASED binary at exactly the version
+#                            nix/modules/cargo-rail.nix builds,
+#                            checksum-verified, so rail never drifts from
+#                            the shell's.
+#   just                     prebuilt (taiki-e/install-action), so steps
+#                            run the same `just ci-*` recipes as locally.
+#   cargo's dependencies     ~/.cargo registry + git checkouts from the
+#                            Actions cache, keyed on Cargo.lock. Without it
+#                            the first cargo command spends ~50 s fetching
+#                            every git dependency. Saved only by a caller
+#                            passing `save-deps: true` (the plan job on
+#                            pushes to main), so PRs read main's entry and
+#                            never spend the 10 GB budget.
+name: rustup + cargo-rail (no nix)
+description: The pinned toolchain via rustup (minimal + rustfmt), the pinned cargo-rail release, just, and cargo's dependencies from the cache.
+inputs:
+  save-deps:
+    description: "'true' to `cargo fetch` and save the dependency cache (main only)."
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Rust toolchain (rust-toolchain.toml, minimal + rustfmt)
+      shell: bash
+      run: |
+        set -euo pipefail
+        channel="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+        [ -n "$channel" ] || { echo "::error::no channel in rust-toolchain.toml"; exit 1; }
+        rustup toolchain install "$channel" --profile minimal --component rustfmt --no-self-update
+        echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+    - name: cargo-rail (the nix pin's release binary)
+      shell: bash
+      run: |
+        set -euo pipefail
+        rail="$(sed -n 's/^ *version = "\([^"]*\)";.*/\1/p' nix/modules/cargo-rail.nix | head -1)"
+        [ -n "$rail" ] || { echo "::error::no cargo-rail version in nix/modules/cargo-rail.nix"; exit 1; }
+        dl="${RUNNER_TEMP}/cargo-rail"
+        mkdir -p "$dl"
+        url="https://github.com/loadingalias/cargo-rail/releases/download/v${rail}"
+        curl -fsSL -o "$dl/rail.zip" "$url/cargo-rail-x86_64-unknown-linux-gnu.zip"
+        curl -fsSL -o "$dl/SHA256SUMS" "$url/SHA256SUMS"
+        (cd "$dl" && grep ' cargo-rail-x86_64-unknown-linux-gnu.zip$' SHA256SUMS \
+          | sed 's/cargo-rail-x86_64-unknown-linux-gnu.zip$/rail.zip/' | sha256sum -c --quiet)
+        unzip -q -o "$dl/rail.zip" -d "$dl"
+        echo "$dl/cargo-rail" >> "$GITHUB_PATH"
+        "$dl/cargo-rail/cargo-rail" --version
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: just
+    - name: Restore cargo's dependencies
+      id: deps
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-deps-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-deps-${{ runner.os }}-
+    - name: Fetch cargo's dependencies
+      if: ${{ inputs.save-deps == 'true' && steps.deps.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: cargo fetch --locked
+    - name: Save cargo's dependencies
+      if: ${{ inputs.save-deps == 'true' && steps.deps.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-deps-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}

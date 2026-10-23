@@ -6,21 +6,22 @@
 # build, so the expensive half of the PR gate runs on the developer's own
 # warm target dir, and CI pays for builds once per merge:
 #
-#   PR into main   free hosted checks that compile nothing (fmt, change
-#                  files, versions, manifests, architect-ui sheet),
-#                  plus the `local-ci` commit status: the
-#                  pre-push hook (prek.toml -> scripts/ci-local.sh)
-#                  ran clippy, the wasm check and the tests `cargo rail
-#                  plan` says the change affects, and posted it. Both are
-#                  required on main.
+#   PR into main   a minimal free hosted backstop that compiles nothing
+#                  (fmt, change files), plus the `local-ci` commit
+#                  status: the pre-push hook (prek.toml ->
+#                  scripts/ci-local.sh) ran the static guards (versions,
+#                  manifests, the architect-ui sheet), clippy, the wasm
+#                  check and the tests `cargo rail plan` says the change
+#                  affects, and posted it. Both are required on main.
 #   push to main   the FULL set on WarpBuild, once per merge. It catches two
 #                  PRs that each passed alone but break together, and its
 #                  green aggregator is what `just release-tag` requires.
 #
 # WHERE EACH JOB RUNS:
 #
-#   plan            ubuntu-latest   rustup + the released cargo-rail binary
-#   pr-checks       ubuntu-latest   nix .#ci, no rust-cache (no codegen)
+#   plan            ubuntu-latest   rustup + cargo-rail (rust-rail), to narrow only
+#   pr-checks       ubuntu-latest   rustup + cargo-rail + just (rust-rail), no nix
+#   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for PRs
 #   lint            warp 8x  + snapshot task-lint    clippy, docs (check mode)
 #   tests           warp 16x + snapshot task-tests   the nextest build
 #   wasm            ubuntu-latest   nix .#ci + rust-cache (checks-wasm): 3 min
@@ -128,12 +129,9 @@ env:
 
 jobs:
   # Hosted, and without nix: the plan only resolves cargo's graph and
-  # diffs two commits, so it needs cargo and cargo-rail, not the dev
-  # shell's ~3 GB closure, and installs them only when it actually has to
-  # narrow (a dispatch with `base`): the pinned rustc with the minimal
-  # profile, and the RELEASED cargo-rail binary at exactly the version
-  # nix/modules/cargo-rail.nix builds (checksum-verified), so the plan and
-  # the shell's rail never drift.
+  # diffs two commits, so it needs cargo and cargo-rail (.github/actions/
+  # rust-rail), not the dev shell's ~3 GB closure, and installs them only
+  # when it actually has to narrow (a dispatch with `base`).
   plan:
     name: Plan affected crates
     runs-on: ubuntu-latest
@@ -179,6 +177,11 @@ jobs:
         with:
           path: ~/rail-evidence
           key: rail-evidence-${{ runner.os }}-${{ runner.arch }}-cargo.test-${{ steps.base.outputs.sha }}
+      # Toolchain + cargo-rail, only to narrow. Fail open: if this fails the
+      # plan step finds no cargo-rail and runs everything.
+      - uses: ./.github/actions/rust-rail
+        if: ${{ steps.base.outputs.sha != '' }}
+        continue-on-error: true
       - name: Plan affected crates
         id: filter
         env:
@@ -241,24 +244,8 @@ jobs:
           esac
           [ -n "${BASE}" ] || run_all "no comparison base"
 
-          # Narrowing: install the pinned toolchain (minimal) and cargo-rail.
-          channel="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
-          rail="$(sed -n 's/^ *version = "\([^"]*\)";.*/\1/p' nix/modules/cargo-rail.nix | head -1)"
-          [ -n "${channel}" ] && [ -n "${rail}" ] || run_all "cannot read the toolchain/cargo-rail pins"
-          rustup toolchain install "${channel}" --profile minimal --no-self-update \
-            || run_all "rustup ${channel} failed"
-          export RUSTUP_TOOLCHAIN="${channel}"
-          dl="${RUNNER_TEMP}/cargo-rail"
-          mkdir -p "${dl}"
-          url="https://github.com/loadingalias/cargo-rail/releases/download/v${rail}"
-          { curl -fsSL -o "${dl}/rail.zip" "${url}/cargo-rail-x86_64-unknown-linux-gnu.zip" \
-            && curl -fsSL -o "${dl}/SHA256SUMS" "${url}/SHA256SUMS" \
-            && (cd "${dl}" && grep ' cargo-rail-x86_64-unknown-linux-gnu.zip$' SHA256SUMS \
-                | sed 's/cargo-rail-x86_64-unknown-linux-gnu.zip$/rail.zip/' | sha256sum -c --quiet) \
-            && unzip -q -o "${dl}/rail.zip" -d "${dl}"; } \
-            || run_all "cargo-rail ${rail} download failed"
-          export PATH="${dl}/cargo-rail:${PATH}"
-          cargo rail --version || run_all "cargo-rail does not run"
+          # Narrowing: rust-rail (above) installed the toolchain and rail.
+          cargo rail --version || run_all "cargo-rail is not installed (rust-rail failed)"
 
           ev=()
           if [ -f "${EVIDENCE}" ]; then
@@ -278,13 +265,29 @@ jobs:
           echo "${gates}" >> "$GITHUB_OUTPUT"
           echo "${gates}"
 
-  # A PR into main: everything here compiles nothing of Task's, so it runs
-  # on a free hosted runner without a rust-cache. Clippy, wasm and the
-  # tests are the pre-push hook's (the `local-ci` status).
-  pr-checks:
-    name: PR checks (fmt + change files + manifests)
+  # Main is the only writer of the cargo-dependency cache the PR checks
+  # restore (the 10 GB Actions cache budget): fetched once per lockfile,
+  # on a free runner, and no job waits on it.
+  deps-cache:
+    name: Cargo dependency cache
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-rail
+        with:
+          save-deps: "true"
+
+  # A PR into main: the minimal free backstop for a push the hook vouched
+  # for. Nothing here compiles, so no nix: rustup + cargo-rail + main's
+  # cargo-dependency cache (.github/actions/rust-rail). Clippy, wasm, the
+  # tests and the static guards (versions, manifests, the architect-ui
+  # sheet) are the pre-push hook's (`just ci-local`, the `local-ci` status).
+  pr-checks:
+    name: PR checks (fmt + change files + rail routes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: plan
     if: ${{ needs.plan.outputs.light == 'true' }}
     steps:
@@ -293,10 +296,7 @@ jobs:
           # The merge commit plus its parents: the change check diffs
           # against the first parent (the base it merges into).
           fetch-depth: 2
-      - uses: ./.github/actions/hosted-nix-rust
-        with:
-          kind: pr
-          rust-cache: "false"
+      - uses: ./.github/actions/rust-rail
       - name: fmt
         run: just ci-fmt
       # Every crate the PR changes needs a cargo-rail change file
@@ -304,18 +304,6 @@ jobs:
       - name: Change files
         if: ${{ !cancelled() }}
         run: just ci-changes "$(git rev-parse HEAD^1)"
-      - name: One version everywhere
-        if: ${{ !cancelled() }}
-        run: just ci-versions
-      - name: Manifests + lockfile
-        if: ${{ !cancelled() }}
-        run: just ci-manifests
-      # Task's tokens come from architect-ui through apps/.architect-ui;
-      # fails on a re-vendored copy or an import that bypasses the link
-      # (STA-392).
-      - name: architect-ui sheet
-        if: ${{ !cancelled() }}
-        run: just ci-architect-css
 
   # THREE full-run jobs, one per BUILD KIND.
   #

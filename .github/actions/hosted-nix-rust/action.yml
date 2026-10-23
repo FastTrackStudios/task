@@ -20,10 +20,6 @@ inputs:
   kind:
     description: Build kind; the rust-cache shared-key (lint, wasm).
     required: true
-  rust-cache:
-    description: Restore (and on main save) the kind's rust-cache. Off for jobs that compile nothing (the PR checks).
-    required: false
-    default: "true"
 runs:
   using: composite
   steps:
@@ -97,7 +93,6 @@ runs:
     # image's rustup (which would download the rust-toolchain.toml pin).
     # Dependencies only: rust-cache drops the workspace's own crates.
     - uses: Swatinem/rust-cache@v2
-      if: ${{ inputs.rust-cache == 'true' }}
       with:
         shared-key: checks-${{ inputs.kind }}
         save-if: ${{ github.ref == 'refs/heads/main' }}
