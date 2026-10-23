@@ -1,0 +1,9 @@
+{
+  "variant_catalog_version": 2,
+  "work": "wasm",
+  "variants": [
+    { "id": "web", "dimensions": { "target": "wasm32" }, "cargo_roots": [{ "package": "task-app-web" }] },
+    { "id": "dial", "dimensions": { "target": "wasm32" }, "cargo_roots": [{ "package": "task-dial" }] },
+    { "id": "files-client", "dimensions": { "target": "wasm32" }, "cargo_roots": [{ "package": "files-client" }] }
+  ]
+}

@@ -43,3 +43,11 @@ paths = [
 [plan.work.test-runner]
 scope = "repository"
 paths = [".config/nextest.toml"]
+
+# The browser build (`just ci-wasm`): one catalog row per package checked
+# for wasm32, so the plan names WHICH of them a change reaches instead of
+# scripts/ci-rail-plan.py guessing from a hard-coded set. `kind = "all"`
+# means every row.
+[plan.work.wasm]
+scope = "variants"
+variant_catalog = ".config/rail-wasm.json"
