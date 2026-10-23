@@ -16,18 +16,18 @@
 # `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
 # already cached is harmless to re-run: cachix skips paths it holds.
 #
-# WHERE: Task's self-hosted `task` runner on the Mac Pro VM — one of the
-# few jobs kept off GitHub's hosted runners on purpose. The package is a
-# pure Nix build of the whole workspace (cargoArtifacts = null): ~61 min
-# cold on the Mac Pro, the better part of an hour or more and ~30 GB of
-# disk on a 4-vCPU hosted runner, and the runner's store keeps the result.
+# WHERE: WarpBuild 8x, cold. The package is a pure Nix build of the whole
+# workspace (cargoArtifacts = null): ~61 min cold on the Mac Pro, the
+# better part of an hour or more and ~30 GB of disk on a 4-vCPU hosted
+# runner. It runs once per release, so no snapshot: the result lives in
+# cachix, which is the point of the job.
 #
 # SECRET: CACHIX_AUTH_TOKEN, a repo Actions secret (owned by Keeper; a
 # cachix token with write access to `fasttrackstudio`). It reaches cachix
 # only through the environment. Without it the job fails loudly rather
 # than reporting a release cached that is not.
 
-name: desktop-cache
+name: Desktop cache
 
 on:
   workflow_call:
@@ -60,12 +60,19 @@ env:
 jobs:
   cache:
     name: task-desktop -> cachix
-    runs-on: [self-hosted, task]
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://fasttrackstudio.cachix.org
+            extra-trusted-public-keys = fasttrackstudio.cachix.org-1:r7v7WXBeSZ7m5meL6w0wttnvsOltRvTpXeVNItcy9f4=
 
       - name: Which release
         id: plan
@@ -79,9 +86,11 @@ jobs:
             || { echo "::error::no tag $tag — this caches a release that has been tagged (release.yml)"; exit 1; }
           v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
           [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "flake=github:${GITHUB_REPOSITORY}/${rev}#packages.x86_64-linux.task-desktop" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "version=$v"
+            echo "flake=github:${GITHUB_REPOSITORY}/${rev}#packages.x86_64-linux.task-desktop"
+          } >> "$GITHUB_OUTPUT"
           echo "release $tag = $rev"
 
       - name: Build
@@ -122,7 +131,7 @@ jobs:
           set -euo pipefail
           hash="$(basename "$OUT" | cut -d- -f1)"
           url="https://$CACHE.cachix.org/$hash.narinfo"
-          for i in $(seq 1 10); do
+          for _ in $(seq 1 10); do
             code="$(curl -s -o /dev/null -w '%{http_code}' -I "$url" || true)"
             [ "$code" = 200 ] && break
             sleep 6

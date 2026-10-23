@@ -605,7 +605,7 @@ cmd_tag() {
     local itag; itag="$(bash scripts/ghcr-images.sh tag "$target")"
     [ "$itag" = "$v" ] || die "$CHART at $(git rev-parse --short "$target") has appVersion $itag, not $v: the chart would deploy the wrong images"
     bash scripts/ghcr-images.sh check "$itag" "$target" \
-        || die "the images for v$v are not on GHCR yet (or not public). Wait for the 'images' workflow on $(git rev-parse --short "$target") (gh run list -w images.yml --commit $target), then re-run."
+        || die "the images for v$v are not on GHCR yet (or not public). Wait for the Images workflow on $(git rev-parse --short "$target") (gh run list -w images.yml --commit $target), then re-run."
 
     note "tagging v$v at $(git rev-parse --short "$target") on $branch (previous: ${latest:-none}). This deploys."
     # An annotated tag needs a committer identity; a bot checkout may have none.

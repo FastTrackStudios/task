@@ -40,7 +40,7 @@
 # The repo is public, so the hosted runners (incl. ubuntu-22.04-arm) cost
 # nothing; the build is cold every time (~1h), which a release can afford.
 
-name: node-binaries
+name: Node binaries
 
 on:
   workflow_call:
@@ -128,9 +128,11 @@ jobs:
             echo "::notice::$tag already carries node binaries — nothing to do (dispatch with replace=true to rebuild)"
             build=false
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "build=$build" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "ref=$ref"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
           echo "release $tag from $ref (build: $build)"
 
   build:

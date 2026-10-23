@@ -31,7 +31,7 @@
 # emergency, pin `targetRevision` in starcommand). A workflow_dispatch on
 # a tag re-runs the checks, the verification and the publishing.
 
-name: deploy
+name: Deploy
 
 on:
   push:
