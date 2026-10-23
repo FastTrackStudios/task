@@ -394,7 +394,7 @@ ci-manifests:
 # Crate-layout boundaries + ratcheted idioms (boundaries.toml), checked by
 # architect's xtask at a pinned release tag. Resolves graphs, compiles nothing
 # of Task's. Bump the tag with architect releases.
-architect_xtask_tag := "v0.9.15"
+architect_xtask_tag := "v0.9.24"
 ci-boundaries:
     #!/usr/bin/env bash
     set -euo pipefail
