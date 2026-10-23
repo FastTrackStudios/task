@@ -49,22 +49,38 @@ echo "ci-local: $(git rev-parse --short HEAD) against $(git rev-parse --short "$
 just ci-fmt
 just ci-changes "$base"
 
+# Rail evidence for the base, if `just rail-evidence` recorded it on this
+# machine: without it a changed file outside a crate's sources (docs,
+# fixtures) widens to the whole workspace. Evidence binds to the cargo
+# environment, so it's recorded here, not borrowed from CI.
+ev=()
+evf="$(git rev-parse --git-common-dir)/rail-evidence/$(git rev-parse "$base").json"
+if [ -f "$evf" ]; then
+  ev=(--evidence "$evf")
+  echo "ci-local: using rail evidence for the base"
+fi
+
 # Fail open, like CI: no honest plan means everything.
 plan="$(mktemp)"
 trap 'rm -f "$plan"' EXIT
 gates=""
-if cargo rail plan --from "$base" --to HEAD --json >"$plan"; then
+if cargo rail plan --from "$base" --to HEAD "${ev[@]}" --json >"$plan"; then
   gates="$(python3 scripts/ci-rail-plan.py "$plan")" || gates=""
 fi
-[ -n "$gates" ] || { echo "ci-local: no plan; running everything"; gates=$'cargo=true\ntests=true\ntest_filter=\nwasm=true'; }
+[ -n "$gates" ] || { echo "ci-local: no plan; running everything"; gates=$'cargo=true\nclippy=true\ntests=true\ntest_filter=\nwasm=true'; }
 gate() { sed -n "s/^$1=//p" <<<"$gates" | head -1; }
-echo "ci-local: cargo=$(gate cargo) tests=$(gate tests) wasm=$(gate wasm) filter=$(gate test_filter)"
+echo "ci-local: clippy=$(gate clippy) tests=$(gate tests) wasm=$(gate wasm) filter=$(gate test_filter)"
 
 if [ "$(gate tests)" = true ]; then
   TASK_CI_TEST_FILTER="$(gate test_filter)" just ci-tests
 fi
 if [ "$(gate cargo)" = true ]; then
   just ci-manifests
+fi
+# rail decides WHETHER clippy runs; it always runs --workspace (a `-p`
+# subset changes feature unification and leaves a second artifact set),
+# and on a warm tree that re-lints only what changed anyway.
+if [ "$(gate clippy)" = true ]; then
   just ci-clippy
 fi
 if [ "$(gate wasm)" = true ]; then

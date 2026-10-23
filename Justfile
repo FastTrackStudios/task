@@ -521,6 +521,20 @@ capn-precommit:
 ci-local BASE="":
     bash scripts/ci-local.sh {{BASE}}
 
+# Record rail's observed-input evidence for HEAD (clean, normally main
+# after a pull), so `ci-local` against this commit narrows a docs or
+# fixture change instead of running everything. Kept in the git dir,
+# keyed by commit. Costs one test build + one clippy, both warm.
+rail-evidence: css
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$(git rev-parse --git-common-dir)/rail-evidence"
+    mkdir -p "$dir"
+    ev="$dir/$(git rev-parse HEAD).json"
+    cargo rail plan evidence --work cargo.test -o "$ev" -- test --workspace --locked --no-run
+    cargo rail plan evidence --work cargo.clippy -o "$ev" -- clippy --workspace --all-targets -- -D warnings
+    echo "rail evidence: $ev"
+
 # ── Aliases ──────────────────────────────────────────────────────────────
 
 alias c := check
