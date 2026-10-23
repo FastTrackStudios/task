@@ -189,6 +189,8 @@ jobs:
       skip: ${{ steps.filter.outputs.skip }}
       ref: ${{ steps.filter.outputs.ref }}
       record: ${{ steps.filter.outputs.record }}
+      # `lower` (a stacked PR below the top: lint only), `top`, or empty.
+      stack: ${{ steps.filter.outputs.stack }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -196,16 +198,31 @@ jobs:
           fetch-depth: 0
       # Which commit to plan against, decided before the evidence restore
       # (its cache key is that commit).
+      #
+      # A stacked PR (GitHub's native stacks: `pull_request.stack`) runs
+      # the tests once, on the TOP layer, so the top plans against where
+      # the whole stack leaves the trunk — every layer's change, not just
+      # its own. That base is a trunk commit, which also has rail evidence.
+      # The layers below plan against their own parent and skip the tests
+      # (the plan step).
       - name: Choose the comparison base
         id: base
         env:
           DISPATCH_BASE: ${{ inputs.base }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          STACK_SIZE: ${{ github.event.pull_request.stack.size }}
+          STACK_POS: ${{ github.event.pull_request.stack.position }}
+          STACK_BASE_SHA: ${{ github.event.pull_request.stack.base.sha }}
         run: |
           set -u
           base=""
           case "${GITHUB_EVENT_NAME:-}" in
-            pull_request) base="${BASE_SHA}" ;;
+            pull_request)
+              base="${BASE_SHA}"
+              if [ -n "${STACK_SIZE}" ] && [ "${STACK_POS}" = "${STACK_SIZE}" ] && [ -n "${STACK_BASE_SHA}" ]; then
+                base="$(git merge-base "${STACK_BASE_SHA}" HEAD 2>/dev/null || echo "${STACK_BASE_SHA}")"
+                echo "stack: top layer (${STACK_POS}/${STACK_SIZE}); planning the whole stack"
+              fi ;;
             workflow_dispatch)
               if [ -n "${DISPATCH_BASE}" ]; then
                 git fetch --quiet origin "${DISPATCH_BASE}" || true
@@ -232,6 +249,8 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          STACK_SIZE: ${{ github.event.pull_request.stack.size }}
+          STACK_POS: ${{ github.event.pull_request.stack.position }}
           EVIDENCE: ~/rail-evidence/cargo.test.json
         run: |
           set -u
@@ -309,6 +328,21 @@ jobs:
           gates="$(python3 scripts/ci-rail-plan.py "${plan}")" \
             || run_all "plan parse failed"
           [ -n "${gates}" ] || run_all "plan parse produced no gates"
+          # A layer below the top of a stack runs the lint job only: fmt,
+          # change files, boundaries and clippy, which is `cargo check` with
+          # the lints, all on its own change. No wasm, no rustdoc, no tests:
+          # the top layer runs those once, against the whole stack (the base
+          # step). `checks-passed` reads a skipped job the plan did not want
+          # as passing, so the required check still answers on every layer.
+          # Merging a lower layer on its own lands it with only that lint;
+          # the full suite after every merge to main covers the rest.
+          if [ -n "${STACK_SIZE}" ] && [ -n "${STACK_POS}" ] && [ "${STACK_POS}" -lt "${STACK_SIZE}" ]; then
+            echo "plan: stack layer ${STACK_POS}/${STACK_SIZE}: lint only; tests, wasm and docs run on the top layer"
+            gates="$(printf '%s\n' "${gates}" | grep -v -e '^tests=' -e '^test_filter=' -e '^wasm=')"
+            gates="${gates}"$'\n''tests=false'$'\n''test_filter='$'\n''wasm=false'$'\n''stack=lower'
+          elif [ -n "${STACK_SIZE}" ]; then
+            gates="${gates}"$'\n''stack=top'
+          fi
           echo "${gates}" >> "$GITHUB_OUTPUT"
           echo "${gates}"
 
@@ -400,12 +434,12 @@ jobs:
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
         run: just ci-clippy
-      # PRs into main and every full run (push, nightly, PRs into
-      # release/**). rustdoc
-      # -D warnings isn't change-scoped: it documents the whole workspace.
+      # PRs into main, the top layer of a stack, and every full run (push,
+      # nightly, PRs into release/**); never a layer below a stack's top.
+      # rustdoc -D warnings isn't change-scoped: it documents the whole workspace.
       # Same check-mode dependency metadata as clippy, so it lives here.
       - name: Docs
-        if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' && (github.base_ref == 'main' || needs.plan.outputs.full == 'true') }}
+        if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' && needs.plan.outputs.stack != 'lower' && (github.base_ref == 'main' || needs.plan.outputs.stack == 'top' || needs.plan.outputs.full == 'true') }}
         run: just ci-docs
       - name: Disk
         if: ${{ always() }}
