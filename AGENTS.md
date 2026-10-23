@@ -1,0 +1,195 @@
+# Working in this repo
+
+This file is the one set of agent instructions for the repo. `CLAUDE.md`
+is a symlink to it, because Claude Code reads that name; edit this file.
+
+## What this is for
+
+Task is the backend the sibling apps share, and the nearest goal is that
+**a musician signs in on any machine and their work is there**: every
+chart, every track and DAW session, every guitar rig patch and its
+downloads. Keyflow, Session, Signal and Ignition are clients of this
+store, not stores of their own.
+
+Read `VISION.md` § "The rig loads from the cloud" before designing
+anything in this space, and `docs/adr/0003-task-as-the-shared-backend.md`
+(with `0004` for what it revised) for the decisions already made. The one
+rule that decides most arguments: **the manifest says what a thing is,
+the File Root holds what it weighs** — identity and metadata under
+`resources/` or the vault, bytes in a File Root, so subscribing to a
+library moves names rather than gigabytes.
+
+Wiring an app (Session, Signal, Ignition, Keyflow) to Task: follow
+`docs/app-integration.md` — sign-in, stores, safe saves, manifests,
+libraries, live events, and what is not built yet.
+
+## The dev loop: server + webapp, owned by you
+
+You (the agent) own the lifecycle of the demo processes: launch them
+yourself as background tasks, read their logs, and restart them after
+rebuilding. Don't ask the user to run them.
+
+```bash
+just demo serve    # both example servers; plants the seed idempotently first
+just demo web      # webapp via dx serve on :8766 (proxies /org,/media,/blobs → :18080)
+just demo desktop  # native desktop app (frameless chrome; window pos via TASK_WINDOW_POS)
+just mobile-sim    # iPhone app on the booted simulator, signed in as the demo cast against :18080
+just demo telemetry  # local grafana/otel-lgtm on :3000, OTLP :4318 — servers auto-attach
+```
+
+Ports (fixed — the dx proxy in `apps/web/Dioxus.toml` is committed against them):
+
+| what | port |
+|---|---|
+| ACME Audio server (`DEFAULT_VOX_URL`, proxy target) | 18080 |
+| VNT Video server (federation peer) | 9102 |
+| webapp (dx serve) | 8766 |
+| Grafana / OTLP | 3000 / 4318 |
+
+Notes that save time:
+
+- **Plant is idempotent** — `serve` re-plants on every start; files already
+  on disk are kept, missing ones (and reconciliations like part order) are
+  topped up. To reseed from scratch, delete the demo data roots the script
+  prints and serve again.
+- **ffmpeg must be on PATH when planting** or video deliverables stay
+  outstanding (the dev shell carries it; `nix/modules/toolchain.nix`).
+- **Stale shells**: if a `dx` launch fails with a compiler-wrapper error,
+  run it as `env -u RUSTC_WRAPPER dx ...` (sccache was removed; old shells
+  may still export the wrapper).
+- Run each process with `run_in_background` and tee output to the
+  scratchpad (e.g. `serve.log`, `web.log`) so you can read it later.
+- Never `pkill -f "dx serve"` — the pattern matches the user's own panes.
+  Kill your recorded PIDs.
+
+## Screenshotting and testing the UI
+
+Use the Chrome browser tools against `http://localhost:8766`. Debug builds
+auto-sign-in as Alice via `TASK_DEMO_CAST` (baked by the demo script);
+logout shows the cast picker with every seeded account (password in
+`example_org::PASSWORD`). The loop:
+
+1. `just demo serve` + `just demo web` (background, logs in scratchpad).
+2. Wait for dx to report the build served, then open/navigate a tab.
+3. Screenshot, interact, read console/network on failures.
+4. After a code change dx rebuilds on save — wait for the rebuild line in
+   `web.log` before re-screenshotting.
+
+For the desktop app, `just demo desktop`; `.env` pins the window to the
+right display (`TASK_WINDOW_POS`, `TASK_WINDOW_FULLSCREEN`).
+
+## Policy: everything lives in the suite and the seed
+
+**All development must be represented in the integration test suite AND in
+the seeded example vault.** A feature that exists only in the UI, or only
+in a unit test, is not done:
+
+- **Integration suite** — `tests/integration` (plus feature e2e tests like
+  `apps/server/tests`). New behavior gets a scenario stage or e2e test
+  that exercises it through the router/transport, not the backend.
+- **Seeded example** — `examples/studio` (committed tree) +
+  `apps/server/src/example_org.rs` (`DECLARED`, the cast, deliverables,
+  tasks). If a demo user can't reach the feature from the planted world,
+  extend the seed so they can.
+
+The seed is a contract, enforced by `example_org::declared_tests`
+(`cargo nextest run -p task-server -E 'test(declared_tests)'`): every
+declared project/part must have its committed tree, every audio
+deliverable a committed song folder (`Resources/songs/<slug>/manifest.json`
+— slugs via `example_org::song_slug`), every capability in the
+vocabulary. Video deliverables are intentionally *not* committed — the
+seeder generates them with ffmpeg at plant time, into the project's own
+directory (`files/Projects/<dir>/Deliverables/`), and adopts each
+declared project directory as a File Root named after the project
+(`apps/server/tests/it/demo_plant.rs` pins all of this, including the
+two-version history each fresh video gets: rough cut checkpointed,
+final rendered over it, checkpointed again). That root is what makes
+deliverables reviewable: video plays through the review platform
+(`files_ui::review::{MiniPlayer, ReviewScreen}` — renditions, frame
+comments, version compare), audio through the global player
+(`task-player-ui`) with a Review door into the same surface (waveform
+stage from the Peaks rendition). Never embed a bare
+`<video>`/`<audio>` element for deliverable media.
+
+Committed audio is generated reproducibly by
+`python3 examples/studio/tools/gen_audio.py` (12 kHz mono WAVs, small
+enough for git). Add new songs there, never by hand.
+
+## Branches, PRs and releases
+
+Fleet flow v4: the **`release-workflow` fleet skill** is the source of
+truth (branch names, PR titles, change files, CalVer, hotfixes, rollback);
+Task's specifics are in `skills/release-workflow.md`. Shipping any change,
+from first branch through stack, local CI, PRs and merge to a green main,
+follows `skills/ship-stack.md`. In short:
+
+- `main` is the only long-lived branch. Branch from `origin/main`
+  (`<type>/<sta-123|no-issue>-<slug>`), open a draft PR **into `main`** with
+  a conventional-commit title and the template filled in, and add a change
+  file for every crate you touched:
+
+  ```bash
+  git fetch origin && git switch -c fix/sta-123-slug origin/main
+  cargo rail change add <crates> --bump <none|patch|minor|major> -m "Fixed …"
+  gh pr create --draft --base main --title "fix(files): …"
+  ```
+
+- The PR gate is split. Your push runs the expensive half. The git hooks
+  are prek's (`prek.toml`; `just install-hooks` once per clone). A commit
+  runs rustfmt, shellcheck and actionlint on the staged files; a hook that
+  rewrites a file fails the commit, so `git add` and commit again. A push
+  runs `just ci-local`, which covers fmt, change files, the static guards
+  (one version everywhere, manifests + lockfile, the architect-ui sheet),
+  and the clippy, wasm and tests that `cargo rail plan` says the change
+  affects. It runs on the warm local target dir and, when green, marks the
+  pushed commits with the `local-ci` status. `CI` on the PR then runs
+  only a minimal free backstop on rustup, no nix (fmt, change files, rail
+  routes). A
+  stack is vouched for when you push it from its TOP branch. For a long
+  run, `just ci-local` BEFORE pushing: the hook then finds the pass and
+  the push is instant (a long hook can outlast git's connection to
+  GitHub). With no hook, a dirty tree or `SKIP=local-ci`, run
+  `gh workflow run checks.yml --ref <branch>` instead:
+  it posts `local-ci` when green. PRs squash-merge, and the full set
+  (clippy, docs, every test) runs on WarpBuild after every merge to `main`.
+- A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
+  `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
+  a push to `main` deploys nothing.
+
+Never use GitHub's own skip tokens here — the bracketed `skip ci`,
+`ci skip`, `no ci`, `skip actions` and `actions skip` forms. They are
+intercepted before any workflow starts and would suppress `deploy.yml`
+too.
+
+And never write one of those tokens in a commit message *at all*, even to
+say not to use it: GitHub scans the whole message, subject and body, so a
+line explaining the trap springs it. (This is not hypothetical — the
+commit that added this section did exactly that and silently produced no
+CI run.) Refer to them unbracketed, as above.
+
+## Specs and coverage
+
+Rules live in `docs/spec/`; coverage is tracked with `t[impl]`/`t[verify]`
+markers and the gaps in `docs/spec/unmet.md`. When you meet a rule, update
+both.
+
+## Iterating on sync
+
+Two-machine behaviour — the files daemon, replicas, pulls, forks — does
+not reproduce by reading code, and chasing it through production costs
+half an hour a round trip. Put a seeded server and a sync agent on one
+desk instead: `features/files/docs/iterating-on-sync.md` sets both up in
+about two minutes, says which log lines carry the answer, and lists the
+traps (a replica that arrives unwatched, a pull that beats the cadence,
+and `just ci` failing because the demo server is still holding :18080).
+
+## Observability
+
+The span is the wide event: enrich it with `architect_telemetry::wide::set`,
+never scatter log or print lines. Field registry, hard rules, TraceQL/LogQL
+cookbook and the `telemetry_*` MCP tools: `docs/observability.md`.
+
+## File writing
+
+Use the Write/Edit tools for file creation — never python or shell
+heredocs.

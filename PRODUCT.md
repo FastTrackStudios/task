@@ -91,7 +91,7 @@ used, but are not the core jobs for this audience.
 - Every action a person can take is an RPC an agent can take; the UI
   holds no privileged path.
 - Deliverable media is never a bare `<video>`/`<audio>` — it plays
-  through the review platform or the global player (CLAUDE.md).
+  through the review platform or the global player (AGENTS.md).
 - Undecided: pricing, licensing and any hosted offering.
 
 ## Brand Commitments
