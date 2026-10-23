@@ -11,35 +11,24 @@
 #                  status the pre-push hook posts (prek.toml ->
 #                  scripts/ci-local.sh: the static guards, clippy, wasm and
 #                  the rail-planned tests). Main requires both.
-#   push to main   the FULL set on WarpBuild, once per merge. It catches two
-#                  PRs that each passed alone but break together, and its
-#                  green `CI passed` is what `just release-tag` requires.
+#   push to main   the FULL set, once per merge. It catches two PRs that each
+#                  passed alone but break together, and its green
+#                  `CI passed` is what `just release-tag` requires.
 #
-# WHERE EACH JOB RUNS:
+# WHERE EACH JOB RUNS: all on GitHub's free hosted runners (the repo is
+# public). Nobody waits on this workflow except `release-tag`, so a slower
+# free runner beats a fast billed one (WarpBuild until 2026-10-23).
 #
 #   plan            ubuntu-latest   rustup + cargo-rail (rust-rail), to narrow only
 #   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for pr.yml
-#   lint            warp 8x  + snapshot task-lint    clippy, docs (check mode)
-#   tests           warp 16x + snapshot task-tests   the nextest build
+#   lint            ubuntu-latest   nix .#ci + rust-cache (checks-lint): clippy, docs
+#   tests           ubuntu-latest   nix .#ci + rust-cache (checks-tests): the nextest build
 #   wasm            ubuntu-latest   nix .#ci + rust-cache (checks-wasm): 3 min
-#   checks-passed   ubuntu-latest   the required aggregator
+#   checks-passed   ubuntu-latest   the aggregator
 #
-# The repo is public, so hosted standard runners cost nothing; WarpBuild
-# bills per started minute (2x $0.004, 8x $0.016, 16x $0.032 in 2026-10),
-# so only the two jobs that build the workspace run there. Their snapshots
-# (.github/actions/warp-nix) keep /nix and the target dir, so a run after a
-# merge compiles only what changed since the snapshot.
-#
-# SNAPSHOTS ARE SEEDED, NEVER CHAINED. Only a SEED run saves one: the
-# weekly seed (Sunday cron below) or a dispatch with `-f seed=true`. It
-# boots from WarpBuild's base image (`snapshot.enabled=true`), builds cold
-# and saves. Every other run restores (`snapshot.key=<alias>`) and saves
-# nothing. Saving from a runner that was itself restored built a snapshot
-# of a snapshot, and its runners never picked up a job (2026-10-23).
-# Snapshots expire after 15 days, so weekly keeps them alive. Reseed by
-# hand after a toolchain or lockfile change that makes warm runs slow:
-#
-#   gh workflow run checks.yml --ref main -f seed=true
+# Each build kind restores its dependencies from a rust-cache saved on
+# main (.github/actions/hosted-nix-rust); the workspace's own crates
+# rebuild every run. The runner's unused SDKs are deleted first for disk.
 #
 # Toolchain comes from the repo flake: every job enters `.#ci` once (rust
 # 1.98 pin, wasm target, clang env for ring, native headers, tailwindcss,
@@ -57,10 +46,13 @@
 # changes (.config/rail.toml [plan.work.*]), workspace scope, or any rail
 # failure FAIL OPEN to the full set.
 #
-# CACHE (hosted wasm): Swatinem/rust-cache, SAVED ONLY ON MAIN. A repo gets
-# 10 GB of Actions cache, evicted LRU across all branches; with main the
-# only writer the budget holds one entry per kind (+ the tiny rail
-# evidence and cargo-rail entries).
+# CACHE: Swatinem/rust-cache, one entry per build kind (checks-lint,
+# checks-tests, checks-wasm), SAVED ONLY ON MAIN. A repo gets 10 GB of
+# Actions cache, evicted LRU across all branches; with main the only
+# writer the budget holds one entry per kind (+ the small rail evidence,
+# cargo-rail and cargo-dependency entries). The tests entry (dependency
+# codegen) is the big one: watch `gh cache list` if runs start restoring
+# nothing.
 
 name: CI
 
@@ -78,11 +70,9 @@ name: CI
 #                       everything and, when green, posts `Local CI` on the
 #                       branch's head (for a push the hook couldn't vouch
 #                       for); add `-f base=main` to check only what the
-#                       branch changed, `-f seed=true` to reseed the snapshots.
+#                       branch changed.
 #   nightly             the FULL set on main, unless a push run already
 #                       passed at main's head (nothing merged since).
-#   weekly seed         Sunday: the FULL set on main from the base image,
-#                       saving fresh snapshots.
 #
 # A merge never deploys: production changes only when a v* tag is pushed
 # (deploy.yml).
@@ -99,24 +89,14 @@ on:
         description: "Only check crates affected since this ref (e.g. main). Empty = everything."
         required: false
         default: ""
-      seed:
-        description: "Seed: boot from the base image, build cold, save fresh WarpBuild snapshots."
-        type: boolean
-        required: false
-        default: false
   schedule:
     # Nightly (skipped when nothing merged since main's last green run).
     - cron: "17 10 * * *"
-    # Weekly seed: fresh snapshots from the base image. The plan job
-    # matches this exact string (SEED_CRON).
-    - cron: "37 9 * * 0"
 
-# Nothing on main is ever cancelled by a newer run: every push, dispatch,
-# nightly and seed gets its own group (the run id), so each merge's full
-# suite runs to the end and every main commit gets its own `CI passed`. (A
-# shared per-ref group with cancel-in-progress let a merge cancel a seed
-# mid-build, 2026-10-23.) Only a hotfix PR's newer push cancels its older
-# run. To save the minutes of a superseded main run, cancel it by hand.
+# Nothing on main is ever cancelled by a newer run: every push, dispatch
+# and nightly gets its own group (the run id), so each merge's full suite
+# runs to the end and every main commit gets its own `CI passed`. Only a
+# hotfix PR's newer push cancels its older run.
 concurrency:
   group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -129,17 +109,9 @@ env:
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
   # Terse, stable logs — this is CI, not a terminal.
   CARGO_TERM_COLOR: never
-  # Incremental compilation helps repeated edits in one tree; a CI delta is
-  # a whole merge, and incremental output is dead weight in a snapshot.
+  # Incremental compilation helps repeated edits in one tree; a CI run is a
+  # fresh tree, and incremental output only bloats the rust-cache.
   CARGO_INCREMENTAL: "0"
-  # Every build step runs through this, as its own build KIND
-  # (checks-tests, checks-clippy, …): it records which units of the target
-  # dir that step used, fresh or rebuilt, and the last step sweeps
-  # everything no kind's latest build used, so a snapshot keeps exactly
-  # one build. See scripts/target-sweep.py and docs/agents/build-strategy.md.
-  # --record-failed: a red test run still compiled, and its artifacts are
-  # what the next run needs warm.
-  SWEEP_RUN: python3 scripts/target-sweep.py run --record-failed
 
 jobs:
   # Hosted, and without nix: the plan only resolves cargo's graph and
@@ -159,27 +131,11 @@ jobs:
       skip: ${{ steps.filter.outputs.skip }}
       ref: ${{ steps.filter.outputs.ref }}
       record: ${{ steps.filter.outputs.record }}
-      # A seed run: the WarpBuild jobs boot from the base image and save.
-      seed: ${{ steps.seed.outputs.seed }}
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history: the plan needs both diff endpoints' ancestry.
           fetch-depth: 0
-      - name: Seed run?
-        id: seed
-        env:
-          INPUT_SEED: ${{ inputs.seed }}
-          SCHEDULE: ${{ github.event.schedule }}
-          SEED_CRON: "37 9 * * 0"
-        run: |
-          seed=false
-          case "${GITHUB_EVENT_NAME:-}" in
-            workflow_dispatch) [ "${INPUT_SEED}" = true ] && seed=true ;;
-            schedule) [ "${SCHEDULE}" = "${SEED_CRON}" ] && seed=true ;;
-          esac
-          echo "seed=${seed}" >> "$GITHUB_OUTPUT"
-          echo "seed: ${seed}"
       # Which commit to plan against (only a dispatch with `base` narrows),
       # decided before the evidence restore (its cache key is that commit).
       - name: Choose the comparison base
@@ -215,7 +171,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE: ${{ steps.base.outputs.sha }}
-          SEED: ${{ steps.seed.outputs.seed }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -254,7 +209,6 @@ jobs:
             push)
               record; run_all "push to ${GITHUB_REF_NAME}: full set after every merge" ;;
             schedule)
-              [ "${SEED}" = true ] && { record; run_all "weekly seed: fresh snapshots from the base image"; }
               # Nothing merged since the last green push run: nothing new
               # to learn, and every full run is billed.
               green="$(gh run list --workflow checks.yml --commit "${GITHUB_SHA}" --event push \
@@ -304,20 +258,19 @@ jobs:
 
   # THREE full-run jobs, one per BUILD KIND.
   #
-  #   lint   warp 8x   fmt, manifests, architect-ui, clippy, docs:
-  #                    check/doc mode, no codegen.
-  #   tests  warp 16x  the nextest build (full codegen) + rail evidence.
-  #   wasm   hosted    the wasm32 check (another target triple).
+  #   lint   fmt, manifests, architect-ui, clippy, docs: check/doc mode,
+  #          no codegen.
+  #   tests  the nextest build (full codegen) + rail evidence.
+  #   wasm   the wasm32 check (another target triple).
   #
   # The three kinds share NO artifacts except build scripts and proc
   # macros (clippy re-checked 250 crates straight after the test build:
   # check-mode units are not the test build's units). So they run side by
-  # side, each with its own snapshot or cache.
+  # side, each with its own rust-cache entry.
   lint:
     name: Lint
-    # A seed boots from the base image and saves; every other run restores.
-    runs-on: ${{ needs.plan.outputs.seed == 'true' && 'warp-ubuntu-latest-x64-8x;snapshot.enabled=true' || 'warp-ubuntu-latest-x64-8x;snapshot.key=task-lint' }}
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' }}
     steps:
@@ -327,8 +280,9 @@ jobs:
           # dispatched branch, main for the nightly).
           ref: ${{ needs.plan.outputs.ref }}
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-          persist-credentials: false
-      - uses: ./.github/actions/warp-nix
+      - uses: ./.github/actions/hosted-nix-rust
+        with:
+          kind: lint
       # Every step is a `just ci-*` recipe; the Justfile is the single
       # source of truth, and `just ci` runs the same set locally.
       - name: fmt
@@ -348,36 +302,32 @@ jobs:
         run: just ci-architect-css
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
-        run: ${SWEEP_RUN} checks-clippy -- just ci-clippy
+        run: just ci-clippy
       # rustdoc -D warnings isn't change-scoped: it documents the whole
       # workspace. Same check-mode dependency metadata as clippy.
       - name: Docs
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
-        run: ${SWEEP_RUN} checks-docs -- just ci-docs
-      - name: Bound the target dir
+        run: just ci-docs
+      - name: Disk
         if: ${{ always() }}
         run: |
-          python3 scripts/target-sweep.py sweep --protect-hours 0 || true
-          du -sh "${CARGO_TARGET_DIR}" /nix/store 2>/dev/null || true
-          df -h "${CARGO_TARGET_DIR}" | tail -1
-      - uses: ./.github/actions/warp-snapshot-save
-        if: ${{ !cancelled() }}
-        with:
-          alias: task-lint
-          save: ${{ needs.plan.outputs.seed }}
+          du -sh target ~/.cargo /nix/store 2>/dev/null || true
+          df -h / | tail -1
 
   tests:
     name: Tests
-    runs-on: ${{ needs.plan.outputs.seed == 'true' && 'warp-ubuntu-latest-x64-16x;snapshot.enabled=true' || 'warp-ubuntu-latest-x64-16x;snapshot.key=task-tests' }}
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    # A cold workspace build on 4 vCPUs (dependencies from the rust-cache).
+    timeout-minutes: 120
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.tests == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
-          persist-credentials: false
-      - uses: ./.github/actions/warp-nix
+      - uses: ./.github/actions/hosted-nix-rust
+        with:
+          kind: tests
 
       # Full runs first record rail evidence for this commit: the recorder
       # wraps rustc for one `cargo test --no-run` (units already fresh keep
@@ -386,7 +336,9 @@ jobs:
       # only means later plans against this commit widen.
       - name: Tests
         env:
-          TASK_CI_TEST_THREADS: "16"
+          # A hosted runner's 4 vCPUs: more test threads than cores makes the
+          # dial-by-endpoint tests time out under load (STA-369).
+          TASK_CI_TEST_THREADS: "4"
           TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
           TASK_CI_TEST_FILTER: ${{ needs.plan.outputs.test_filter }}
           RECORD: ${{ needs.plan.outputs.record }}
@@ -396,17 +348,14 @@ jobs:
           # can never save the previous run's evidence under this commit.
           export EVIDENCE_DIR="$HOME/rail-evidence"
           rm -rf "${EVIDENCE_DIR}"
-          # Single quotes on purpose: the inner shell expands them.
-          # shellcheck disable=SC2016
-          ${SWEEP_RUN} checks-tests -- bash -c '
-            if [ "${RECORD}" = "true" ]; then
-              mkdir -p "${EVIDENCE_DIR}"
-              cargo rail plan evidence --work cargo.test \
-                --output "${EVIDENCE_DIR}/cargo.test.json" \
-                -- test --workspace --locked --no-run \
-                || echo "::warning::rail evidence not recorded; later plans against this commit widen"
-            fi
-            just ci-tests'
+          if [ "${RECORD}" = "true" ]; then
+            mkdir -p "${EVIDENCE_DIR}"
+            cargo rail plan evidence --work cargo.test \
+              --output "${EVIDENCE_DIR}/cargo.test.json" \
+              -- test --workspace --locked --no-run \
+              || echo "::warning::rail evidence not recorded; later plans against this commit widen"
+          fi
+          just ci-tests
       - name: Evidence key
         id: evidence
         if: ${{ always() && needs.plan.outputs.record == 'true' }}
@@ -427,23 +376,11 @@ jobs:
           path: ${{ runner.temp }}/nextest-ci.log
           if-no-files-found: ignore
           retention-days: 7
-      # Cargo never collects stale artifacts, and the snapshot keeps
-      # whatever is on disk (and is billed for it). Keep exactly the latest
-      # build of each kind (scripts/target-sweep.py). always(): a red run
-      # gives the space back too.
-      - name: Bound the target dir
+      - name: Disk
         if: ${{ always() }}
         run: |
-          rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
-          python3 scripts/target-sweep.py sweep --protect-hours 0 || true
-          python3 scripts/target-sweep.py status || true
-          du -sh "${CARGO_TARGET_DIR}" /nix/store 2>/dev/null || true
-          df -h "${CARGO_TARGET_DIR}" | tail -1
-      - uses: ./.github/actions/warp-snapshot-save
-        if: ${{ !cancelled() }}
-        with:
-          alias: task-tests
-          save: ${{ needs.plan.outputs.seed }}
+          du -sh target ~/.cargo /nix/store 2>/dev/null || true
+          df -h / | tail -1
 
   wasm:
     name: Wasm

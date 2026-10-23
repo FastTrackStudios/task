@@ -1,6 +1,6 @@
 ---
 name: ship-stack
-description: Ship Task work as a gh stack through the Local CI gate, from first branch to green main. Use when starting a change, splitting work into PRs, pushing or opening PRs, a PR waiting on `Local CI` or `PR checks`, merging (normal or forced), checking main after a merge, or when CI, WarpBuild or its snapshots misbehave.
+description: Ship Task work as a gh stack through the Local CI gate, from first branch to green main. Use when starting a change, splitting work into PRs, pushing or opening PRs, a PR waiting on `Local CI` or `PR checks`, merging (normal or forced), checking main after a merge, or when CI misbehaves.
 ---
 
 # Ship a stack (Task's Local CI gate)
@@ -10,8 +10,9 @@ prek pre-push hook runs `just ci-local`, which runs fmt, change files,
 the static guards, and the clippy, wasm and tests that `cargo rail plan`
 says the change affects, on the warm local target dir. When it's green,
 the hook posts the **`Local CI`** commit status, with how long it took.
-**GitHub** runs one free job on a PR, then the full suite on WarpBuild
-once per merge to main.
+**GitHub** runs one free job on a PR, then the full suite once per merge
+to main. Everything on GitHub runs on its free hosted runners: the repo is
+public, and nobody waits on the post-merge suite except `release-tag`.
 
 One green run on the top of a stack vouches for every layer below it,
 because the top's tree holds every layer's change. So: many small PRs,
@@ -31,10 +32,10 @@ worktree with its own `target/` costs a cold build.
 | `git push` | prek pre-push → `scripts/ci-local-hook.sh` → `just ci-local` | your machine | the PR gate's expensive half; posts **`Local CI`** |
 | PR into main | `PR / PR checks` (`pr.yml`) | free hosted, rustup + cargo-rail, no nix | fmt, change files, rail route cases |
 | PR into main | `Release / Release guard` | free hosted | judges `release/pending` PRs only; passes otherwise |
-| push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | Lint 8x and Tests 16x on WarpBuild (restored snapshot); the rest free hosted | the full suite, once per merge |
+| push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | free hosted, nix `.#ci` + a rust-cache per build kind saved on main | the full suite, once per merge |
 | nightly | `CI` | same | the full suite, skipped when main's head already passed |
-| Sunday 09:37 UTC | `CI` seed | WarpBuild from the base image | the full suite, cold, saving fresh snapshots |
 | PR into `release/**` | `CI` | same | a hotfix: the full suite |
+| release commit on main | `Images` (+ `Deploy` / `Desktop cache` at the tag) | free hosted | GHCR images; `release-tag` waits for them |
 
 **Main requires:** `PR checks`, `Release guard` and `Local CI` (ruleset
 25572114). `just release-tag` separately requires `CI passed` on the
@@ -198,11 +199,12 @@ gh api -X PUT repos/FastTrackStudios/task/rulesets/25572114 --input /tmp/rs-put.
 
 ### 7. Main is green
 
-Each merge to main starts a full `CI` run (Lint and Tests on WarpBuild,
-restored warm from the seeded snapshots). A newer merge never cancels an
-older run: each main commit gets its own run and its own `CI passed`. After
-merging a whole stack, cancel the runs below the top commit only to save
-their minutes:
+Each merge to main starts a full `CI` run on free hosted runners: Tests
+is a cold workspace build on 4 vCPUs with dependencies from the
+rust-cache, so expect tens of minutes. A newer merge never cancels an
+older run: each main commit gets its own run and its own `CI passed`.
+After merging a whole stack, cancel the runs below the top commit if you
+want the queue clear:
 
 ```bash
 gh run list -b main -w checks.yml -L 5 --json databaseId,status,headSha
@@ -231,40 +233,25 @@ Done when the run on main's head commit has a green `CI passed`.
 - Changes to CI inputs (`.github/**`, Justfile, nix, `scripts/**`,
   nextest config) always run the full set, locally and after merge.
 
-**WarpBuild** (billed per started minute: 2x $0.004, 8x $0.016, 16x
-$0.032; check spend with the WarpBuild MCP: `GET /reports/billing/ci`)
-- **Snapshots** `task-lint` and `task-tests` keep `/nix` and the target dir.
-  - **Saved only by a seed run** (the Sunday cron, or
-    `gh workflow run checks.yml --ref main -f seed=true`). A seed boots from
-    WarpBuild's base image (`snapshot.enabled=true`), builds cold (~16–19
-    min, ~$0.86) and saves.
-  - **Every other run only restores** (`snapshot.key=<alias>`). Never make a
-    restored runner save: a snapshot of a snapshot boots runners that never
-    pick up a job.
-  - **Expiry:** snapshots expire after 15 days, which the weekly seed
-    covers.
-  - **A missing alias does not fall back to a cold boot.** Restores of a
-    deleted alias are purged (`timeout_allocated`) and the job waits. After
-    deleting an alias, reseed before anything merges.
-- **Jobs queued and NO runner appears at all:** check billing first. The
-  WarpBuild MCP's `get_onboarding_status` reports `jobs_blocked_reason`
-  (e.g. `no_payment_method`). Only a person can fix it, at
-  https://app.warpbuild.com/settings/billing. GitHub keeps queued jobs for
-  24 h, so they start once it's fixed. Reseed by hand after a toolchain or lockfile change that makes
-    warm runs slow.
-- **Jobs stuck queued** while WarpBuild boots runners that are purged within
-  a minute (`cleanup_hook`; `GET /runner_instance` in the WarpBuild MCP
-  shows `last_job_processed_id` empty): the snapshot is broken. Cancel the
-  run, delete the aliases (`GET /runner-images?type=warpbuild_snapshot_image`,
-  then `DELETE /runner-images/<id>`) and dispatch a seed.
-- **A restored runner carries the saving job's environment.** That includes
-  the dev shell's PATH and a `TMPDIR` under a `_temp` dir that no longer
-  exists. `warp-nix` resets the temp variables first. If a new tool
-  misbehaves only on restored runners, suspect leftover environment.
-- **Setup:** `warp-nix` restores nix from the snapshot (or installs it cold)
-  and enters `.#ci`. `rust-rail` (rustup + cargo-rail + just + the cargo
-  dependency cache that main's `Dependency cache` job saves) sets up the
-  free jobs.
+**GitHub's free runners** (4 vCPU, 16 GB RAM, ~14 GB free disk plus ~30 GB
+once the image's unused SDKs are deleted)
+- **Setup:** `hosted-nix-rust` (frees disk, installs nix with the FTS
+  cachix, enters `.#ci`, restores the build kind's rust-cache) for Lint,
+  Tests and Wasm. `rust-rail` (rustup + cargo-rail + just + the cargo
+  dependency cache that main's `Dependency cache` job saves) for Plan and
+  `PR checks`. Images and Desktop cache free disk and install nix inline.
+- **Cache budget:** 10 GB of Actions cache for the repo, evicted LRU. Only
+  main saves (`save-if` on main), one rust-cache entry per kind. The Tests
+  entry (dependency codegen) is the big one. If runs start restoring
+  nothing, check `gh cache list --sort size_in_bytes`. The usual cause is
+  a new writer saving per branch and overflowing the budget.
+- **Slow is expected:** the post-merge suite blocks no one. Only
+  `just release-tag` waits on `CI passed` and on the Images build, so start
+  a release once main's run is green.
+- **Disk full on Tests or Images:** the free-disk step must run before the
+  build. Check the `Disk` step's `df` output.
+- WarpBuild ran Lint and Tests until 2026-10-23. It was dropped because the
+  cost isn't worth it when nothing waits on the suite.
 
 **False alarms**
 - A failed or cancelled check from a run that a newer run on the same
