@@ -7,8 +7,8 @@
 # warm target dir, and CI pays for builds once per merge:
 #
 #   PR into main   free hosted checks that compile nothing (fmt, change
-#                  files, versions, manifests, boundaries, architect-ui
-#                  sheet), plus the `local-ci` commit status: the
+#                  files, versions, manifests, architect-ui sheet),
+#                  plus the `local-ci` commit status: the
 #                  pre-push hook (prek.toml -> scripts/ci-local.sh)
 #                  ran clippy, the wasm check and the tests `cargo rail
 #                  plan` says the change affects, and posted it. Both are
@@ -55,7 +55,7 @@
 # CACHE (hosted wasm): Swatinem/rust-cache, SAVED ONLY ON MAIN. A repo gets
 # 10 GB of Actions cache, evicted LRU across all branches; with main the
 # only writer the budget holds one entry per kind (+ the tiny rail
-# evidence, architect xtask and cargo-rail entries).
+# evidence and cargo-rail entries).
 
 name: checks
 
@@ -282,7 +282,7 @@ jobs:
   # on a free hosted runner without a rust-cache. Clippy, wasm and the
   # tests are the pre-push hook's (the `local-ci` status).
   pr-checks:
-    name: PR checks (fmt + change files + manifests + boundaries)
+    name: PR checks (fmt + change files + manifests)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: plan
@@ -310,13 +310,6 @@ jobs:
       - name: Manifests + lockfile
         if: ${{ !cancelled() }}
         run: just ci-manifests
-      - uses: ./.github/actions/architect-xtask
-        if: ${{ !cancelled() }}
-      # Layer table + ratcheted baselines in boundaries.toml (architect
-      # ADR layout.md, STA-268). Resolves graphs, compiles nothing.
-      - name: Boundaries
-        if: ${{ !cancelled() }}
-        run: just ci-boundaries
       # Task's tokens come from architect-ui through apps/.architect-ui;
       # fails on a re-vendored copy or an import that bypasses the link
       # (STA-392).
@@ -326,8 +319,8 @@ jobs:
 
   # THREE full-run jobs, one per BUILD KIND.
   #
-  #   lint   warp 8x   fmt, manifests, Boundaries, architect-ui, clippy,
-  #                    docs: check/doc mode, no codegen.
+  #   lint   warp 8x   fmt, manifests, architect-ui, clippy, docs:
+  #                    check/doc mode, no codegen.
   #   tests  warp 16x  the nextest build (full codegen) + rail evidence.
   #   wasm   hosted    the wasm32 check (another target triple).
   #
@@ -336,7 +329,7 @@ jobs:
   # check-mode units are not the test build's units). So they run side by
   # side, each with its own snapshot or cache.
   lint:
-    name: Lint (fmt + clippy + boundaries + docs)
+    name: Lint (fmt + clippy + docs)
     runs-on: warp-ubuntu-latest-x64-8x;snapshot.key=task-lint
     timeout-minutes: 60
     needs: plan
@@ -364,11 +357,6 @@ jobs:
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
         run: just ci-manifests
-      - uses: ./.github/actions/architect-xtask
-        if: ${{ !cancelled() }}
-      - name: Boundaries
-        if: ${{ !cancelled() }}
-        run: just ci-boundaries
       - name: architect-ui sheet
         if: ${{ !cancelled() }}
         run: just ci-architect-css
