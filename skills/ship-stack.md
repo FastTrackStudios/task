@@ -1,18 +1,18 @@
 ---
 name: ship-stack
-description: Ship Task work as a gh stack through the local-ci gate, from first branch to green main. Use when starting a change, splitting work into PRs, pushing or opening PRs, a PR waiting on `local-ci`, merging (normal or forced), or checking main after a merge.
+description: Ship Task work as a gh stack through the Local CI gate, from first branch to green main. Use when starting a change, splitting work into PRs, pushing or opening PRs, a PR waiting on `Local CI`, merging (normal or forced), or checking main after a merge.
 ---
 
-# Ship a stack (Task's local-ci gate)
+# Ship a stack (Task's Local CI gate)
 
 Task's PR gate is split. **Your machine** runs the expensive half: the
 prek pre-push hook runs `just ci-local`, which runs fmt, change files, and
 the clippy, wasm and tests `cargo rail plan` says the change affects, on
 the warm local target dir. When it's green, the hook posts the
-**`local-ci`** commit status. **GitHub** runs only free checks on a PR,
+**`Local CI`** commit status. **GitHub** runs only free checks on a PR,
 then the full set on WarpBuild once per merge to main. Main requires
 `PR checks` (pr.yml), `Release guard` and
-`local-ci`.
+`Local CI`.
 
 One green run on the top of a stack vouches for every layer below it,
 because the top's tree holds every layer's change. So: many small PRs,
@@ -87,24 +87,24 @@ gh stack submit --auto
 gh stack view --json
 ```
 
-Each layer's push posts `local-ci` to every open layer the top contains.
+Each layer's push posts `Local CI` to every open layer the top contains.
 Fill each PR from `.github/pull_request_template.md` (`gh pr edit <n>
 --title … --body-file …`), and register each PR with the session's
 tracker (T3: `link_pull_request`).
 
-Done when every layer head shows `local-ci: success`:
+Done when every layer head shows `Local CI: success`:
 
 ```bash
 for n in $(gh stack view --json | jq -r '.branches[] | select(.isMerged | not) | .pr.number // empty'); do
   h=$(gh pr view "$n" --json headRefOid -q .headRefOid)
   printf '%s ' "$n"; gh api "repos/FastTrackStudios/task/commits/$h/statuses" \
-    -q '[.[] | select(.context=="local-ci") | .state] | first // "none"'
+    -q '[.[] | select(.context=="Local CI") | .state] | first // "none"'
 done
 ```
 
 A layer showing `none` was pushed from a tree that doesn't contain it, or
 with uncommitted changes. Push again from the top, or run the full set on
-GitHub for that branch, which posts `local-ci` when green:
+GitHub for that branch, which posts `Local CI` when green:
 `gh workflow run checks.yml --ref <branch>`.
 
 ### 6. Merge
@@ -155,9 +155,9 @@ aggregate. `just release-tag` requires it.
 ## Reference
 
 **Escape hatches**
-- `SKIP=local-ci git push`: push without local CI; the PR waits on `local-ci`.
+- `SKIP=local-ci git push`: push without local CI; the PR waits on `Local CI`.
 - `gh workflow run checks.yml --ref <branch>`: the full set on GitHub;
-  posts `local-ci` when green.
+  posts `Local CI` when green.
 - `just ci-local <base>`: a narrower run against another base. It records
   no pass, so it can't vouch for the commit.
 

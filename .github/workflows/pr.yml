@@ -3,16 +3,16 @@
 # The expensive half of the PR gate runs on the author's machine: the prek
 # pre-push hook (prek.toml -> scripts/ci-local.sh) runs the static guards,
 # clippy, the wasm check and the tests `cargo rail plan` says the change
-# affects, and posts the `local-ci` status. This workflow re-checks the
+# affects, and posts the `Local CI` status. This workflow re-checks the
 # cheap, compile-nothing part on a free hosted runner, without nix
 # (.github/actions/rust-rail: rustup + cargo-rail + just + main's cargo
 # dependency cache), for a push that skipped the hook.
 #
-# Main requires `PR checks` (this job), `local-ci` and `Release guard`.
+# Main requires `PR checks` (this job), `Local CI` and `Release guard`.
 # The full set (CI, checks.yml) runs after every merge to main, nightly,
 # on hotfix PRs into release/**, and by hand:
 #
-#   gh workflow run checks.yml --ref <branch>     (posts local-ci when green)
+#   gh workflow run checks.yml --ref <branch>     (posts Local CI when green)
 
 name: PR
 

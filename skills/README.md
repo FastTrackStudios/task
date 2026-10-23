@@ -28,7 +28,7 @@ on the CLI for idempotence + audit.
 ## Current skills
 
 - [`ship-stack.md`](ship-stack.md) — shipping a change through the
-  `local-ci` gate as a gh stack: hooks, one concern per layer, `just
+  `Local CI` gate as a gh stack: hooks, one concern per layer, `just
   ci-local` on the top, `gh stack submit`, normal or forced merge, green
   main. Symlinked as `.claude/skills/ship-stack/SKILL.md` for Claude Code.
 

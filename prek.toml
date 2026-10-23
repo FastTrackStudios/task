@@ -8,10 +8,11 @@
 #            fails the commit: `git add` the result and commit again.
 #   push     local CI (scripts/ci-local-hook.sh): the clippy, wasm and
 #            tests `cargo rail plan` says the change affects, on this
-#            machine's warm target dir, then the `local-ci` status on the
+#            machine's warm target dir, then the `Local CI` status on the
 #            pushed commit, which main requires (checks.yml header).
 #
-# Skip one hook: `SKIP=local-ci git push` (the PR then waits on local-ci
+# Skip one hook by its id: `SKIP=local-ci git push` (the PR then waits on the
+# `Local CI` status
 # until a checked push or `gh workflow run checks.yml --ref <branch>`).
 default_install_hook_types = ["pre-commit", "pre-push"]
 
@@ -46,7 +47,7 @@ stages = ["pre-commit"]
 
 [[repos.hooks]]
 id = "local-ci"
-name = "local CI (rail-planned clippy + tests) -> local-ci"
+name = "Local CI (rail-planned clippy + tests)"
 language = "system"
 entry = "bash scripts/ci-local-hook.sh"
 always_run = true

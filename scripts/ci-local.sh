@@ -3,12 +3,12 @@
 # target dir instead of a billed runner.
 #
 #   scripts/ci-local.sh [BASE]        run the checks (`just ci-local`)
-#   scripts/ci-local.sh --post SHA…   mark each commit `local-ci` on GitHub
+#   scripts/ci-local.sh --post SHA…   mark each commit `Local CI` on GitHub
 #                                     once GitHub has it (the pre-push hook
 #                                     runs this detached, after the push)
 #
 # PRs into main run only a minimal free hosted job (checks.yml: fmt, change
-# files, rail route cases) plus the `local-ci` status this posts. The rest
+# files, rail route cases) plus the `Local CI` status this posts. The rest
 # of the PR gate runs HERE: the static guards (one version everywhere,
 # manifests + lockfile, the architect-ui sheet), then clippy, the tests and
 # the wasm check for what the change affects: `cargo rail plan` from BASE (default: the merge-base with
@@ -26,7 +26,8 @@ if [ "${1:-}" = "--post" ]; then
   repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
   desc="clippy + rail-planned tests passed on $(hostname -s)"
   # Every layer's push re-posts the whole stack; post each commit once.
-  posted="$(git rev-parse --git-common-dir)/ci-local-posted"
+  # Keyed by the status name too, so a rename re-posts under the new one.
+  posted="$(git rev-parse --git-common-dir)/ci-local-posted/Local-CI"
   mkdir -p "$posted"
   for sha in "$@"; do
     [ -f "$posted/$sha" ] && continue
@@ -37,11 +38,11 @@ if [ "${1:-}" = "--post" ]; then
       sleep 5
     done
     if gh api -X POST "repos/$repo/statuses/$sha" --silent \
-      -f state=success -f context=local-ci -f description="$desc"; then
+      -f state=success -f context="Local CI" -f description="$desc"; then
       date -Is > "$posted/$sha"
-      echo "$(date -Is) local-ci: $sha"
+      echo "$(date -Is) Local CI: $sha"
     else
-      echo "$(date -Is) local-ci: posting to $sha FAILED"
+      echo "$(date -Is) Local CI: posting to $sha FAILED"
     fi
   done
   exit 0

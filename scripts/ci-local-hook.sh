@@ -3,14 +3,14 @@
 # (scripts/ci-local.sh: fmt, change files, and the clippy / tests / wasm
 # that `cargo rail plan` says the change affects) on this machine's warm
 # target dir, and once the push lands mark the pushed commit with the
-# `local-ci` status. That status is a required check on main: PRs run
+# `Local CI` status. That status is a required check on main: PRs run
 # only the free hosted checks, so this is where clippy and the tests gate
 # a PR (checks.yml header).
 #
 # The pushed commit is prek's PRE_COMMIT_TO_REF (prek hands a hook only
 # the FIRST ref of a push). On a gh stack, the status also goes to every
 # open layer the checked-out tree contains (`targets` below), so a stack
-# pushed from its top gets local-ci on every PR from one run, however
+# pushed from its top gets Local CI on every PR from one run, however
 # its refs were pushed.
 #
 # It checks the CHECKED-OUT tree, so it vouches only for a pushed commit
@@ -19,10 +19,10 @@
 # else, or a dirty tree, gets no status; push it from its own checkout, or
 # run the full set on GitHub instead:
 #
-#   gh workflow run checks.yml --ref <branch>     (posts local-ci when green)
+#   gh workflow run checks.yml --ref <branch>     (posts Local CI when green)
 #
 # Skip: `SKIP=local-ci git push …` (prek's switch; NO_LOCAL_CI=1 also
-# works). The PR then waits on `local-ci`.
+# works). The PR then waits on `Local CI`.
 #
 # Pushes queue on one lock per clone, so parallel agents don't each build
 # the workspace at once (the build machine's free-memory watchdog). A long
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 if [ "${NO_LOCAL_CI:-0}" = "1" ]; then
-  echo >&2 "local-ci: NO_LOCAL_CI=1, not checked; the PR's local-ci check stays pending."
+  echo >&2 "local-ci: NO_LOCAL_CI=1, not checked; the PR's Local CI check stays pending."
   exit 0
 fi
 
@@ -42,12 +42,12 @@ sha="$(git rev-parse "$sha")"
 head="$(git rev-parse HEAD)"
 
 if ! git merge-base --is-ancestor "$sha" "$head" 2>/dev/null; then
-  echo >&2 "local-ci: ${PRE_COMMIT_LOCAL_BRANCH:-$sha} is not in the checked-out tree; no local-ci for it."
+  echo >&2 "local-ci: ${PRE_COMMIT_LOCAL_BRANCH:-$sha} is not in the checked-out tree; no Local CI status for it."
   exit 0
 fi
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo >&2 "local-ci: uncommitted changes, so a green run would not prove the pushed commit."
-  echo >&2 "          Pushing without local-ci; commit them and push again to get it."
+  echo >&2 "          Pushing without a Local CI status; commit them and push again to get it."
   exit 0
 fi
 
@@ -58,7 +58,7 @@ log="$COMMON_DIR/ci-local.log"
 # Which commits a green run at HEAD vouches for: the pushed one, plus every
 # open layer of the gh stack HEAD belongs to that HEAD contains. One run on
 # the top proves the whole stack (its tree holds every layer's change), so
-# each layer's PR gets local-ci however the push named its refs: prek
+# each layer's PR gets Local CI however the push named its refs: prek
 # passes a hook only the first ref of a push, and `gh stack submit` pushes
 # layers one at a time. A layer pushed a moment later is still posted: the
 # poster waits for GitHub to have each commit.

@@ -142,7 +142,7 @@ follows `skills/ship-stack.md`. In short:
   (one version everywhere, manifests + lockfile, the architect-ui sheet),
   and the clippy, wasm and tests that `cargo rail plan` says the change
   affects. It runs on the warm local target dir and, when green, marks the
-  pushed commits with the `local-ci` status. The PR then gets only the
+  pushed commits with the `Local CI` status. The PR then gets only the
   `PR` workflow's `PR checks`, a minimal free backstop on rustup, no nix
   (fmt, change files, rail routes). The `CI` workflow (the full set)
   runs after the merge. A
@@ -151,7 +151,7 @@ follows `skills/ship-stack.md`. In short:
   the push is instant (a long hook can outlast git's connection to
   GitHub). With no hook, a dirty tree or `SKIP=local-ci`, run
   `gh workflow run checks.yml --ref <branch>` instead:
-  it posts `local-ci` when green. PRs squash-merge, and the full set
+  it posts `Local CI` when green. PRs squash-merge, and the full set
   (clippy, docs, every test) runs on WarpBuild after every merge to `main`.
 - A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
   `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
