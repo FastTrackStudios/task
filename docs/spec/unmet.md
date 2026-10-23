@@ -479,7 +479,7 @@ machines with no app to sign into. Enrolment is idempotent on the
 endpoint (a reinstalled laptop is the same laptop), and revoking now
 dismisses the endpoint rather than only flagging the row — a flag the
 sync path never consults is a revocation the revoked machine does not
-notice. `features/files/files/tests/sync_lane.rs` has the three.
+notice. `features/files/files/tests/it/sync_lane.rs` has the three.
 
 **Installing it as a background service.** `fts-files-daemon install`
 writes a launchd agent or a systemd user unit and loads it, and the
@@ -837,7 +837,7 @@ steals it. `files::backend::off_worker` is the fix: sync store work
 reached from a runtime thread runs on a scoped helper thread that has
 entered the runtime but is not a worker of it, so wakeups go to the
 injection queue. The ingest bridge and the vault page sink both use it.
-`features/files/files/tests/sync_bridge.rs` is the regression test, in
+`features/files/files/tests/it/sync_bridge.rs` is the regression test, in
 all three runtime shapes.
 
 **Two adopters, one vault.** `TASK_SERVER_VAULT_ROOT` makes every org in a
