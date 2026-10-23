@@ -506,8 +506,8 @@ sweep-status:
 
 # ── Git hooks ────────────────────────────────────────────────────────────
 
-# Install the hooks (capn fmt on commit, `ci-local` on push). Run once per
-# clone.
+# Install the hooks (rustfmt of the staged files on commit, `ci-local` on
+# push). Run once per clone.
 install-hooks:
     ./.githooks/install.sh
 

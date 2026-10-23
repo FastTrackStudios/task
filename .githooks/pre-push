@@ -55,10 +55,32 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 COMMON_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+log="$COMMON_DIR/ci-local.log"
+
+post() {
+  nohup bash "$REPO_ROOT/scripts/ci-local.sh" --post "${covered[@]}" >>"$log" 2>&1 </dev/null &
+  echo >&2 "pre-push: green; local-ci goes to ${#covered[@]} commit(s) once GitHub has them (log: $log)"
+}
+
+# Already green at this exact commit (`just ci-local`, or the push of a
+# lower stack layer a moment ago): vouch without re-running. A long run
+# is best done BEFORE pushing (`just ci-local`): git holds the connection
+# to GitHub open while this hook runs, and a 15-minute build can outlast
+# it.
+if [ -f "$COMMON_DIR/ci-local-pass/$head" ]; then
+  echo >&2 "pre-push: local CI already passed at ${head:0:8}"
+  post
+  exit 0
+fi
 
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$COMMON_DIR/ci-local.lock"
   flock -n 9 || { echo >&2 "pre-push: another push's local CI is running; waiting…"; flock 9; }
+  # The push we waited on may have just passed this same commit.
+  if [ -f "$COMMON_DIR/ci-local-pass/$head" ]; then
+    post
+    exit 0
+  fi
 fi
 
 # ci-local needs the dev shell (cargo-rail, nextest, the desktop stack's
@@ -75,6 +97,4 @@ else
   nix develop "$REPO_ROOT" -c bash "$REPO_ROOT/scripts/ci-local.sh"
 fi
 
-log="$COMMON_DIR/ci-local.log"
-nohup bash "$REPO_ROOT/scripts/ci-local.sh" --post "${covered[@]}" >>"$log" 2>&1 </dev/null &
-echo >&2 "pre-push: green; local-ci goes to ${#covered[@]} commit(s) once GitHub has them (log: $log)"
+post

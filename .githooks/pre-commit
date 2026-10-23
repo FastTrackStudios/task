@@ -1,22 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Format the tree with capn before the commit lands.
+# Format the staged Rust files, and only those, before the commit lands.
 #
-# `capn` must be on PATH (or pointed at by $CAPN_BIN). If it isn't
-# installed the hook is a no-op rather than a wall — formatting is
-# also enforced by `just ci`.
+# Not capn: `capn fmt` formats the WHOLE workspace and stages every
+# resulting diff, and the installed capn's `pre-commit` did the same in
+# practice, so any unformatted file anywhere (an empty .rs outside the
+# module tree gains a newline) rode into unrelated commits. This formats
+# each staged file through rustfmt's stdin, which never follows `mod`
+# declarations into other files, and re-stages just that file.
+#
+# A staged file that also has unstaged edits is left alone: re-staging it
+# would commit edits you didn't stage. `cargo fmt --check` (CI's fmt, and
+# `just ci-local` on push) still catches it.
+#
+# rustfmt comes from the dev shell; without it the hook is a no-op.
 #
 # NOTE: this repo does NOT use beads/`bd` or any external ticket
 # tracker (see AGENTS.md § Tracking). Do not reintroduce a
 # `bd hooks run` call here.
 
-CAPN_BIN="${CAPN_BIN:-$(command -v capn 2>/dev/null || true)}"
-
-if [ -z "$CAPN_BIN" ]; then
-  echo >&2 "pre-commit: capn not found on PATH — skipping fmt."
-  echo >&2 "            install capn or set CAPN_BIN to its path."
+command -v rustfmt >/dev/null 2>&1 || {
+  echo >&2 "pre-commit: rustfmt not on PATH; not formatting (CI's fmt still checks)."
   exit 0
-fi
+}
 
-exec "$CAPN_BIN" fmt
+edition="$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' Cargo.toml | head -1)"
+changed=()
+while IFS= read -r -d '' f; do
+  case "$f" in *.rs) ;; *) continue ;; esac
+  git diff --quiet -- "$f" || { echo >&2 "pre-commit: $f has unstaged edits; not formatting it"; continue; }
+  tmp="$(mktemp)"
+  if rustfmt --edition "${edition:-2024}" --emit stdout <"$f" >"$tmp" 2>/dev/null; then
+    if ! cmp -s "$f" "$tmp"; then
+      cat "$tmp" >"$f"
+      git add -- "$f"
+      changed+=("$f")
+    fi
+  else
+    echo >&2 "pre-commit: rustfmt could not parse $f; left as is"
+  fi
+  rm -f "$tmp"
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+[ "${#changed[@]}" -eq 0 ] || printf >&2 'pre-commit: formatted %s\n' "${changed[@]}"

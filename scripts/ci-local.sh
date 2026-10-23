@@ -86,4 +86,16 @@ fi
 if [ "$(gate wasm)" = true ]; then
   just ci-wasm
 fi
+
+# Remember the pass for this exact commit (only if the tree is clean, so
+# the pass is the commit's): the pre-push hook then vouches without
+# re-running. That matters twice over: `gh stack submit` pushes each layer
+# separately, and git holds the connection to GitHub open while the hook
+# runs, so a long first run can outlast it — the push fails, and the
+# retry finds this and goes through at once.
+if [ -z "${1:-}" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+  pass="$(git rev-parse --git-common-dir)/ci-local-pass"
+  mkdir -p "$pass"
+  date -Is > "$pass/$(git rev-parse HEAD)"
+fi
 echo "ci-local: green"
