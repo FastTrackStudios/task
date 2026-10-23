@@ -34,10 +34,6 @@ setup = 'watch-by-polling'
 # names it in `$RUNTIME_DIRECTORY`; the runner units have one. Anywhere
 # that is unset (a laptop, `just ci` on airlock) this does nothing and
 # `$TMPDIR` stays as it was. `TASK_CI_TMPDIR` overrides the choice.
-#
-# It is under `/run`, not `/dev/shm`, on purpose: `rename_org` asserts a
-# list in path order and expects the scratch dir to sort after
-# `/mnt/storage`; `/dev/shm` and `/build` sort before it.
 [scripts.setup.ci-test-tmpdir]
 command = [
     "sh",
@@ -145,6 +141,17 @@ slow-timeout = { period = "20s", terminate-after = 3 }
 filter = 'package(task-server) and test(/^memory_budget::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# Tests that plant the whole example world: `demo_plant` (the real `admin
+# demo` subprocess, most of them twice) and the device-node tests that
+# plant it in process. A plant is adoption walks, checkpoints and four
+# ffmpeg encodes. A dozen at once timed each other out together, 15-28s
+# against 10s×3, and every one passed on retry. Four at a time, with the
+# budget a plant takes on a busy runner.
+[[profile.default.overrides]]
+filter = 'package(task-server) and test(/^(demo_plant|node_resolver_e2e|contacts_node_e2e|media_route_e2e)::/)'
+test-group = 'demo-plant'
+slow-timeout = { period = "20s", terminate-after = 3 }
+
 [[profile.default.overrides]]
 filter = 'package(task-server)'
 slow-timeout = { period = "10s", terminate-after = 3 }
@@ -178,6 +185,7 @@ slow-timeout = { period = "15s", terminate-after = 3 }
 # may not be one.
 [test-groups]
 disk-measurement = { max-threads = 1 }
+demo-plant = { max-threads = 4 }
 
 [[profile.default.overrides]]
 filter = 'binary(chunk_whole_file)'
@@ -259,6 +267,12 @@ slow-timeout = { period = "20s", terminate-after = 3 }
 [[profile.ci.overrides]]
 filter = 'package(task-server) and test(/^memory_budget::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# As `profile.default`: whole-world plants, four at a time.
+[[profile.ci.overrides]]
+filter = 'package(task-server) and test(/^(demo_plant|node_resolver_e2e|contacts_node_e2e|media_route_e2e)::/)'
+test-group = 'demo-plant'
+slow-timeout = { period = "20s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 filter = 'package(task-server) or (package(task-cli) and binary(vox_embedded))'
