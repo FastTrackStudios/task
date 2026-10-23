@@ -111,7 +111,7 @@ pub fn query_all_views(
         .views
         .iter()
         .map(|v| {
-            let ev = bases::execute_view(base, v, rows.clone());
+            let ev = bases::execute_view_on(base, v, &rows);
             (v.name.clone(), ev)
         })
         .collect())
@@ -154,19 +154,19 @@ fn split_rel(rel: &str) -> (String, String) {
 }
 
 fn row_of(rel_path: &str, basename: &str, folder: &str, parsed: &ParsedPage) -> BaseRow {
-    // Preserve frontmatter key order. `serde_json::Map` iterates in
-    // insertion order when the `preserve_order` feature is on; even
-    // without it, the executor uses `IndexMap` internally — but to
-    // be defensive we serialize manually so the key order in the
-    // JSON string we hand to `BaseRow::from_parts_full` matches the
-    // parsed frontmatter sequence.
+    // The frontmatter goes to the row as a map, not as a JSON string
+    // for `BaseRow::from_parts_full` to parse back (zero-copy audit B1:
+    // that was two more copies of every page's frontmatter per query).
+    // It is still collected through a `serde_json::Map` so the row sees
+    // what it saw before: last write wins on a duplicate key (how
+    // Obsidian collapses them), and keys in the Map's order, which is
+    // sorted (serde_json is built without `preserve_order`). The test
+    // `rows_match_the_json_round_trip` pins the two readings.
     let mut obj = serde_json::Map::with_capacity(parsed.frontmatter.len());
     for entry in &parsed.frontmatter {
-        // Last write wins on duplicate keys, matching how Obsidian
-        // collapses duplicate frontmatter keys.
         obj.insert(entry.key.clone(), entry.value.clone());
     }
-    let fm_json = serde_json::Value::Object(obj).to_string();
+    let frontmatter: indexmap::IndexMap<String, serde_json::Value> = obj.into_iter().collect();
 
     // Inline `#tag` markers get merged into `file.tags` so
     // `file.tags.contains("chart")` filters match the way Obsidian's
@@ -194,13 +194,13 @@ fn row_of(rel_path: &str, basename: &str, folder: &str, parsed: &ParsedPage) -> 
         .map(|(_, e)| e.to_string())
         .unwrap_or_default();
 
-    BaseRow::from_parts_full(
+    BaseRow::from_frontmatter(
         Uuid::new_v4(),
         basename,
         rel_path,
         folder,
         ext,
-        &fm_json,
+        frontmatter,
         &inline_tags,
     )
     .with_links(body_links)
@@ -217,6 +217,46 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(p, body).unwrap();
+    }
+
+    /// B1: a row built from the frontmatter map is the row the JSON
+    /// string it replaced parsed back to — same keys, values, key order,
+    /// tags and links — including a repeated key and every scalar kind.
+    #[test]
+    fn rows_match_the_json_round_trip() {
+        let pages = [
+            "no frontmatter, a #tag and a [[Link]]",
+            "---\nzeta: 1\nalpha: two\nmid: [a, b]\n---\nbody #inline",
+            "---\nn: 1.5\nneg: -3\nf: 1e20\nb: true\nz: ~\n---\n",
+            "---\ntags: [x, y]\nsong: \"[[Songs/Song A]]\"\n---\nsee [[Other]]",
+            "---\nk: first\nk: second\n---\n",
+            "---\nnested:\n  k: v\n  list: [1, two]\n---\n",
+        ];
+        for raw in pages {
+            let parsed = parse_page(raw);
+            let row = row_of("F/n.md", "n", "F", &parsed);
+            let mut obj = serde_json::Map::new();
+            for e in &parsed.frontmatter {
+                obj.insert(e.key.clone(), e.value.clone());
+            }
+            let old = BaseRow::from_parts_full(
+                row.page_id,
+                "n",
+                "F/n.md",
+                "F",
+                "md",
+                &serde_json::Value::Object(obj).to_string(),
+                &[],
+            );
+            assert_eq!(
+                row.frontmatter.iter().collect::<Vec<_>>(),
+                old.frontmatter.iter().collect::<Vec<_>>(),
+                "{raw:?}"
+            );
+            // Frontmatter-derived tags and links lead, in the same order.
+            assert_eq!(row.tags[..old.tags.len()], old.tags[..], "{raw:?}");
+            assert_eq!(row.links[..old.links.len()], old.links[..], "{raw:?}");
+        }
     }
 
     #[test]

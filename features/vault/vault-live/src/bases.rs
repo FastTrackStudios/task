@@ -1814,6 +1814,32 @@ impl BaseRow {
     ) -> Self {
         let frontmatter: indexmap::IndexMap<String, serde_json::Value> =
             serde_json::from_str(frontmatter_json).unwrap_or_default();
+        Self::from_frontmatter(
+            page_id,
+            basename,
+            rel_path,
+            folder,
+            ext,
+            frontmatter,
+            extra_tags,
+        )
+    }
+
+    /// [`Self::from_parts_full`] over a frontmatter map the caller has
+    /// already decoded, taken by value. The vault paths hold the page's
+    /// frontmatter as values already; printing them to a JSON string
+    /// only for [`Self::from_parts_full`] to parse it back was a second
+    /// and third copy of every page's frontmatter per base query
+    /// (zero-copy audit B1).
+    pub fn from_frontmatter(
+        page_id: uuid::Uuid,
+        basename: impl Into<String>,
+        rel_path: impl Into<String>,
+        folder: impl Into<String>,
+        ext: impl Into<String>,
+        frontmatter: indexmap::IndexMap<String, serde_json::Value>,
+        extra_tags: &[String],
+    ) -> Self {
         let mut tags = tags_from_frontmatter(&frontmatter);
         for t in extra_tags {
             if !tags.iter().any(|x| x == t) {
@@ -1975,7 +2001,17 @@ pub fn execute_view<I: IntoIterator<Item = BaseRow>>(
     rows: I,
 ) -> ExecutedView {
     let all: Vec<BaseRow> = rows.into_iter().collect();
-    let cx = BaseEval::new(base, &all);
+    execute_view_on(base, view, &all)
+}
+
+/// [`execute_view`] over borrowed rows. A base with several views runs
+/// each over the same row set; borrowing it means only the rows a view
+/// keeps are cloned into its result, where handing [`execute_view`] a
+/// `rows.clone()` per view copied every page's row once per view
+/// (zero-copy audit B1).
+#[must_use]
+pub fn execute_view_on(base: &ParsedBase, view: &ViewSpec, all: &[BaseRow]) -> ExecutedView {
+    let cx = BaseEval::new(base, all);
     let groups = cx
         .run(view)
         .into_iter()
