@@ -159,10 +159,11 @@ identity-proto = { workspace = true, features = ["vox"] }
 # Settings → Bots: `BotService` on the server's `/server/vox`.
 org-proto = { workspace = true, features = ["vox"] }
 
-# App-wide keyboard shortcuts (src/shortcuts.rs): trie-based key
-# dispatch (multi-key `g h` sequences, chord parsing, keymap config).
-# Wasm-clean core crate; the DOM wiring lives in shortcuts.rs.
-input.workspace = true
+# App-wide keyboard shortcuts (src/shortcuts.rs): architect's keymap
+# engine (key trie, multi-key `g h` sequences, chord parsing, keymap
+# config, which-key). `dioxus` adds its DOM key conversion; the
+# document-level listeners stay in shortcuts.rs.
+architect-input = { workspace = true, features = ["dioxus"] }
 
 # The shared actions framework (src/actions.rs): `ActionDefinition`s +
 # the `StandaloneActions` registry the command palette and the shortcut
