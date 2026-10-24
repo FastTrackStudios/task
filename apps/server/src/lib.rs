@@ -1447,7 +1447,7 @@ pub(crate) async fn build_org_state(
             Box::pin(async move { crdt_seaorm::Migrator::up(&db, None).await.map(|()| db) })
         })
         .await?;
-        let app_docs = app_docs::open(app_docs_conn).await?;
+        let app_docs = app_docs::open(app_docs_conn.clone()).await?;
 
         // Identity locker — only the **home** org anchors it. Opened
         // at `<org>/identity.sqlite` (per `OrgRoot::identity_db`);
@@ -2184,6 +2184,8 @@ pub(crate) async fn build_org_state(
             threads.conn().clone(),
             notify_store.conn().clone(),
             prefs.conn().clone(),
+            // The only server copy of the app docs' catalog and bytes.
+            app_docs_conn.clone(),
         ];
         #[cfg(feature = "plugin-agent")]
         sqlite_conns.push(agent_tasks.conn().clone());
