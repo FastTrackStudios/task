@@ -64,6 +64,30 @@ if [ -z "$base" ]; then
 fi
 echo "ci-local: $(git rev-parse --short HEAD) against $(git rev-parse --short "$base")"
 
+# A release commit (`just release-prepare`: one commit on main, version
+# lines + CHANGELOG + deleted change files) changes no code its base's
+# checks didn't already see, but its version bump touches every crate, so a
+# full run would rebuild the workspace for nothing. Vouch for it at once,
+# the same test CI and the release guard use (`release.sh release-only`),
+# run from the BASE commit's copy of the script so a release branch can't
+# edit the test that skips its own checks.
+if [ -z "${1:-}" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+  rel="$(mktemp)"
+  if git show "$base:scripts/release.sh" >"$rel" 2>/dev/null &&
+    BASE_SHA="$base" HEAD_SHA="$(git rev-parse HEAD)" HEAD_REF="$(git rev-parse --abbrev-ref HEAD)" \
+      bash "$rel" release-only >/dev/null 2>&1; then
+    rm -f "$rel"
+    pass="$(git rev-parse --git-common-dir)/ci-local-pass"
+    mkdir -p "$pass"
+    printf '%s\n%s\n%s\n' "$(date -Is)" "0s" \
+      "release commit (version + changelog only), its code checked on $(git rev-parse --short "$base")" \
+      >"$pass/$(git rev-parse HEAD)"
+    echo "ci-local: release commit only (version + changelog); its code was checked on $(git rev-parse --short "$base"): pass recorded"
+    exit 0
+  fi
+  rm -f "$rel"
+fi
+
 # Wall time per phase, for the summary line, the pass record and the
 # `Local CI` status description ("passed in 6m12s on host: tests 2m05s, …").
 start=$SECONDS

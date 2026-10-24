@@ -47,6 +47,11 @@ release commit.
 
 **`just ci-local`, in order** (`scripts/ci-local.sh`):
 
+0. **A release commit** (`just release-prepare`'s one commit: version
+   lines, CHANGELOG, deleted change files; the base commit's
+   `release.sh release-only` decides) is vouched for at once, with no
+   build: its code was checked on its base. So `just release-pr` pushes
+   in seconds.
 1. **checks:** `ci-fmt`, `ci-changes <base>` (every touched crate has a
    `.changes/*.md`), `ci-versions` (one version everywhere), `ci-manifests`
    (Cargo.lock matches), `ci-architect-css` (the token sheet comes through
