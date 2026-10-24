@@ -17,8 +17,9 @@
 # The asset names are a contract with the updater (`latest-linux.json`, and
 # the AppImage URL it names) and with anyone scripting a download.
 #
-# WHEN: called from deploy.yml once the release is published (after
-# "Verify live" + "GitHub Release"). By hand, for a release that already
+# WHEN: called from deploy.yml once the release is published (after the
+# tag guard + "GitHub Release"; Verify live runs beside, informational). By
+# hand, for a release that already
 # exists (a backfill): `gh workflow run release-assets.yml --ref main -f
 # tag=v26.10.0`. Every job is a no-op when the release already carries its
 # asset, unless `replace` is set: a published checksum must not change

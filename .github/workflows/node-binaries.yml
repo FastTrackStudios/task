@@ -24,9 +24,9 @@
 # (apps/server/src/self_update.rs) and scripts/install-node.sh look them up
 # by name, and a unit test reads this file to keep the two in step.
 #
-# WHEN: called from deploy.yml once the release is published (after
-# "Verify live" + "GitHub Release", on the release tag), so the binaries land on a
-# release production already runs. By hand: `gh workflow run
+# WHEN: called from deploy.yml once the release is published (after the
+# tag guard + "GitHub Release", on the release tag; Verify live runs beside,
+# informational, and nothing waits on it). By hand: `gh workflow run
 # node-binaries.yml --ref v0.2.4` (or `-f tag=v0.2.3` to backfill a release
 # from its tag). A release that already carries SHA256SUMS is left alone
 # unless `replace` is set: a published checksum must not change under
