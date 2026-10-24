@@ -15,6 +15,50 @@ Some Applications I intend to replace using Task in my own personal life
 - Nextcloud: Incredible project, enough usecases that I have differ that I need something custom, mainly audio and video playback, and some other crazy integration stuff I have in mind.
 - Karpathy's LLM Wiki: Interesting Concept and Project, I'd like for it to be included in the system.
 
+## Installation
+
+Every release `vX.Y.Z` on [GitHub Releases](https://github.com/FastTrackStudios/task/releases/latest)
+carries everything from that version: the desktop apps, the server, and the
+web app.
+
+### Desktop app
+
+| Platform | Get it |
+|---|---|
+| macOS (Apple silicon) | [Task-macos.dmg](https://github.com/FastTrackStudios/task/releases/latest/download/Task-macos.dmg). Open it and drag Task to Applications |
+| Linux (x86-64) | [Task-linux-x86_64.AppImage](https://github.com/FastTrackStudios/task/releases/latest/download/Task-linux-x86_64.AppImage). `chmod +x` it and run it |
+| NixOS | `nix run github:FastTrackStudios/task#task-desktop` (prebuilt on `fasttrackstudio.cachix.org`) |
+
+Installed apps update themselves: they check the latest release in the
+background and install the update on the next start. The tray's *Check for
+updates* does it right away.
+
+### Server
+
+On macOS or Linux, with no Nix:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/FastTrackStudios/task/main/scripts/install-node.sh | sh
+```
+
+This installs `task-server`. After that, `task-server self-update` keeps it
+current. [docs/headless-node.md](docs/headless-node.md) covers running it
+as a service, signing it in, and NixOS.
+
+### Self-host the server and web app
+
+The images are public on GHCR (`ghcr.io/fasttrackstudios/task-server` and
+`task-web`). The compose file runs the server, the web app, and a proxy that
+puts them on one origin:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/FastTrackStudios/task/main/deploy/docker-compose.yml
+docker compose up -d   # then open http://localhost:8090
+```
+
+There's also a Helm chart. [deploy/README.md](deploy/README.md) covers both,
+and how to create your first org.
+
 ## Repository layout
 
 One cargo workspace, rooted here. Five code directories, following the
