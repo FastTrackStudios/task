@@ -26,14 +26,17 @@ App Store Connect API key in `~/.appstoreconnect/`.
   iOS/watchOS app (registered universal in App Store Connect). The macOS
   build attaches to that record as its macOS platform; in App Store
   Connect / TestFlight it shows up under the app's **macOS** tab.
-- **`CFBundleShortVersionString`** (`MARKETING_VER`, workflow input,
-  default `0.0.1`): keep it in step with the iOS build's marketing version
-  — both platforms share the app record and Apple groups TestFlight builds
-  by version string.
-- **`CFBundleVersion`** (`BUILD_NO`): unix time at build, exactly the iOS
-  scheme. App Store Connect tracks build numbers **per platform**, so the
-  macOS train can never collide with the iOS one; unix time keeps each
-  train monotonic and doubles as "when was this uploaded".
+- **`CFBundleShortVersionString`** (`MARKETING_VER`): the release tag's
+  version, which is the workspace version (`scripts/apple-release.sh
+  version`); there is no override. Both platforms share the app record and
+  Apple groups TestFlight builds by version string.
+- **`CFBundleVersion`** (`BUILD_NO`): `scripts/apple-release.sh
+  build-number`, unix seconds, the ONE scheme for every Task upload,
+  iPhone and Mac. Global and ever-increasing, and above every build App
+  Store Connect already holds (they were all unix time). Embedded bundles
+  (watch app, widget and Finder extensions) carry the app's version and
+  build number exactly. Each upload adds a line with both to the tag's
+  GitHub Release.
 
 ## What the deploy script does
 

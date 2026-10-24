@@ -16,6 +16,8 @@
 #   desktop app (task-app-desktop) + its bundle     CARGO_PKG_VERSION; CFBundleShortVersionString
 #                                                   from MARKETING_VER, default release.sh version
 #   iOS app (task-app-mobile), marketing version    MARKETING_VER in task-ios.yml / deploy-testflight.sh
+#   its watch app + widget extension, the Finder    $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) in
+#   extension: the app's version AND build number   their plists, stamped by the build (scripts/apple-release.sh)
 #   web bundle (task-app-web)                       CARGO_PKG_VERSION, version.workspace
 #   OCI images ghcr.io/…/task-{server,web}:<version>  the release tag (images.yml,
 #                                                   `release.sh image-tag`)
@@ -27,6 +29,7 @@
 # catches what the static checks cannot: a binary that, built, reports
 # something else. Used by `just ci` (static), the deploy (the server it
 # ships) and node-binaries.yml (every release binary).
+# shellcheck disable=SC2016 # the $(...) below are literal Xcode placeholders
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -64,9 +67,31 @@ for script in \
     fi
 done
 for wf in .github/workflows/task-ios.yml .github/workflows/task-macos.yml; do
-    grep -q 'scripts/release.sh version' "$wf" \
-        || bad "$wf: the marketing version must come from \`scripts/release.sh version\`"
+    grep -q 'scripts/apple-release.sh version' "$wf" \
+        || bad "$wf: the marketing version must come from \`scripts/apple-release.sh version\` (the workspace version)"
+    grep -q 'scripts/apple-release.sh build-number' "$wf" \
+        || bad "$wf: the build number must come from \`scripts/apple-release.sh build-number\` (one scheme for iOS and macOS)"
+    if grep -qE '^\s*marketing_version:' "$wf"; then
+        bad "$wf: no marketing_version input; the version is the tag's"
+    fi
 done
+# Embedded bundles (watch app, widget + Finder extensions) take the app's
+# versions at build time; App Store Connect rejects any that differ.
+for plist in \
+    apps/watchos/TaskWatch/Info.plist \
+    apps/ios-widgets/TaskWidgets/Info.plist \
+    apps/desktop/macos/FileProvider/Info.plist; do
+    grep -A1 '<key>CFBundleShortVersionString</key>' "$plist" | grep -qF '$(MARKETING_VERSION)' \
+        || bad "$plist: CFBundleShortVersionString must be \$(MARKETING_VERSION) (the app's version, stamped at build)"
+    grep -A1 '<key>CFBundleVersion</key>' "$plist" | grep -qF '$(CURRENT_PROJECT_VERSION)' \
+        || bad "$plist: CFBundleVersion must be \$(CURRENT_PROJECT_VERSION) (the app's build number, stamped at build)"
+done
+for project in apps/watchos/project.yml apps/ios-widgets/project.yml; do
+    grep -qF 'CFBundleShortVersionString: $(MARKETING_VERSION)' "$project" \
+        || bad "$project: info.properties must set CFBundleShortVersionString: \$(MARKETING_VERSION) (xcodegen rewrites the plist)"
+done
+grep -c 'MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO"' apps/mobile/ios/deploy-testflight.sh \
+    | grep -qx 2 || bad "apps/mobile/ios/deploy-testflight.sh: the watch and widget xcodebuilds must get the app's MARKETING_VERSION and CURRENT_PROJECT_VERSION"
 
 # ── Image tag, release tag, node binaries ────────────────────────────────
 # The images are tagged with the release tag's bare version, and every

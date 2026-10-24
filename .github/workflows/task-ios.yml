@@ -17,8 +17,14 @@
 # ONCE PER RELEASE: the trigger is the release tag, and the build is marked
 # with the release's version (the Version step). There is no `paths:` filter
 # (tag pushes ignore them): every release builds, so the TestFlight build
-# always contains what production runs. workflow_dispatch forces a build
-# (select the tag as the ref to rebuild a release).
+# always contains what production runs. workflow_dispatch rebuilds a
+# release: select the TAG as the ref (a branch fails the tag guard: uploads
+# come only from a release tag). dry_run validates and stops before the build.
+#
+# Versions (scripts/apple-release.sh): marketing version = the tag's =
+# the workspace version, on the app, the watch companion and the widget
+# extension alike; build number = unix seconds, the one scheme task-macos
+# shares. After the upload the tag's GitHub Release gets a line with both.
 
 name: iOS
 
@@ -27,10 +33,10 @@ on:
     tags: ["v[0-9]*.[0-9]*.[0-9]*"]
   workflow_dispatch:
     inputs:
-      marketing_version:
-        description: "CFBundleShortVersionString. Empty = the workspace version in Cargo.toml (the release's)."
-        required: false
-        default: ""
+      dry_run:
+        description: "Validate the tag (guard, versions, build number) and stop before the build."
+        type: boolean
+        default: false
 
 # Serialize with the audio iOS build too — one iOS build at a time on the
 # single Mac. Shared group name across both workflows; queue, never cancel.
@@ -53,16 +59,17 @@ concurrency:
   #
   # Keeping the group per-workflow preserves the useful half — a newer
   # run of the SAME workflow supersedes an older queued one.
-  group: ios-testflight-${{ github.workflow }}
+  #
+  # A dry run gets its own group, so it can never supersede a queued upload.
+  group: ios-testflight-${{ github.workflow }}${{ inputs.dry_run && '-dry' || '' }}
   cancel-in-progress: false
 
 jobs:
   testflight:
     runs-on: [self-hosted, macos, task-release-mac]
-    # The tag guard reads the tagged commit's `CI passed`.
     permissions:
-      contents: read
-      checks: read
+      contents: write   # the build line in the tag's GitHub Release
+      checks: read      # the tag guard reads the tagged commit's `CI passed`
     # Fail loudly when the airlock Mac isn't there. Without this a job
     # with no available runner just QUEUES, and is eventually cancelled —
     # which reads as "cancelled", not "failed", so nothing alerts and
@@ -99,33 +106,37 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: bash scripts/release.sh stamp "$GITHUB_REF_NAME"
 
-      # A pushed tag must be vX.Y.Z on a commit of main or a release/v*
-      # hotfix line, with `CI passed` green on it. Without this a stray v*
-      # tag on a branch would build TestFlight. A manual dispatch is exempt.
+      # The ref must be a release tag: vX.Y.Z on a commit of main or a
+      # release/v* hotfix line, with `CI passed` green on it. Push AND
+      # dispatch: TestFlight is uploaded only from a release tag, never
+      # from a branch.
       - name: Tag guard
-        if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release.sh tag-guard
 
       # One version for every shipped thing: the release's, which the stamp
-      # above wrote into [workspace.package] in Cargo.toml (scripts/
-      # release.sh). The build is triggered by the release tag, so
-      # TestFlight shows the same number as the GitHub Release and the
-      # server.
-      - name: Version
-        env:
-          INPUT_VERSION: ${{ inputs.marketing_version }}
+      # above wrote into [workspace.package] in Cargo.toml. TestFlight shows
+      # the same number as the GitHub Release and the server. The build
+      # number is the one task-macos uses too (scripts/apple-release.sh).
+      - name: Version and build number
         run: |
-          v="${INPUT_VERSION:-$(bash scripts/release.sh version)}"
+          v="$(bash scripts/apple-release.sh version)"
+          n="$(bash scripts/apple-release.sh build-number)"
           echo "MARKETING_VER=$v" >> "$GITHUB_ENV"
-          echo "marketing version: $v"
+          echo "BUILD_NO=$n" >> "$GITHUB_ENV"
+          echo "marketing version: $v, build number: $n"
+
+      - name: Dry run — stop before the build
+        if: ${{ inputs.dry_run }}
+        run: echo "dry run, $GITHUB_REF validated ($MARKETING_VER, build $BUILD_NO); nothing built or uploaded."
 
       - name: Build, sign, and upload Task to TestFlight
+        if: ${{ !inputs.dry_run }}
         env:
           KEYCHAIN: fts-build.keychain
           KEYCHAIN_PW: fts-build
-          # MARKETING_VER comes from the Version step.
+          # MARKETING_VER and BUILD_NO come from the Version step.
           # 26.6 GM builds/signs/uploads; the beta's actool compiles the icon
           # catalog (26.6's actool can't produce Assets.car on macOS 27).
           ACTOOL_DEVELOPER_DIR: /Applications/Xcode-beta.app/Contents/Developer
@@ -178,10 +189,19 @@ jobs:
             bash apps/mobile/ios/deploy-testflight.sh
           fi
 
+      # One line in the tag's GitHub Release: version, build, this run.
+      - name: Record the build in the GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          bash scripts/apple-release.sh note "iOS + watchOS (TestFlight)" "$MARKETING_VER" "$BUILD_NO"
+
       # target/ persists (clean: false) and is shared with task-macos.
       # Keep the latest build of each kind (ios, macos, desktop-release).
       - name: Bound the target dir
-        if: always()
+        if: ${{ always() && !inputs.dry_run }}
         run: |
           command -v python3 >/dev/null || exit 0
           python3 scripts/target-sweep.py sweep --protect-hours 2 || true
@@ -192,4 +212,4 @@ jobs:
         if: always()
         run: |
           echo "### Task iOS TestFlight" >> "$GITHUB_STEP_SUMMARY"
-          echo "commit \`$(git rev-parse --short HEAD)\` → Task app + watch companion uploaded (see log for build number)." >> "$GITHUB_STEP_SUMMARY"
+          echo "commit \`$(git rev-parse --short HEAD)\`, version \`${MARKETING_VER:-?}\`, build \`${BUILD_NO:-?}\`${{ inputs.dry_run && ' (dry run: nothing built)' || '' }}" >> "$GITHUB_STEP_SUMMARY"

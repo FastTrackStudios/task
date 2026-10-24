@@ -19,6 +19,10 @@
 #                SSH session, where codesign otherwise fails with the
 #                unhelpful `errSecInternalComponent`
 #   KEYCHAIN     which keychain to unlock (default: login.keychain-db)
+#   MARKETING_VER / BUILD_NO   the versions the extension reports
+#                (default: the release version / 1). build-dmg.sh stamps
+#                the app's own over them, as it must: an extension's
+#                versions have to equal its app's.
 #
 # Deliberately not an Xcode project. The rest of this app is built by
 # `dx` and shell, an .xcodeproj is a generated file nobody can review in
@@ -91,7 +95,11 @@ rm -rf "$APPEX"
 # must be present" — a sentence that names neither the bundle nor the
 # missing directory.
 mkdir -p "$APPEX/Contents/MacOS" "$APPEX/Contents/Resources"
-cp "$SRC/Info.plist" "$APPEX/Contents/Info.plist"
+# The template carries $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION), as an
+# Xcode-built bundle's would; no Xcode here, so fill them in.
+sed -e "s/\$(MARKETING_VERSION)/${MARKETING_VER:-$(bash "$ROOT/scripts/release.sh" version)}/" \
+    -e "s/\$(CURRENT_PROJECT_VERSION)/${BUILD_NO:-1}/" \
+    "$SRC/Info.plist" > "$APPEX/Contents/Info.plist"
 
 HEADER="$ROOT/features/files/files-fileprovider/include/fts_fileprovider.h"
 

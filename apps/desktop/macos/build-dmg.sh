@@ -15,7 +15,8 @@
 #
 # Env knobs (all optional):
 #   MARKETING_VER   CFBundleShortVersionString (default: the release version)
-#   BUILD_NO        CFBundleVersion (default: unix time)
+#   BUILD_NO        CFBundleVersion (default: scripts/apple-release.sh
+#                   build-number, unix seconds: the one Apple build scheme)
 #   SKIP_BUILD=1    reuse the existing .app (iterate on sign/dmg)
 #   DRY_RUN=1       stop after the signed .dmg — no notarization, no upload
 #   OUT_DIR         where the .dmg lands (default: target/dmg)
@@ -48,8 +49,9 @@ OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
 export -n OUT_DIR
 # Default: the release version (`[workspace.package]` in Cargo.toml), the
 # one every artifact of a release reports (scripts/check-versions.sh).
-MARKETING_VER="${MARKETING_VER:-$(cd "$ROOT" && bash scripts/release.sh version)}"
-BUILD_NO="${BUILD_NO:-$(date +%s)}"
+MARKETING_VER="${MARKETING_VER:-$(bash "$ROOT/scripts/apple-release.sh" version)}"
+BUILD_NO="${BUILD_NO:-$(bash "$ROOT/scripts/apple-release.sh" build-number)}"
+bash "$ROOT/scripts/apple-release.sh" check-build "$BUILD_NO"
 
 # Notarization credentials live where the TestFlight flow already keeps
 # them. Absent is fine until we actually notarize — DRY_RUN never does.
@@ -165,7 +167,7 @@ if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
     env -u SDKROOT -u NIX_APPLE_SDK_VERSION DEVELOPER_DIR="$REAL_XCODE" \
         PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH" \
         TEAM_ID="${TEAM_ID:-$(sed -n 's/.*(\([A-Z0-9]*\))$/\1/p' <<<"$SIGN_ID")}" SIGN_ID="$SIGN_ID" \
-        OUT_DIR="$ROOT/target/fileprovider" \
+        OUT_DIR="$ROOT/target/fileprovider" MARKETING_VER="$MARKETING_VER" BUILD_NO="$BUILD_NO" \
         bash "$SCRIPT_DIR/build-fileprovider.sh"
     mkdir -p "$APP/Contents/PlugIns"
     rm -rf "$APP/Contents/PlugIns/TaskFileProvider.appex"
@@ -173,9 +175,9 @@ if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
         "$APP/Contents/PlugIns/TaskFileProvider.appex"
     cp "$ROOT/target/fileprovider/TaskFileProviderDomains" \
         "$APP/Contents/MacOS/TaskFileProviderDomains"
-    # The extension reports the release's version like the app around it
-    # (its Info.plist template carries a placeholder). Before the signing
-    # below, which seals the plist.
+    # The extension reports the app's own versions (its Info.plist template
+    # carries placeholders): an extension whose versions differ from its
+    # app's is refused. Before the signing below, which seals the plist.
     APPEX_PLIST="$APP/Contents/PlugIns/TaskFileProvider.appex/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$APPEX_PLIST"
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$APPEX_PLIST"

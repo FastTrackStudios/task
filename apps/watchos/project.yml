@@ -18,8 +18,13 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.fasttrackstudio.task.watch
         PRODUCT_NAME: Task
+        # Placeholders: every build passes the app's own versions
+        # (MARKETING_VERSION=<release version> CURRENT_PROJECT_VERSION=<build
+        # number>, apps/mobile/ios/deploy-testflight.sh), and App Store
+        # Connect rejects an embedded bundle whose versions differ from the
+        # app's. Never put a real version here.
         CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 0.1.0
+        MARKETING_VERSION: 0.0.0
         SWIFT_VERSION: "6.0"
         # App-icon catalog (TaskWatch/Assets.xcassets). Required — altool
         # rejects a watch app with no icon. watchOS icons must have no alpha.
@@ -30,6 +35,8 @@ targets:
       path: TaskWatch/Info.plist
       properties:
         CFBundleDisplayName: Task
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
         # Embedded companion — rides the Task iPhone app's TestFlight build so
         # it installs on the paired watch and auto-updates.
