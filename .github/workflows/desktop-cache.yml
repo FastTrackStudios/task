@@ -16,12 +16,14 @@
 # `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
 # already cached is harmless to re-run: cachix skips paths it holds.
 #
-# WHERE: a free hosted runner (the repo is public), cold. The package is a
-# pure Nix build of the whole workspace (cargoArtifacts = null): ~61 min
-# cold on the Mac Pro, the better part of an hour or more and ~30 GB of
-# disk on a 4-vCPU hosted runner, so the image's unused SDKs are deleted
-# first. It runs once per release and nobody waits on it; the result lives
-# in cachix, which is the point of the job.
+# WHERE: THEBATTLESHIP's `task-release` pool (self-hosted; its job gate
+# admits only tag pushes, main/release pushes and dispatches). The package
+# is a pure Nix build of the whole workspace (cargoArtifacts = null): ~61
+# min cold on the Mac Pro, an hour or more on a 4-vCPU hosted runner, so the
+# warm nix store of the host that installs it is the place to build it. (The
+# Free disk / install-nix steps run only if a hosted runner ever takes the
+# job.) It runs once per release and nobody waits on it; the result lives in
+# cachix, which is the point of the job.
 #
 # SECRET: CACHIX_AUTH_TOKEN, a repo Actions secret (owned by Keeper; a
 # cachix token with write access to `fasttrackstudio`). It reaches cachix
@@ -61,7 +63,10 @@ env:
 jobs:
   cache:
     name: task-desktop -> cachix
-    runs-on: ubuntu-latest
+    # THEBATTLESHIP's `task-release` pool: the nix store there is warm (and
+    # it is the host whose fleet timer installs this very package), so a
+    # release rebuilds only the derivations that changed.
+    runs-on: [self-hosted, task-release]
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -71,11 +76,13 @@ jobs:
       # The image's unused toolchains (Android SDK, .NET, GHC, CodeQL, ~30 GB):
       # the whole-workspace nix build needs the disk.
       - name: Free disk
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h / | tail -1
       - uses: cachix/install-nix-action@v31
+        if: ${{ runner.environment == 'github-hosted' }}
         with:
           extra_nix_config: |
             accept-flake-config = true

@@ -11,8 +11,11 @@ the static guards, and the clippy, wasm and tests that `cargo rail plan`
 says the change affects, on the warm local target dir. When it's green,
 the hook posts the **`Local CI`** commit status, with how long it took.
 **GitHub** runs one free job on a PR, then the full suite once per merge
-to main. Everything on GitHub runs on its free hosted runners: the repo is
-public, and nobody waits on the post-merge suite except `release-tag`.
+to main. PR jobs run on GitHub's free hosted runners; everything that runs
+after code is on main (the post-merge suite, release commits, images, the
+desktop cache) runs on THEBATTLESHIP's self-hosted pools, `task-main` and
+`task-release`, whose target dirs stay warm. Their job gate refuses any
+PR job: the repo is public.
 
 One green run on the top of a stack vouches for every layer below it,
 because the top's tree holds every layer's change. So: many small PRs,
@@ -32,9 +35,11 @@ worktree with its own `target/` costs a cold build.
 | `git push` | prek pre-push → `scripts/ci-local-hook.sh` → `just ci-local` | your machine | the PR gate's expensive half; posts **`Local CI`** |
 | PR into main | `PR / PR checks` (`pr.yml`) | free hosted, rustup + cargo-rail, no nix | fmt, change files, rail route cases |
 | PR into main | `Release / Release guard` | free hosted | judges `release/pending` PRs only; passes otherwise |
-| push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | free hosted, nix `.#ci` + a rust-cache per build kind saved on main | the full suite, once per merge |
-| PR into `release/**` | `CI` | same | a hotfix: the full suite |
-| release commit on main | `Images` (+ `Deploy` / `Desktop cache` at the tag) | free hosted | GHCR images; `release-tag` waits for them |
+| push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | Lint/Tests/Wasm on THEBATTLESHIP `task-main` (warm target dir per kind); Plan, Dependency cache, `CI passed` free hosted | the full suite (tests narrowed by rail evidence), once per merge; a newer merge cancels the older run |
+| PR into `release/**` | `CI` | free hosted, nix `.#ci` + a rust-cache per build kind saved on main | a hotfix: the full suite |
+| release commit on main | `CI` (never cancelled) | THEBATTLESHIP `task-main`, the same dev target dirs as every merge | the full suite, every test; `release-tag` needs its `CI passed` |
+| release commit on main | `Images` (+ `Deploy` / `Desktop cache` at the tag) | THEBATTLESHIP `task-release`: release-profile artifacts only (Deploy's own jobs, node binaries and release assets stay free hosted) | GHCR images; `release-tag` waits for them |
+| `git pull` onto main | prek post-merge → `scripts/rail-evidence-hook.sh` | your machine, in the background | rail evidence for the new HEAD, so the next `ci-local` narrows |
 
 **Main requires:** `PR checks`, `Release guard` and `Local CI` (ruleset
 25572114). `just release-tag` separately requires `CI passed` on the
@@ -198,16 +203,19 @@ gh api -X PUT repos/FastTrackStudios/task/rulesets/25572114 --input /tmp/rs-put.
 
 ### 7. Main is green
 
-Each merge to main starts a full `CI` run on free hosted runners: Tests
-is a cold workspace build on 4 vCPUs with dependencies from the
-rust-cache, so expect tens of minutes. A newer merge never cancels an
-older run: each main commit gets its own run and its own `CI passed`.
-After merging a whole stack, cancel the runs below the top commit if you
-want the queue clear:
+Each merge to main starts a `CI` run on the `task-main` pool: warm
+target dirs, so it compiles what the merge changed, and Tests runs only
+the tests the diff affects since the last commit whose tests passed
+there (rail evidence in the pool's store). A newer merge CANCELS the
+older run, so only the newest main is checked; a release commit's run
+(`chore(release): …`) is never cancelled, because `release-tag` needs its
+own `CI passed`. Anything that leaves the pools cold (a toolchain bump, a
+lockfile overhaul, a wiped cache): run `just pre-warm-ci` (or
+`just pre-warm-ci both <branch> fresh` before merging the bump) so the
+pools build once, ahead of the merges. To look at the queue:
 
 ```bash
 gh run list -b main -w checks.yml -L 5 --json databaseId,status,headSha
-gh run cancel <older in-progress id>     # optional
 ```
 
 Done when the run on main's head commit has a green `CI passed`.

@@ -45,13 +45,24 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to (re)publish images for, e.g. v0.2.4"
-        required: true
+        description: "Existing release tag to (re)publish images for, e.g. v0.2.4 (not with prewarm)"
+        required: false
         type: string
+      # `just pre-warm-ci release`: build the release artifacts of the
+      # dispatched ref into the `task-release` pool's warm release target
+      # dir, and publish nothing, so the next release recompiles only what
+      # changed (after a toolchain bump, a lockfile overhaul, a wiped cache).
+      prewarm:
+        description: "Pre-warm only: build the release server and web bundle; push nothing."
+        type: boolean
+        default: false
 
-# One publish at a time: two would race the same GHCR tags.
+# One group PER RELEASE, never cancelled. A shared group would hold only one
+# pending run and drop it for the next, so a release queued behind another
+# could vanish. Two publishes still never run side by side in practice: the
+# publish job runs on the `task-release` pool, in arrival order.
 concurrency:
-  group: images
+  group: images-${{ inputs.prewarm && format('prewarm-{0}', github.run_id) || inputs.tag || github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -66,6 +77,7 @@ jobs:
       build: ${{ steps.plan.outputs.build }}
       sha: ${{ steps.plan.outputs.sha }}
       tags: ${{ steps.plan.outputs.tags }}
+      prewarm: ${{ steps.plan.outputs.prewarm }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,9 +87,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.tag }}
+          PREWARM: ${{ inputs.prewarm == true }}
         run: |
           set -euo pipefail
           git fetch --quiet --tags origin
+          if [ "$PREWARM" = true ]; then
+            echo "pre-warm: build $GITHUB_SHA's release artifacts, publish nothing"
+            printf 'build=true\nsha=%s\ntags=\nprewarm=true\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT" = workflow_dispatch ]; then
             [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$INPUT_TAG' is not vX.Y.Z"; exit 1; }
             sha="$(git rev-parse --verify --quiet "refs/tags/$INPUT_TAG^{commit}")" \
@@ -121,11 +139,13 @@ jobs:
     name: Build + push to GHCR
     needs: plan
     if: ${{ needs.plan.outputs.build == 'true' }}
-    # A free hosted runner (the repo is public), cold: a release is a few a
-    # month. The nix closure comes from the FTS cachix. It needs internet,
-    # nothing on the LAN. `just release-tag` waits for these images, so a
-    # release takes as long as this build.
-    runs-on: ubuntu-latest
+    # THEBATTLESHIP's `task-release` pool (~/.flake
+    # hosts/THEBATTLESHIP/github-runners.nix): a warm nix store and a warm
+    # release target dir ($TASK_CACHE_DIR/release), so a release recompiles
+    # what changed since the last one instead of the whole server and web
+    # bundle. `just release-tag` waits for these images, so a release takes
+    # as long as this build.
+    runs-on: [self-hosted, task-release]
     timeout-minutes: 180
     permissions:
       contents: read
@@ -142,11 +162,13 @@ jobs:
       # The image's unused toolchains (Android SDK, .NET, GHC, CodeQL, ~30 GB):
       # a release build of the server and the web bundle needs the disk.
       - name: Free disk
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h / | tail -1
       - uses: cachix/install-nix-action@v31
+        if: ${{ runner.environment == 'github-hosted' }}
         with:
           extra_nix_config: |
             accept-flake-config = true
@@ -161,7 +183,9 @@ jobs:
         id: build
         run: |
           set -euo pipefail
-          dir="$HOME/cargo-target/release"
+          # The pool's warm release target dir; a hosted runner's home if
+          # this ever runs off the pool.
+          dir="${TASK_CACHE_DIR:-$HOME/cargo-target}/release"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           export CARGO_TARGET_DIR="$dir"
@@ -187,6 +211,7 @@ jobs:
           bash scripts/check-versions.sh --bin "$dir/release/task-server"
 
       - name: Push images
+        if: ${{ needs.plan.outputs.prewarm != 'true' }}
         env:
           TASK_PREBUILT_SERVER_BIN: ${{ steps.build.outputs.server }}
           TASK_PREBUILT_WEB_ROOT: ${{ steps.build.outputs.web }}
@@ -213,6 +238,7 @@ jobs:
       # What `just release-tag` will check: anonymous pull + revision.
       # Fails (with the reason) while the packages are still private.
       - name: Pullable without credentials?
+        if: ${{ needs.plan.outputs.prewarm != 'true' }}
         env:
           TAGS: ${{ needs.plan.outputs.tags }}
           SHA: ${{ needs.plan.outputs.sha }}

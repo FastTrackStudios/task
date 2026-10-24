@@ -152,8 +152,15 @@ follows `skills/ship-stack.md`. In short:
   GitHub). With no hook, a dirty tree or `SKIP=local-ci`, run
   `gh workflow run checks.yml --ref <branch>` instead:
   it posts `Local CI` when green. PRs squash-merge, and the full set
-  (clippy, docs, every test) runs on GitHub's free hosted runners after
-  every merge to `main`.
+  (clippy, docs, the tests the merge affects) runs after every merge to
+  `main` on THEBATTLESHIP's self-hosted `task-main` pool, whose target
+  dirs stay warm between merges (`task-release` builds only the release
+  artifacts: images and the desktop cache; `~/.flake`
+  hosts/THEBATTLESHIP/github-runners.nix).
+  A newer merge cancels the older run; a release commit's run is never
+  cancelled. After pulling `main`, the `post-merge` hook records rail
+  evidence in the background so your next `ci-local` narrows
+  (`just install-hooks` once to get it).
 - A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
   `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
   a push to `main` deploys nothing.
