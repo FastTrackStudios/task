@@ -1,0 +1,26 @@
+[package]
+name = "sharing-guest"
+description = "Guest views for cross-org project sharing: pure projections that turn a `ProjectInfo` (and its parts, pieces, deliverables) and a `TaskInfo` into what a grant guest may receive — money and operator-internal fields stripped by an exhaustive destructure, so a new field breaks the build until it is decided — plus the link-redaction helper that collapses every reference outside the grant into one opaque \"linked: (not shared)\" marker. No I/O; the scope predicate is an argument."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean: proto crates only, no backends. The grant lane (server)
+# and any guest-facing UI both bind to these types.
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+facet = { workspace = true }
+project-proto = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+task-proto = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+workflows-proto = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
