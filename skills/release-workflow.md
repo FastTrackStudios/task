@@ -50,7 +50,7 @@ files: `.changes/README`. A local `just ci` is optional, never the gate.
 ```bash
 just release-plan       # latest tag, commits and change files since, next version, migrations
 just release-prepare    # release/pending from origin/main: ONE commit chore(release): vYY.M.MICRO
-just release-pr         # pushes it, opens the PR into main (body: changelog, migrations, git deps)
+just release-pr         # pushes it (Local CI vouches for a release commit at once, no build), opens the PR into main (body: changelog, migrations, git deps)
 # squash-merge it while main has not moved (else: close, delete the branch, prepare again)
 just release-tag        # once the full suite on the merge commit is green: tags it. THE TAG DEPLOYS.
 ```
