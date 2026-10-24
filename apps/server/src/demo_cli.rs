@@ -743,9 +743,13 @@ async fn plant_billing(
             .set_project_member_rate(info.id, member.id, b.hourly_cents)
             .await
             .map_err(|e| eyre::eyre!("rate on {}: {e:?}", b.project))?;
+        // The declared session itself, not any time on the project: time a
+        // demo user logged there must not stand in for the seed's.
+        let description = format!("{} — first batch", b.project);
         let logged = WorkSessionEntity::find()
             .filter(WorkSessionColumn::ProjectId.eq(info.id))
             .filter(WorkSessionColumn::UserId.eq(member.id))
+            .filter(WorkSessionColumn::Description.eq(description.clone()))
             .one(&timer_conn)
             .await
             .wrap_err("look up billed time")?
@@ -759,7 +763,7 @@ async fn plant_billing(
                     project_id: Some(info.id),
                     project_path: info.path.clone(),
                     task_note_path: String::new(),
-                    description: format!("{} — first batch", b.project),
+                    description,
                     start_time: end - chrono::Duration::hours(b.hours),
                     end_time: end,
                     billable_override: Some(true),
