@@ -20,6 +20,8 @@
 //!   `bot:<uuid>`), an id into the owner org's directory and bot
 //!   roster. The display name (`created_by_name`) is carried, so the
 //!   guest still sees who made the task without learning an account id;
+//! - `workflow.assignees[].user_id` — a human assignee's account id;
+//!   the display name is carried, an agent assignee passes through;
 //! - `on_behalf_of` — the same kind of ref, for the person a personal
 //!   bot acted for. Its display name (`on_behalf_of_name`) is carried.
 //!
@@ -137,10 +139,45 @@ pub struct GuestWorkflow {
     pub workstream: Option<Linked<Uuid>>,
     pub estimate: Option<Estimate>,
     pub parent: Option<Linked<Uuid>>,
-    pub assignees: Vec<AgentRef>,
+    pub assignees: Vec<GuestAssignee>,
     pub blockers: Vec<Linked<Uuid>>,
     pub relates_to: Vec<Linked<Uuid>>,
     pub relations: Vec<Linked<Relation>>,
+}
+
+/// An assignee as a guest receives it. A human's `user_id` is an id into
+/// the owner org's directory, stripped like `created_by`; the display
+/// name is carried. An agent carries no account id and passes through.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[repr(u8)]
+pub enum GuestAssignee {
+    Human {
+        display_name: Option<String>,
+    },
+    Agent {
+        name: String,
+        model_version: Option<String>,
+    },
+}
+
+impl From<AgentRef> for GuestAssignee {
+    fn from(a: AgentRef) -> Self {
+        match a {
+            // ── stripped: user_id (t[impl sharing.grant.exclusions]) ──
+            AgentRef::Human {
+                user_id: _,
+                display_name,
+            } => Self::Human { display_name },
+            AgentRef::Agent {
+                name,
+                model_version,
+            } => Self::Agent {
+                name,
+                model_version,
+            },
+        }
+    }
 }
 
 /// Project a [`TaskInfo`] into its guest view. Pure; `in_scope` is the
@@ -251,7 +288,7 @@ where
         workstream: redact_opt(workstream, |c| ObjectRef::Workstream(*c), in_scope),
         estimate,
         parent: redact_opt(parent, |t| ObjectRef::Task(*t), in_scope),
-        assignees: assignees.0,
+        assignees: assignees.0.into_iter().map(GuestAssignee::from).collect(),
         blockers: redact_list(blockers.0, |t| ObjectRef::Task(*t), in_scope),
         relates_to: redact_list(relates_to.0, |t| ObjectRef::Task(*t), in_scope),
         relations: redact_list(relations.0, |r| ObjectRef::Task(r.target), in_scope),
@@ -315,7 +352,16 @@ mod tests {
                 workstream: None,
                 estimate: Some(Estimate::M),
                 parent: Some(SIBLING),
-                assignees: AgentRefList(vec![]),
+                assignees: AgentRefList(vec![
+                    AgentRef::Human {
+                        user_id: "user:a5519e00-0000-0000-0000-0000000000a1".into(),
+                        display_name: Some("Sam".into()),
+                    },
+                    AgentRef::Agent {
+                        name: "triage-bot".into(),
+                        model_version: None,
+                    },
+                ]),
                 blockers: UuidList(vec![OUTSIDE_TASK, SIBLING]),
                 relates_to: UuidList(vec![OUTSIDE_TASK_2]),
                 relations: RelationList(vec![
@@ -375,6 +421,24 @@ mod tests {
         model_is_absent: "workflow" / "model" => "secret-model-id".to_owned();
         created_by_ref_is_absent: "task" / "createdBy" => "0b5e55ed".to_owned();
         on_behalf_of_ref_is_absent: "task" / "onBehalfOf" => "0b0b0b0b".to_owned();
+        assignee_user_id_is_absent: "workflow" / "userId" => "a5519e00".to_owned();
+    }
+
+    #[test]
+    fn assignees_keep_names_without_account_ids() {
+        let g = guest_task(mix_task(), &pred);
+        assert_eq!(
+            g.workflow.unwrap().assignees,
+            vec![
+                GuestAssignee::Human {
+                    display_name: Some("Sam".into()),
+                },
+                GuestAssignee::Agent {
+                    name: "triage-bot".into(),
+                    model_version: None,
+                },
+            ]
+        );
     }
 
     #[test]
