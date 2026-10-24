@@ -104,9 +104,6 @@ jobs:
             git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
               || { echo "::error::no tag $tag"; exit 1; }
             ref="$tag"
-            # The tag's own version must be the one it is named for.
-            v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
-            [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
           else
             # No tag input: the run must itself be on a release tag (the
             # deploy's workflow_call, or a dispatch with the tag as its
@@ -119,9 +116,10 @@ jobs:
             esac
             tag="${GITHUB_REF#refs/tags/}"
             ref="${GITHUB_SHA}"
-            v="$(bash scripts/release.sh version)"
-            [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
           fi
+          # The binaries report the tag's version: the build stamps it
+          # (releases commit none), so the tag must be a release version.
+          bash scripts/release.sh image-tag "$tag" >/dev/null
           # Either way the tag is a commit of main: binaries attach to
           # releases, not to branch builds.
           git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
@@ -184,6 +182,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
+      # Releases commit no version: write the tag's into this checkout, so
+      # every binary reports the release.
+      - name: Stamp the release version
+        shell: bash
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: bash scripts/release.sh stamp "$TAG"
 
       - name: Native build dependencies (Linux)
         if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' }}

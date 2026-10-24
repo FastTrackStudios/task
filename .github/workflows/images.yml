@@ -1,33 +1,22 @@
-# Images: build task-server + task-web and push them to GHCR, BEFORE the
-# release tag exists.
+# Images: build task-server + task-web from a release tag and push them to
+# GHCR.
 #
 #   ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
 #   ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
 #
-# starcommand's Argo CD `task` Application follows the newest `v*` tag of
-# this repo (deploy/chart/task) with `image.registry:
-# ghcr.io/fasttrackstudios` and no tag override, so the chart at tag vX.Y.Z
-# pulls `:<its appVersion>` = `:X.Y.Z` (scripts/ghcr-images.sh). Argo sees a
-# new tag within minutes, so the images must already be there. Hence:
+# Called by deploy.yml on every release tag vX.Y.Z (after its tag guard):
+# check out the tag, stamp its version into the checkout (`release.sh
+# stamp`; releases commit no version), build, and push `:X.Y.Z` (the bare
+# version, `release.sh image-tag`), `:sha-<short>` and, when this is the
+# highest release, `:latest`. starcommand's argocd-image-updater then rolls
+# production to the highest X.Y.Z image; the chart pins none
+# (deploy/chart/task). Versions are CalVer (26.10.2), no `v`.
 #
-#   release PR squash-merges -> push of `chore(release): vX.Y.Z` to main
-#     (or to release/v* for a hotfix release)
-#     -> this workflow builds and pushes `:X.Y.Z` (+ `sha-<short>`, `latest`)
-#   just release-tag  -> refuses until both images `:X.Y.Z` are on GHCR,
-#                        public, and labelled with the release commit
-#     -> pushes vX.Y.Z (fts-forge) -> Argo deploys it; deploy.yml verifies
-#        live and publishes the GitHub Release, binaries, desktop cache
+# workflow_dispatch with `tag`: build and push the images of an EXISTING
+# release tag from that tag's source. Creates no git tag. For re-publishing
+# a lost image.
 #
-# A push that does not change the version builds nothing. Versions are
-# CalVer (26.10.0): the image tag is the bare version, no `v`.
-#
-# workflow_dispatch with `tag`: build and push the images for an EXISTING
-# release tag from that tag's source, tagged with what the chart at that
-# tag renders. Creates no git tag. For seeding GHCR (the cutover from the
-# LAN registry: v0.2.4's chart says appVersion 0.1.0, so its images are
-# `:0.1.0`) or re-publishing a lost image.
-#
-#   gh workflow run images.yml -R FastTrackStudios/task --ref main -f tag=v0.2.4
+#   gh workflow run images.yml -R FastTrackStudios/task --ref main -f tag=v26.10.2
 #
 # Packages pushed with GITHUB_TOKEN are created PRIVATE; the org must make
 # task-server and task-web public once, or the cluster cannot pull them
@@ -36,12 +25,7 @@
 name: Images
 
 on:
-  push:
-    # main: a release PR's squash commit. release/v*: a hotfix release
-    # (fleet flow v4), tagged on that branch.
-    branches: [main, "release/v*"]
-    # A release commit always changes Cargo.toml's version.
-    paths: [Cargo.toml]
+  workflow_call:
   workflow_dispatch:
     inputs:
       tag:
@@ -76,6 +60,7 @@ jobs:
     outputs:
       build: ${{ steps.plan.outputs.build }}
       sha: ${{ steps.plan.outputs.sha }}
+      tag: ${{ steps.plan.outputs.tag }}
       tags: ${{ steps.plan.outputs.tags }}
       prewarm: ${{ steps.plan.outputs.prewarm }}
     steps:
@@ -93,47 +78,35 @@ jobs:
           git fetch --quiet --tags origin
           if [ "$PREWARM" = true ]; then
             echo "pre-warm: build $GITHUB_SHA's release artifacts, publish nothing"
-            printf 'build=true\nsha=%s\ntags=\nprewarm=true\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            printf 'build=true\nsha=%s\ntag=\ntags=\nprewarm=true\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # The release tag: the dispatch's input, else the tag push that
+          # started deploy.yml (a called workflow sees the caller's ref).
           if [ "$EVENT" = workflow_dispatch ]; then
-            [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$INPUT_TAG' is not vX.Y.Z"; exit 1; }
-            sha="$(git rev-parse --verify --quiet "refs/tags/$INPUT_TAG^{commit}")" \
-              || { echo "::error::no tag $INPUT_TAG"; exit 1; }
-            v="$(bash scripts/release.sh version "$sha")"
-            [ "v$v" = "$INPUT_TAG" ] || { echo "::error::$INPUT_TAG names a commit with version $v"; exit 1; }
-            extra=""
+            tag="$INPUT_TAG"
           else
-            sha="$GITHUB_SHA"
-            v="$(bash scripts/release.sh version "$sha")"
-            vp="$(bash scripts/release.sh version "$sha^1")"
-            if [ "$v" = "$vp" ]; then
-              echo "version unchanged ($v): not a release commit, nothing to publish"
-              echo "build=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            git show "$sha:CHANGELOG.md" | grep -q "^## \[$v\]" \
-              || { echo "::error::version $vp -> $v but CHANGELOG.md has no [$v] section: not a release commit"; exit 1; }
-            ! git rev-parse -q --verify "refs/tags/v$v" >/dev/null \
-              || { echo "::error::tag v$v already exists; a released version's images are never replaced"; exit 1; }
-            extra="latest"
+            case "$GITHUB_REF" in
+              refs/tags/v*) tag="${GITHUB_REF#refs/tags/}" ;;
+              *) echo "::error::images are built from a release tag (ref is $GITHUB_REF)"; exit 1 ;;
+            esac
           fi
-          # The tag the chart at this commit renders, and must find.
-          itag="$(bash scripts/ghcr-images.sh tag "$sha")"
-          if [ "$EVENT" != workflow_dispatch ] && [ "$itag" != "$v" ]; then
-            echo "::error::Chart.yaml appVersion is $itag but the release is $v: the chart would pull the wrong images"
-            exit 1
-          fi
-          tags="$itag"
-          [ "$v" = "$itag" ] || tags="$tags $v"
-          tags="$(xargs <<<"$tags sha-$(git rev-parse --short "$sha") $extra")"
-          echo "publishing $sha as: $tags"
+          v="$(bash scripts/release.sh image-tag "$tag")"
+          sha="$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}")" \
+            || { echo "::error::no tag $tag"; exit 1; }
+          tags="$v sha-$(git rev-parse --short "$sha")"
+          # `latest` is the newest release: a re-publish of an older tag, or
+          # a hotfix below a newer main release, leaves it alone.
+          highest="$(git -c versionsort.suffix=- tag --list 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+          [ "$tag" != "$highest" ] || tags="$tags latest"
+          echo "publishing $tag ($sha) as: $tags"
           {
             echo "build=true"
             echo "sha=$sha"
+            echo "tag=$tag"
             echo "tags=$tags"
           } >> "$GITHUB_OUTPUT"
-          echo "### Images for v$v: \`$tags\` from \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Images for $tag: \`$tags\` from \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: Build + push to GHCR
@@ -143,8 +116,8 @@ jobs:
     # hosts/THEBATTLESHIP/github-runners.nix): a warm nix store and a warm
     # release target dir ($TASK_CACHE_DIR/release), so a release recompiles
     # what changed since the last one instead of the whole server and web
-    # bundle. `just release-tag` waits for these images, so a release takes
-    # as long as this build.
+    # bundle. Production rolls once these images are on GHCR, so a release
+    # reaches it as fast as this build.
     runs-on: [self-hosted, task-release]
     timeout-minutes: 180
     permissions:
@@ -159,6 +132,14 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
+      # Releases commit no version: write the tag's into this checkout, so
+      # the server and the web bundle report the release. (A pre-warm
+      # builds the ref as it is.)
+      - name: Stamp the release version
+        if: ${{ needs.plan.outputs.tag != '' }}
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: bash scripts/release.sh stamp "$TAG"
       # The image's unused toolchains (Android SDK, .NET, GHC, CodeQL, ~30 GB):
       # a release build of the server and the web bundle needs the disk.
       - name: Free disk
@@ -216,6 +197,10 @@ jobs:
           TASK_PREBUILT_SERVER_BIN: ${{ steps.build.outputs.server }}
           TASK_PREBUILT_WEB_ROOT: ${{ steps.build.outputs.web }}
           TAGS: ${{ needs.plan.outputs.tags }}
+          # The stamped checkout is dirty, so the flake has no self.rev: the
+          # images' revision label and TASK_BUILD_REV come from here
+          # (nix/modules/crane.nix; the build is --impure).
+          FTS_BUILD_REV: ${{ needs.plan.outputs.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -235,7 +220,7 @@ jobs:
           done
           rm -f "$REGISTRY_AUTH_FILE"
 
-      # What `just release-tag` will check: anonymous pull + revision.
+      # What the cluster needs: anonymous pull, built from the tag's commit.
       # Fails (with the reason) while the packages are still private.
       - name: Pullable without credentials?
         if: ${{ needs.plan.outputs.prewarm != 'true' }}

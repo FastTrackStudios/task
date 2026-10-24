@@ -98,6 +98,16 @@
       # can say WHICH commit it serves (version.json / TASK_BUILD_REV).
       # Only the cheap wrapper layers depend on it — the expensive
       # cargo/wasm derivations stay rev-free and cached.
-      fts.buildRev = self.rev or self.dirtyRev or "unknown";
+      #
+      # A release build stamps the tag's version into its checkout
+      # (scripts/release.sh stamp), so the tree is dirty and self.rev is
+      # gone; those jobs pass the tagged commit as FTS_BUILD_REV with
+      # `--impure`. Pure evaluation reads getEnv as "", so every other build
+      # is unchanged.
+      fts.buildRev =
+        let
+          fromEnv = builtins.getEnv "FTS_BUILD_REV";
+        in
+        if fromEnv != "" then fromEnv else self.rev or self.dirtyRev or "unknown";
     };
 }

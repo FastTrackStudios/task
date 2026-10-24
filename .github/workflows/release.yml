@@ -1,36 +1,22 @@
-# Release — the guard on release PRs, and the GitHub Release once
-# production serves a tag. Fleet flow v4 (the `release-workflow` fleet
-# skill; Task's specifics in skills/release-workflow.md); the logic is
-# scripts/release.sh, so a human can run every step by hand (`just release-*`).
+# Release — the GitHub Release of a tag. Releases are tags (tag-from-main,
+# the same flow as studio's; Task's specifics in
+# skills/release-workflow.md); the logic is scripts/release.sh, so a human
+# can run every step by hand (`just release*`).
 #
-#   pull_request -> main, release/**
-#                          "Release guard": cheap, on a hosted runner. Only a
-#                          release PR (head `release/pending`, opened by
-#                          `just release-pr`) is judged: ONE commit
-#                          `chore(release): vYY.M.MICRO` touching only the
-#                          version lines, CHANGELOG.md and deleted
-#                          .changes/*.md; the version is the computed next
-#                          CalVer; the PR's base is the target's CURRENT tip;
-#                          a network error fails. Every other PR passes at
-#                          once with a note.
-#                          The script runs from the BASE commit, never the
-#                          PR's head: a PR that edits release.sh must not
-#                          judge itself.
 #   workflow_call          from deploy.yml after its tag guard: the GitHub
-#                          Release for the tag that started the deploy
-#                          (Verify live runs beside it, informational).
+#                          Release for the tag that started the deploy, with
+#                          the notes from the change files added since the
+#                          previous tag. It waits for nothing else: the
+#                          images, TestFlight and the assets start from the
+#                          same tag and attach as they finish.
 #   workflow_dispatch      the same, by hand, with the tag as the ref.
 #
-# After a release PR squash-merges and its full suite is green,
-# `just release-tag` pushes the tag (as the fts-forge App or a person: a tag
-# pushed with GITHUB_TOKEN starts no workflow).
+# `just release` pushes the tag (as the fts-forge App or a person: a tag
+# pushed with GITHUB_TOKEN starts no workflow). There are no release PRs.
 
 name: Release
 
 on:
-  pull_request:
-    branches: [main, "release/**"]
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
   workflow_dispatch:
 
@@ -38,41 +24,11 @@ permissions:
   contents: read
 
 jobs:
-  guard:
-    name: Release guard
-    # Only release PRs (head `release/*`, e.g. `release/pending`) and PRs into
-    # a `release/**` hotfix line. Every other PR skips it at once (no runner;
-    # a skipped required check counts as passed).
-    if: >-
-      github.event_name == 'pull_request' &&
-      (startsWith(github.head_ref, 'release/') || startsWith(github.base_ref, 'release/'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # The BASE commit's tree (so its scripts/release.sh) is what runs.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-      # The head's commits, as objects only (a fork's head lives under
-      # refs/pull/N/head); nothing from them is executed.
-      - name: Fetch the PR head
-        env:
-          PR: ${{ github.event.pull_request.number }}
-        run: git fetch --quiet --no-tags origin "+refs/pull/${PR}/head:refs/remotes/pr/head"
-      - name: Is this a sound release?
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: bash scripts/release.sh guard
-
   publish:
     name: GitHub Release
     # In a called workflow `github` is the CALLER's context: the tag push
     # that started deploy.yml, or this file's own dispatch on a tag.
-    if: ${{ github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

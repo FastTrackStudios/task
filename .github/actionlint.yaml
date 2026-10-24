@@ -6,8 +6,8 @@
 #                   (macOS app, iOS, the macOS node binary).
 #   `task-main`     THEBATTLESHIP's pool for merges to main (checks.yml).
 #   `task-release`  THEBATTLESHIP's pool for release-profile artifacts only
-#                   (images, the desktop cache); release commits' checks run
-#                   on task-main.
+#                   (images, the desktop cache, built from a release tag);
+#                   every check runs on task-main.
 self-hosted-runner:
   labels:
     - airlock

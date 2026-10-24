@@ -77,6 +77,10 @@ jobs:
   testflight:
     if: ${{ github.event_name == 'push' || inputs.testflight }}
     runs-on: [self-hosted, macos, task-release-mac]
+    # The tag guard reads the tagged commit's `CI passed`.
+    permissions:
+      contents: read
+      checks: read
     # Fail loudly when the airlock Mac isn't there. Without this a job
     # with no available runner just QUEUES, and is eventually cancelled —
     # which reads as "cancelled", not "failed", so nothing alerts and
@@ -107,11 +111,19 @@ jobs:
           clean: false
           fetch-depth: 0
 
-      # A pushed tag must be a release commit on main or a release/v*
-      # hotfix branch (tag == v<Cargo version>, CHANGELOG section present). Without this a stray v* tag
-      # on a branch would build TestFlight. A manual dispatch is exempt.
+      # Releases commit no version: on a release tag, write the tag's into
+      # this checkout (the next checkout's --force discards it again).
+      - name: Stamp the release version
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: bash scripts/release.sh stamp "$GITHUB_REF_NAME"
+
+      # A pushed tag must be vX.Y.Z on a commit of main or a release/v*
+      # hotfix line, with `CI passed` green on it. Without this a stray v*
+      # tag on a branch would build TestFlight. A manual dispatch is exempt.
       - name: Tag guard
         if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/release.sh tag-guard
 
       # One version for every shipped thing — see the same step in
@@ -179,9 +191,10 @@ jobs:
   # installs), attached to the release `v<version>` — the same thing
   # `just release-desktop <version>` does by hand on airlock.
   #
-  # ON for every release (the Captain's call): the version is the one read
-  # from [workspace.package] in Cargo.toml by scripts/release.sh — the same
-  # number TestFlight, iOS and the server release carry, so the desktop can
+  # ON for every release (the Captain's call): the version is the tag's,
+  # stamped into [workspace.package] in Cargo.toml (scripts/release.sh
+  # stamp) — the same number TestFlight, iOS and the server release carry,
+  # so the desktop can
   # never drift onto its own track again (it sat at 0.0.5 while the release
   # was 0.2.x). Until 26.10 it went out as its own `desktop-v<version>`
   # release; the updater still reads those, so older installs keep finding
@@ -197,7 +210,7 @@ jobs:
   # staple, Gatekeeper check, zip, manifest) and the upload is this job's
   # own step, so it attaches to any tag — including one whose copy of
   # release.sh predates the single release. The release is created by the
-  # deploy after the tag verifies live, so the upload waits for it.
+  # deploy right after its tag guard, so the upload waits for it.
   #   - tag push: build the tag, attach to it.
   #   - dispatch, desktop_release=build: build the ref, never upload (prove
   #     a fix branch).
@@ -212,6 +225,7 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: write
+      checks: read
     steps:
       - name: Preflight — build volume mounted
         run: |
@@ -219,7 +233,7 @@ jobs:
 
       # What to build and where it goes. A push builds its own tag; a
       # publish dispatch builds the tag it names, which must be a release
-      # of main (its Cargo.toml says its version).
+      # of main (the build stamps the tag's version).
       - name: Plan
         id: plan
         env:
@@ -261,21 +275,29 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.plan.outputs.ref }}
 
-      # A pushed tag must be a release commit on main or a release/v*
-      # hotfix branch (tag == v<Cargo version>, CHANGELOG section present).
-      # A backfill must name a tag of main whose version it carries.
+      # Releases commit no version: write the tag's into this checkout, so
+      # the app reports the release (the next checkout's --force discards
+      # it again).
+      - name: Stamp the release version
+        if: ${{ steps.plan.outputs.skip != 'true' && steps.plan.outputs.tag != '' }}
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: bash scripts/release.sh stamp "$TAG"
+
+      # A pushed tag must be vX.Y.Z on a commit of main or a release/v*
+      # hotfix line, with `CI passed` green on it. A backfill must name a
+      # tag of main.
       - name: Tag guard
         if: ${{ steps.plan.outputs.skip != 'true' && steps.plan.outputs.tag != '' }}
         env:
           TAG: ${{ steps.plan.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = push ]; then
             bash scripts/release.sh tag-guard
             exit 0
           fi
-          [ "v$(bash scripts/release.sh version)" = "$TAG" ] \
-            || { echo "::error::$TAG's Cargo.toml says $(bash scripts/release.sh version)"; exit 1; }
           git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
           git merge-base --is-ancestor HEAD origin/main \
             || { echo "::error::$TAG is not in main's history"; exit 1; }

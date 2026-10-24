@@ -14,9 +14,9 @@
 # bundle is ever needed.
 
 image:
-  # Registry+namespace prefix for the images. Releases publish them
-  # (public) to GHCR before the release tag exists (.github/workflows/
-  # images.yml). Override if you mirror them somewhere else.
+  # Registry+namespace prefix for the images. Every release tag builds and
+  # pushes them (public) to GHCR (.github/workflows/images.yml). Override
+  # if you mirror them somewhere else.
   registry: ghcr.io/fasttrackstudios
   pullPolicy: IfNotPresent
   # e.g. pullSecrets: [{ name: my-registry-cred }]
@@ -25,8 +25,9 @@ image:
 server:
   image:
     repository: task-server
-    # Empty = chart appVersion, which at release tag vX.Y.Z is X.Y.Z, the
-    # tag the release pushed. (`sha-<short>` and `latest` exist too.)
+    # The chart pins no release. Empty = `latest`, the newest release.
+    # Set X.Y.Z (one per release tag; `sha-<short>` exists too) to pin
+    # one; on starcommand argocd-image-updater sets the highest X.Y.Z here.
     tag: ""
   replicas: 1
 

@@ -156,56 +156,45 @@ release-desktop VERSION:
 
 # ── Releases ─────────────────────────────────────────────────────────────
 #
-# Fleet flow v4 (the `release-workflow` fleet skill is the source of truth;
-# Task's specifics: skills/release-workflow.md). `main` is the only
-# long-lived branch: every change is a squash-merged PR carrying a
-# cargo-rail change file (`.changes/*.md`). A release is a TAG
-# `vYY.M.MICRO` (CalVer, computed): `release-prepare` cuts `release/pending`
-# (one commit: version + CHANGELOG from the change files, which it
-# deletes), its PR squash-merges into main, and `release-tag` pushes the
-# tag once the full suite on that commit is green. The tag deploys the
-# server + web, uploads TestFlight builds, and publishes the GitHub Release
-# carrying everything the version ships (node binaries, web bundle, macOS
-# and Linux desktop apps). Production = the latest `v*` tag.
+# Tag-from-main, the same flow as studio's (Task's specifics:
+# skills/release-workflow.md). `main` is the only long-lived branch: every
+# change is a squash-merged PR carrying a cargo-rail change file
+# (`.changes/*.md`). A release is a TAG `vYY.M.MICRO` (CalVer, computed)
+# that `release` pushes on main's newest commit whose `CI passed` is green.
+# Nothing is committed for it: every release build stamps the tag's
+# version into its own checkout. The tag builds and pushes the images
+# (production follows the highest one), uploads TestFlight builds, and
+# publishes the GitHub Release carrying everything the version ships (node
+# binaries, web bundle, macOS and Linux desktop apps). Production = the
+# latest `v*` tag.
 
-# The product version (server, web, iOS, macOS, Linux desktop).
+# The version this tree carries (a release build's is the tag's, stamped).
 version:
     @bash scripts/release.sh version
 
-# Latest tag, what main holds since, the pending change files, the next
-# (computed) version, and the migrations / moved git deps it would carry.
+# Latest tag, what main holds since, the next (computed) version, the draft
+# notes, and the migrations / moved git deps it would carry.
 release-plan:
     bash scripts/release.sh plan
 
-# Cut `release/pending` from origin/main: CalVer bump, CHANGELOG section
-# from `.changes/*.md` (deleted), ONE commit `chore(release): v<next>`.
-# ARGS: an explicit X.Y.Z (rare; must sort above the latest tag, and the
-# commit records the override), and/or `--on release/vX.Y.Z` for a hotfix.
-release-prepare *ARGS:
-    bash scripts/release.sh prepare {{ARGS}}
-
-# On release/pending: push it and open its PR (squash) into the branch it
-# was cut from, with the changelog and migrations as the body.
-release-pr:
-    bash scripts/release.sh pr
-
-# After the release PR merged, its full suite is green and images.yml
-# pushed its images to GHCR (it refuses otherwise): tag v<version> on the
-# merge commit. THE TAG DEPLOYS. Pushes as whoever you
-# are: use the fts-forge bot or a person, never a workflow token (that
-# starts no workflow). A hotfix tag also opens the forward-port PR.
-release-tag *VERSION:
-    bash scripts/release.sh tag {{VERSION}}
+# Tag the next version on main's newest commit with a green `CI passed` (or
+# on SHA: a commit of main or a release/v* line, green) and push it. THE
+# TAG SHIPS. `--dry-run` names the commit and prints the notes; `--yes`
+# skips the question. Pushes as whoever you are: a person or the fts-forge
+# App, never a workflow token (that starts no workflow).
+release *ARGS:
+    bash scripts/release.sh release {{ARGS}}
 
 # Hotfix while main can't ship (fix on main FIRST): release/v<latest tag>
 # from the tag, fix/<NAME> with the commits cherry-picked (-x), PR into it.
-# NAME: sta-123-slug | no-issue-slug. Then release-prepare --on it.
+# NAME: sta-123-slug | no-issue-slug. Once it merges and is green:
+# `just release <merge sha>`.
 release-hotfix NAME +COMMITS:
     bash scripts/release.sh hotfix {{NAME}} {{COMMITS}}
 
-# One version's section of CHANGELOG.md (default: the current version).
-release-notes *VERSION:
-    @bash scripts/release.sh notes {{VERSION}}
+# A tag's release notes, or the draft for origin/main (no argument).
+release-notes *REF:
+    @bash scripts/release.sh notes {{REF}}
 
 # Every PR that changes a crate carries a change file (`cargo rail change
 # add <crates> --bump none|patch|minor|major -m "…"`). This is the CI gate:
@@ -414,6 +403,11 @@ ci-boundaries:
 ci-versions:
     bash scripts/check-versions.sh
 
+# The release tooling's own end-to-end test: scripts/release.sh on a
+# synthetic repo, a local origin and a gh shim (no network, seconds).
+release-sandbox:
+    bash scripts/release-sandbox.sh
+
 # `TASK_CI_TEST_THREADS` lets one runner ask for fewer test threads than
 # the profile's 16 (the workflow sets it for the Mac Pro VM runner, STA-369:
 # at 16 two tests that dial by endpoint id time out under load, at 8 the
@@ -484,7 +478,7 @@ ci-docs: css
 # (`ci-docs` runs in no CI job since 2026-10-24, too slow for what it
 # catches; `just ci-release` adds it, or run it by hand. `ci-changes` is
 # separate: it needs cargo-rail.)
-ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
+ci: ci-fmt ci-manifests ci-versions release-sandbox ci-architect-css ci-tests ci-clippy ci-wasm
 
 # ── Target dir: keep the latest build of each kind ───────────────────────
 #

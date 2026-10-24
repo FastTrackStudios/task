@@ -4,9 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions are CalVer `YY.M.MICRO` from 26.10 on (0.2.4 was the last SemVer
-release). Each release's section is built by `just release-prepare` from the
-cargo-rail change files (`.changes/*.md`) its PRs carried; never edit this
-file by hand outside a release PR.
+release).
+
+**This file ends at 26.10.1 and is no longer written.** Releases are tags
+pushed on a green commit of main (`just release`); each release's notes are
+built from the cargo-rail change files (`.changes/*.md`) added since the
+previous tag and published on its GitHub Release:
+https://github.com/FastTrackStudios/task/releases
 
 ## [26.10.1] - 2026-10-24
 

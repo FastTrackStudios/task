@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # One version everywhere: every artifact a release ships reports the
 # release's version, `[workspace.package] version` in the root Cargo.toml.
+# In a release build that is the tag's version, which `release.sh stamp`
+# wrote into the checkout before anything was built; releases commit none.
 #
 #   scripts/check-versions.sh                 the static checks (no build)
 #   scripts/check-versions.sh --bin <path>…   also run each built binary's
@@ -15,8 +17,8 @@
 #                                                   from MARKETING_VER, default release.sh version
 #   iOS app (task-app-mobile), marketing version    MARKETING_VER in task-ios.yml / deploy-testflight.sh
 #   web bundle (task-app-web)                       CARGO_PKG_VERSION, version.workspace
-#   OCI images ghcr.io/…/task-{server,web}:<version>  the chart's appVersion (images.yml,
-#                                                   scripts/ghcr-images.sh), set by the release commit
+#   OCI images ghcr.io/…/task-{server,web}:<version>  the release tag (images.yml,
+#                                                   `release.sh image-tag`)
 #   GitHub Release v<version> + node binaries       release.sh publish / node-binaries.yml
 #   Nix package task-server                         nix/modules/packages/task-server.nix, from Cargo.toml
 #
@@ -67,15 +69,15 @@ for wf in .github/workflows/task-ios.yml .github/workflows/task-macos.yml; do
 done
 
 # ── Image tag, release tag, node binaries ────────────────────────────────
-# The chart at a release tag renders `<registry>/task-*:<appVersion>`, and
-# that is the tag images.yml pushes: appVersion IS the release version.
-chart=deploy/chart/task/Chart.yaml
-[ "$(sed -n 's/^appVersion: *"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$chart" | head -1)" = "$want" ] \
-    || bad "$chart: appVersion must be \"$want\" (the release commit sets it; it is the image tag Argo pulls)"
-grep -qx "version: $want" "$chart" \
-    || bad "$chart: version must be $want (the release commit sets it)"
-grep -q 'scripts/ghcr-images.sh tag' .github/workflows/images.yml \
-    || bad ".github/workflows/images.yml: the image tag must come from \`scripts/ghcr-images.sh tag\` (the chart's appVersion)"
+# The images are tagged with the release tag's bare version, and every
+# release build stamps the tag's version first. (desktop-cache.yml builds
+# the pure flake at the tag for cachix, so it does not stamp.)
+grep -q 'scripts/release.sh image-tag' .github/workflows/images.yml \
+    || bad ".github/workflows/images.yml: the image tag must come from \`scripts/release.sh image-tag\` (the release tag)"
+for wf in images.yml node-binaries.yml release-assets.yml task-ios.yml task-macos.yml deploy.yml; do
+    grep -q 'scripts/release.sh stamp' ".github/workflows/$wf" \
+        || bad ".github/workflows/$wf: a release build must run \`scripts/release.sh stamp <tag>\` after its checkout"
+done
 grep -q 'scripts/release.sh version' .github/workflows/node-binaries.yml \
     || bad ".github/workflows/node-binaries.yml: the release tag must come from \`scripts/release.sh version\`"
 

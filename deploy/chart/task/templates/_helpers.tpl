@@ -17,7 +17,7 @@
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 app.kubernetes.io/name: {{ include "task.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/version: {{ .Values.server.image.tag | default "latest" | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
@@ -31,10 +31,11 @@ app.kubernetes.io/component: {{ .component }}
 {{/* Image ref for a component; call with (dict "ctx" . "img" .Values.server.image).
 A repository containing "/" is treated as a FULL image name and used
 verbatim (no registry prefix); a bare name gets image.registry
-prepended. The tag defaults to the chart's appVersion, which the release
-commit sets to the release version (scripts/ghcr-images.sh). */}}
+prepended. The tag is the component's image.tag, or `latest`: the chart
+pins no release. On starcommand argocd-image-updater sets each tag to the
+highest X.Y.Z image on GHCR, which every release tag pushes. */}}
 {{- define "task.image" -}}
-{{- $tag := .img.tag | default .ctx.Chart.AppVersion -}}
+{{- $tag := .img.tag | default "latest" -}}
 {{- if contains "/" .img.repository -}}
 {{- printf "%s:%s" .img.repository $tag -}}
 {{- else -}}
