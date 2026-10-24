@@ -161,7 +161,12 @@ jobs:
           root="$(sed -n 's/^root = "\(.*\)"$/\1/p' sws.toml)"
           [ -n "$root" ] || { echo "::error::no root in $cfg"; cat sws.toml; exit 1; }
           mkdir site
-          docker cp "$cid:$root/." site/
+          # The bundle is a Nix store path: read-only files in read-only
+          # dirs. `docker cp` into a directory creates assets/ as 0555 and
+          # then can't write into it; streamed as a tar, GNU tar restores
+          # directory modes only after their contents are written.
+          docker cp "$cid:$root/." - | tar -x -C site
+          chmod -R u+w site
           docker rm "$cid" >/dev/null
           test -f site/index.html || { echo "::error::$root has no index.html"; exit 1; }
           mkdir -p dist
