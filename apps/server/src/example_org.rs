@@ -2495,6 +2495,127 @@ pub fn collections_path(org_root: &org_proto::OrgRoot) -> std::path::PathBuf {
     )
 }
 
+/// An app document the demo org holds (`crdt::docs`, served by
+/// [`crate::app_docs`]), as a client app such as Studio would have made
+/// it. The server never reads one, so the content planted here is only
+/// a starting state, shaped the way the demo's Studio expects: a `meta`
+/// map with a `title`, and for a setlist a `songs` list of song slugs.
+pub struct DeclaredAppDoc {
+    pub org: &'static str,
+    /// Fixed, so a replant registers the same doc.
+    pub id: &'static str,
+    /// The app's word for it.
+    pub kind: &'static str,
+    pub name: &'static str,
+    /// The declared doc this one is a branch of.
+    pub parent: Option<&'static str>,
+    /// Song slugs, for a setlist.
+    pub songs: &'static [&'static str],
+}
+
+pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
+    DeclaredAppDoc {
+        org: "acme-audio",
+        id: "6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b01",
+        kind: "setlist",
+        name: "Album Launch Set",
+        parent: None,
+        songs: &["track-one", "track-two"],
+    },
+    DeclaredAppDoc {
+        org: "acme-audio",
+        id: "6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b02",
+        kind: "session",
+        name: "Track One",
+        parent: None,
+        songs: &[],
+    },
+    DeclaredAppDoc {
+        org: "acme-audio",
+        id: "6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b03",
+        kind: "session",
+        name: "Track One (acoustic)",
+        parent: Some("6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b02"),
+        songs: &[],
+    },
+];
+
+pub fn app_docs_of(slug: &str) -> impl Iterator<Item = &'static DeclaredAppDoc> + '_ {
+    DECLARED_APP_DOCS.iter().filter(move |d| d.org == slug)
+}
+
+fn app_doc_id(id: &str) -> eyre::Result<uuid::Uuid> {
+    id.parse()
+        .map_err(|e| eyre::eyre!("declared app doc id `{id}`: {e}"))
+}
+
+/// Plant `slug`'s declared app docs into `<org>/app_docs.sqlite`: each
+/// registered (parents first, as the list is ordered), and an empty
+/// doc given its starting content.
+///
+/// Idempotent: registering is idempotent on the fixed id, and a doc that
+/// already holds history is left alone.
+///
+/// # Errors
+///
+/// Opening or migrating the database, or a declared row the catalog
+/// refuses.
+pub async fn plant_app_docs(org_root: &org_proto::OrgRoot, slug: &str) -> eyre::Result<usize> {
+    use crdt::docs::{CreateDoc, Docs as _};
+    use sea_orm_migration::MigratorTrait as _;
+
+    let declared: Vec<&DeclaredAppDoc> = app_docs_of(slug).collect();
+    if declared.is_empty() {
+        return Ok(0);
+    }
+    let path = org_root.app_docs_db();
+    let db = sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+        .await
+        .map_err(|e| eyre::eyre!("open {}: {e}", path.display()))?;
+    crdt_seaorm::Migrator::up(&db, None)
+        .await
+        .map_err(|e| eyre::eyre!("migrate app docs: {e}"))?;
+    let host = crate::app_docs::open(db).await?;
+    let mut planted = 0;
+    for d in declared {
+        let doc_id = app_doc_id(d.id)?;
+        host.create(CreateDoc {
+            doc_id,
+            kind: d.kind.into(),
+            name: d.name.into(),
+            parent: d.parent.map(app_doc_id).transpose()?,
+        })
+        .await
+        .map_err(|e| eyre::eyre!("register \"{}\": {e}", d.name))?;
+        let doc = host
+            .registry()
+            .doc(doc_id)
+            .await
+            .map_err(|e| eyre::eyre!("open \"{}\": {e}", d.name))?;
+        if !doc.loro().oplog_vv().is_empty() {
+            continue;
+        }
+        let meta = doc.loro().get_map("meta");
+        meta.insert("title", d.name)
+            .map_err(|e| eyre::eyre!("seed \"{}\": {e}", d.name))?;
+        if !d.songs.is_empty() {
+            let songs = doc.loro().get_list("songs");
+            for slug in d.songs {
+                songs
+                    .push(*slug)
+                    .map_err(|e| eyre::eyre!("seed \"{}\": {e}", d.name))?;
+            }
+        }
+        doc.loro().commit();
+        // Written straight through: the update writer is asynchronous.
+        doc.compact(doc_id)
+            .await
+            .map_err(|e| eyre::eyre!("persist \"{}\": {e}", d.name))?;
+        planted += 1;
+    }
+    Ok(planted)
+}
+
 /// Plant the declared collections, matching an existing one by title.
 ///
 /// Idempotent the way the rest of the plant is: a collection already
@@ -2976,6 +3097,63 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 #[cfg(test)]
 mod declared_tests {
     use super::*;
+
+    /// The declared app docs plant into the org's catalog with their
+    /// lineage, every parent declared before its branch, and planting
+    /// again changes nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn declared_app_docs_plant_once_with_their_lineage() {
+        use crdt::docs::{DocQuery, Docs as _};
+        use sea_orm_migration::MigratorTrait as _;
+
+        for (i, d) in DECLARED_APP_DOCS.iter().enumerate() {
+            crdt::docs::check_kind(d.kind).expect("a valid kind");
+            if let Some(parent) = d.parent {
+                assert!(
+                    DECLARED_APP_DOCS[..i]
+                        .iter()
+                        .any(|p| p.id == parent && p.org == d.org),
+                    "\"{}\" names a parent declared before it",
+                    d.name
+                );
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = org_proto::DataRoot::new(tmp.path().to_owned());
+        let org = root.init_org("acme-audio", "ACME Audio", true).unwrap();
+        let declared = app_docs_of("acme-audio").count();
+        assert_eq!(plant_app_docs(&org, "acme-audio").await.unwrap(), declared);
+        assert_eq!(plant_app_docs(&org, "acme-audio").await.unwrap(), 0);
+
+        let db = sea_orm::Database::connect(format!(
+            "sqlite://{}?mode=rwc",
+            org.app_docs_db().display()
+        ))
+        .await
+        .unwrap();
+        crdt_seaorm::Migrator::up(&db, None).await.unwrap();
+        let host = crate::app_docs::open(db).await.unwrap();
+        let rows = host.list(DocQuery::default()).await.unwrap().docs;
+        assert_eq!(rows.len(), declared, "one row per declared doc");
+        let branch = DECLARED_APP_DOCS
+            .iter()
+            .find(|d| d.parent.is_some())
+            .expect("a declared branch");
+        let row = rows
+            .iter()
+            .find(|r| r.doc_id.to_string() == branch.id)
+            .unwrap();
+        assert_eq!(
+            row.parent.map(|p| p.to_string()).as_deref(),
+            branch.parent,
+            "the branch carries its parent"
+        );
+        let doc = host.registry().doc(row.doc_id).await.unwrap();
+        assert!(
+            doc.loro().get_map("meta").get("title").is_some(),
+            "the planted doc holds its starting content"
+        );
+    }
 
     /// The paired machines are a contract like the projects are: each
     /// names a project its org declares (so the seeder finds a root to

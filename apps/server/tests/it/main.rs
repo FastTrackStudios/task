@@ -55,6 +55,7 @@ static ALLOC: support::alloc::Counting = support::alloc::Counting;
 mod account_devices_e2e;
 mod activity_e2e;
 mod anonymous_lane_stays_anonymous;
+mod app_docs_e2e;
 mod asset_libraries_e2e;
 mod asset_migration_e2e;
 mod attachments_auth;

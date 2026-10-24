@@ -38,6 +38,7 @@ pub mod admin_cli;
 #[cfg(feature = "plugin-agent")]
 pub mod agent_router;
 pub mod api_ref;
+pub mod app_docs;
 pub mod attachments;
 pub mod attribution;
 #[cfg(feature = "plugin-scripture")]
@@ -221,6 +222,11 @@ pub struct OrgAppState {
     /// into it through [`presence::PresenceRouter`]. Docs persist
     /// under `<org>/crdt/` (override: `TASK_SERVER_CRDT_ROOT`).
     pub vault_collab: vault_collab::VaultCollab,
+    /// The org's app documents (`crdt::docs`): a catalog any app
+    /// registers its docs in (opaque `kind`, client-chosen id) and their
+    /// content, synced over the org's `DocSync`. `<org>/app_docs.sqlite`.
+    /// See [`app_docs`].
+    pub app_docs: crdt::docs::DocsHost,
     /// Wiki feature backend rooted at this org's `vault/`.
     #[cfg(feature = "plugin-wiki")]
     pub wiki: wiki_live::WikiBackend,
@@ -1434,6 +1440,15 @@ pub(crate) async fn build_org_state(
         .await?;
         let prefs = prefs::Store::new(prefs_conn);
 
+        // App documents (`crdt::docs`): the catalog and the bytes in one
+        // SQLite file, `<org>/app_docs.sqlite`.
+        let app_docs_url = format!("sqlite://{}?mode=rwc", org_root.app_docs_db().display());
+        let app_docs_conn = open_sqlite_pool(scope, app_docs_url, "app_docs", |db| {
+            Box::pin(async move { crdt_seaorm::Migrator::up(&db, None).await.map(|()| db) })
+        })
+        .await?;
+        let app_docs = app_docs::open(app_docs_conn.clone()).await?;
+
         // Identity locker — only the **home** org anchors it. Opened
         // at `<org>/identity.sqlite` (per `OrgRoot::identity_db`);
         // `is_home` comes from the on-disk manifest (same source
@@ -2169,6 +2184,8 @@ pub(crate) async fn build_org_state(
             threads.conn().clone(),
             notify_store.conn().clone(),
             prefs.conn().clone(),
+            // The only server copy of the app docs' catalog and bytes.
+            app_docs_conn.clone(),
         ];
         #[cfg(feature = "plugin-agent")]
         sqlite_conns.push(agent_tasks.conn().clone());
@@ -2244,6 +2261,7 @@ pub(crate) async fn build_org_state(
             attachments: attachment_service,
             vault_sync: vault_sync_state,
             vault_collab,
+            app_docs,
             #[cfg(feature = "plugin-scripture")]
             scripture,
             links,
@@ -4552,6 +4570,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             crdt::sync::doc_sync_service_descriptor(),
             crdt::sync::DocSyncDispatcher::new(org_doc_sync(org, &live_access)),
         )
+        // App documents' catalog (`crdt::docs`): register, list, rename,
+        // tombstone, and the `changes` stream a device follows. Their
+        // content rides the `DocSync` mounted above.
+        .with(
+            crdt::docs::docs_rpc_service_descriptor(),
+            crdt::docs::serve(org.app_docs.clone()),
+        )
+        .merge(crdt::docs::stream_layer(org.app_docs.clone()))
         // The same documents for the org's other nodes (`offline.peers`):
         // listed and exchanged by path, gated on `docs/replica` — the
         // only part of the vault an admitted peer reaches.
@@ -4665,19 +4691,27 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 /// metadata. Transports without a handshake to read it from pass `None`
 /// and rely on per-call metadata.
 /// The org's one `DocSync` backend: live-session docs to the live host,
-/// vault files to the vault's registry.
+/// app docs to their catalog's host, vault files to the vault's registry.
 #[cfg(feature = "plugin-fasttrackstudio")]
 fn org_doc_sync(org: &OrgAppState, live_access: &LiveAccess) -> live::DocSyncRouter {
     live::DocSyncRouter {
         live: org.live.clone(),
-        vault: vault_docs(org),
+        rest: app_and_vault_docs(org),
         access: live_access.clone(),
     }
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
-fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> vault_collab::VaultCollab {
-    vault_docs(org)
+fn org_doc_sync(org: &OrgAppState, _live_access: &LiveAccess) -> app_docs::OrgDocSync {
+    app_and_vault_docs(org)
+}
+
+/// App docs, then the vault's.
+fn app_and_vault_docs(org: &OrgAppState) -> app_docs::OrgDocSync {
+    app_docs::OrgDocSync {
+        docs: org.app_docs.clone(),
+        vault: vault_docs(org),
+    }
 }
 
 /// One connection's live access (`live::LiveAccess`): the sets it only

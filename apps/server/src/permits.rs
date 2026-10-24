@@ -259,6 +259,16 @@ table!(SHARING, "sharing", "sharing/**", [
 table!(DOC_SYNC, "doc-sync", "doc/**", [wr "sync"]);
 table!(DOC_PRESENCE, "doc-presence", "doc/presence/**", [rd "presence"]);
 
+// t[impl offline.app-docs.access] — members (a personal org: its owner)
+// only; content stays behind `DOC_SYNC`'s `wr "sync"`.
+// App documents' catalog (`crate::app_docs`): any member registers and
+// renames; deleting tombstones a doc for every device, so it is audited.
+// Content rides `DOC_SYNC`.
+table!(APP_DOCS, "app-docs", "app-docs/**", [
+    rd "get", rd "list", wr "create", wr "rename", wa "delete",
+]);
+table!(APP_DOCS_STREAM, "app-docs-stream", "app-docs/**", [rd "changes"]);
+
 // ── Agent lane ───────────────────────────────────────────────────────────
 
 #[cfg(feature = "plugin-agent")]
@@ -1202,6 +1212,12 @@ pub fn mounts() -> Vec<Mount> {
             SHARING,
         ),
         m("core", crdt::sync::doc_sync_service_descriptor(), DOC_SYNC),
+        m("core", crdt::docs::docs_rpc_service_descriptor(), APP_DOCS),
+        m(
+            "core",
+            crdt::docs::docs_stream_service_descriptor(),
+            APP_DOCS_STREAM,
+        ),
         m("core", crdt::peer::doc_peer_service_descriptor(), DOC_PEER),
         m(
             "core",

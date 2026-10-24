@@ -360,6 +360,14 @@ impl OrgRoot {
         self.path.join("prefs.sqlite")
     }
 
+    /// The org's app documents (`crdt::docs`): their catalog and their
+    /// Loro bytes, one file. Docs an app keeps here (a Studio project, a
+    /// setlist, a rig) are opaque to the server.
+    #[must_use]
+    pub fn app_docs_db(&self) -> PathBuf {
+        self.path.join("app_docs.sqlite")
+    }
+
     /// `<org>/sharing.sqlite` — the Sharing Grants this org has made to
     /// people of other orgs, and their audit lines.
     #[must_use]

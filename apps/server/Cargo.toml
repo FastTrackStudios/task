@@ -213,8 +213,12 @@ vox = { workspace = true }
 vox-core = { workspace = true }
 # Org-wide presence: `crdt::sync::PresenceHost` + the `DocPresence`
 # vox service mounted per org (`vox` feature = the sync/presence
-# transport; no Dioxus, no persistence backends).
+# transport; no Dioxus, no persistence backends). Also `crdt::docs`,
+# the app-docs catalog each org serves (`app_docs`).
 crdt = { workspace = true, features = ["vox"] }
+# App docs' catalog and bytes in `<org>/app_docs.sqlite`
+# (`SeaOrmDocsStore` + `SeaOrmPersistence`, one migrator).
+crdt-seaorm = { workspace = true }
 # Vault-file ⇄ CRDT reconciliation: per-file docs over the crdt
 # DocRegistry + server write-behind into the vault backend.
 # Mounted per org as the `DocSync` service (and the per-file half

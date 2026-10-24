@@ -253,6 +253,48 @@ Events arrive filtered to what the person may read. A subscriber that falls
 behind catches up with `TreeServiceClient::changes_since(root, cursor)`; it
 never re-lists the tree.
 
+### 11. Keep the app's own data as documents
+
+Data the app edits as structure, not as files, is a Loro document in the
+org's catalog: a Studio project (`.session`), a setlist, a rig, a patch. The
+server stores and relays the bytes and never reads them. `kind` is the app's
+own word, and `parent` names the doc a branch was forked from. This is
+architect's `crdt::docs` (`crdt` with features `vox` + `turso`); each org
+serves it, the personal org included. Run one driver per org the person
+works in:
+
+```rust
+use crdt::docs::{CreateDoc, DocsDriver, DocsLane, TursoDocsIndex};
+
+let driver = DocsDriver::new(TursoDocsIndex::open_path(&device_db).await?, storage);
+// storage: impl DocStorage, the Persistence for each doc from its DocMeta.
+// It is called for docs made here and for docs adopted from another device.
+
+// Offline is fine: the id is yours, and registering happens on the next run.
+let doc = driver
+    .create(CreateDoc { doc_id: Uuid::new_v4(), kind: "setlist".into(), name: "CAA".into(), parent: None })
+    .await?;
+
+// One connected session; run it again on every reconnect.
+driver
+    .run(&DocsLane { docs: lane.establish().await?, changes: lane.establish().await?, sync: lane.establish().await? })
+    .await?;
+```
+
+- **Opening docs.** Open them only through `driver.create` / `driver.open`, so
+  each replica is wired for sync before it is edited.
+- **Following changes.** `driver.changes()` reports docs made here and every
+  catalog change from the server. `driver.docs()` lists what the device
+  holds, tombstones included.
+- **Rename and delete** go through `DocsClient` online (`rename` with
+  `expected_rev`; `delete` leaves a tombstone).
+- **Lineage.** A doc made on two devices with one id is refused as another
+  lineage. Make each doc once, on one device, and let the others adopt it.
+
+Server side: `apps/server/src/app_docs.rs`; rules `offline.app-docs.*` in
+`docs/spec/offline.md`; the architect recipe is
+`skills/architect/references/crdt-peer-sync.md` (Recipe D).
+
 ### Done when
 
 - [ ] A fresh account signs in and lands in its personal org with no manual step.
