@@ -12,7 +12,7 @@ Signal will need?" That sent me looking for a GB-scale test of the
 federation relay path (`files.topology.federation` — one server reading a
 file that actually lives on another server, offer/accept, `read` →
 `redeem_bytes`). There wasn't one; the existing coverage
-(`features/files/files/tests/federation_stream.rs`, `tests/integration/tests/it/scale.rs`) only proved the mechanics at a few megabytes.
+(`features/files/files/tests/it/federation_stream.rs`, `tests/integration/tests/it/scale.rs`) only proved the mechanics at a few megabytes.
 
 ## What was actually wrong
 
@@ -79,7 +79,7 @@ place to revisit** — see "Known limitations" below.
 | `apps/server/src/lib.rs` | `serve_org_iroh` passes `Some(org.files.clone())` instead of eagerly building a `BlobsProtocol`. |
 | `features/files/files-sync/src/lib.rs` | Its `serve_over_iroh` call passes `None` — a device replica never serves a federation relay. |
 | `apps/server/src/permits.rs` | `fetch_offered` → `open_relay` in the `FILES_FEDERATION` permit table (still `.audited()`, still on `public/files-offer`). |
-| `features/files/files/tests/federation_stream.rs` | Rewritten. `open_relay` is still tested in-process (it's ordinary Rust, no network needed). The actual byte transfer's correctness is `tests/integration`'s claim now, since it needs a real iroh-blobs connection either way — `Direct::fetch_relay` reads straight out of the origin's published store via `read_relay_chunk` instead of simulating a wire fetch. `revocation_lands_mid_transfer` was rewritten as `a_withdrawn_offer_stops_the_next_relay_not_one_already_open`, matching the new, weaker (deliberately, per the user's choice) guarantee. |
+| `features/files/files/tests/it/federation_stream.rs` | Rewritten. `open_relay` is still tested in-process (it's ordinary Rust, no network needed). The actual byte transfer's correctness is `tests/integration`'s claim now, since it needs a real iroh-blobs connection either way — `Direct::fetch_relay` reads straight out of the origin's published store via `read_relay_chunk` instead of simulating a wire fetch. `revocation_lands_mid_transfer` was rewritten as `a_withdrawn_offer_stops_the_next_relay_not_one_already_open`, matching the new, weaker (deliberately, per the user's choice) guarantee. |
 | `tests/integration/tests/it/large_media.rs` | **New.** Opt-in (`#[ignore]`, `TASK_SCALE_BYTES` env, default 1 GiB). Proves the whole path at real scale: byte-exact via blake3, bounded memory via `/proc/self/status` peak RSS, a working seek, and a second read that's measurably faster (proof the receiver's on-disk cache works). |
 | `.config/nextest.toml` | Two additions: an override giving `large_media::*` a long timeout budget, and — separately, see below — `test-threads = 16` on `[profile.default]`. |
 

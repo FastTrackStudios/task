@@ -96,7 +96,7 @@ slow-timeout = { period = "10s", terminate-after = 3 }
 # binaries start cold at once — the same shape as the integration case
 # above, and the same cure.
 [[profile.default.overrides]]
-filter = 'package(files) and binary(cadence)'
+filter = 'package(files) and binary(it) and test(/^cadence::/)'
 slow-timeout = { period = "10s", terminate-after = 3 }
 
 # `mount_writeback` drives a REAL inotify watcher against a virtual

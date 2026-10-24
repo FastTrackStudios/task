@@ -883,7 +883,7 @@ impl FilesBackend {
     /// It hands out the *cached* repo's backend rather than opening a
     /// second one, which matters: two `FsStore`s over one on-disk
     /// chunk store in a single process is the shape that used to hang
-    /// (see `tests/rpc_surface.rs`). `f` is synchronous; drive any
+    /// (see `tests/it/rpc_surface.rs`). `f` is synchronous; drive any
     /// async work in it with `pollster::block_on`, as this crate does
     /// everywhere it touches jj-lib.
     ///
@@ -919,7 +919,7 @@ impl FilesBackend {
     /// where it was. That is the condition [`FilesBackend::reload_repo`]
     /// exists for, and it cannot be built with two `FilesBackend`s in
     /// one process — two `FsStore`s over one store hangs (see
-    /// `tests/rpc_surface.rs`).
+    /// `tests/it/rpc_surface.rs`).
     pub fn with_repo<R>(
         &self,
         root_id: Uuid,
