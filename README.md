@@ -17,9 +17,20 @@ Some Applications I intend to replace using Task in my own personal life
 
 ## Installation
 
+Task has no central server. Every install is a **node** holding your data,
+and your nodes sync with each other directly:
+
+- the **desktop app** is a node with a window;
+- **`task-server`** is the same node with no window. Leave it running on any
+  computer (a desktop that stays on, a home server, a VPS) so one of your
+  nodes is always reachable.
+
+Sign each one in to your account and they find and admit each other. No
+ports to forward, no addresses to type.
+
 Every release `vX.Y.Z` on [GitHub Releases](https://github.com/FastTrackStudios/task/releases/latest)
-carries everything from that version: the desktop apps, the server, and the
-web app.
+carries everything from that version: the desktop apps, `task-server`, and
+the web app.
 
 ### Desktop app
 
@@ -33,23 +44,27 @@ Installed apps update themselves: they check the latest release in the
 background and install the update on the next start. The tray's *Check for
 updates* does it right away.
 
-### Server
+### Headless server (an always-on node)
 
 On macOS or Linux, with no Nix:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/FastTrackStudios/task/main/scripts/install-node.sh | sh
+task-server peer sign-in     # approve the code on a phone that's signed in
+task-server peer             # run it as one more of your devices
 ```
 
-This installs `task-server`. After that, `task-server self-update` keeps it
-current. [docs/headless-node.md](docs/headless-node.md) covers running it
-as a service, signing it in, and NixOS.
+To keep it running across reboots, `task-server service write` sets up the
+systemd unit or launchd agent, and a daily `task-server self-update`.
+[docs/headless-node.md](docs/headless-node.md) has the service setup for
+Linux, macOS and NixOS.
 
-### Self-host the server and web app
+### Host orgs with the web app
 
-The images are public on GHCR (`ghcr.io/fasttrackstudios/task-server` and
-`task-web`). The compose file runs the server, the web app, and a proxy that
-puts them on one origin:
+To host orgs for a team and serve the web app in a browser, as
+task.starcommand.live does, run the public images
+(`ghcr.io/fasttrackstudios/task-server` and `task-web`). The compose file
+runs the server, the web app, and a proxy that puts them on one origin:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/FastTrackStudios/task/main/deploy/docker-compose.yml
