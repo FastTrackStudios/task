@@ -8,11 +8,12 @@ type: application
 home: https://codeberg.org/FastTrackStudios/Task
 sources:
   - https://codeberg.org/FastTrackStudios/Task
-# Static: a release changes neither (releases commit nothing). The chart
-# does not pin its images: each renders its image.tag, `latest` by
-# default, and on starcommand argocd-image-updater writes the release
-# there (the highest X.Y.Z task-server / task-web on GHCR, which every
-# release tag's Images job pushes). Bump `version` by hand when the chart
-# itself changes; appVersion records the last release that committed one.
+# Static: a release changes neither (releases commit nothing). Each image
+# renders its image.tag, else this appVersion: 26.10.1, the last release
+# that committed one, a real image. On starcommand argocd-image-updater
+# writes the release into the image tags (the highest X.Y.Z task-server /
+# task-web on GHCR, which every release tag's Images job pushes), so a new
+# tag's chart runs what is already deployed until its images land. Bump
+# `version` by hand when the chart itself changes.
 version: 26.10.1
 appVersion: "26.10.1"

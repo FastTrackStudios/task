@@ -25,9 +25,10 @@ image:
 server:
   image:
     repository: task-server
-    # The chart pins no release. Empty = `latest`, the newest release.
-    # Set X.Y.Z (one per release tag; `sha-<short>` exists too) to pin
-    # one; on starcommand argocd-image-updater sets the highest X.Y.Z here.
+    # Empty = the chart's appVersion (26.10.1, the last release that
+    # committed one; releases no longer bump it). Set X.Y.Z (one per release
+    # tag; `sha-<short>` and `latest` exist too) to run a newer release; on
+    # starcommand argocd-image-updater sets the highest X.Y.Z here.
     tag: ""
   replicas: 1
 

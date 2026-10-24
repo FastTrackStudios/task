@@ -9,8 +9,8 @@
 # stamp`; releases commit no version), build, and push `:X.Y.Z` (the bare
 # version, `release.sh image-tag`), `:sha-<short>` and, when this is the
 # highest release, `:latest`. starcommand's argocd-image-updater then rolls
-# production to the highest X.Y.Z image; the chart pins none
-# (deploy/chart/task). Versions are CalVer (26.10.2), no `v`.
+# production to the highest X.Y.Z image (the chart, deploy/chart/task, no
+# longer carries the release). Versions are CalVer (26.10.2), no `v`.
 #
 # workflow_dispatch with `tag`: build and push the images of an EXISTING
 # release tag from that tag's source. Creates no git tag. For re-publishing

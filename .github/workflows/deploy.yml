@@ -13,7 +13,8 @@
 #        ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
 #        ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
 #      starcommand's argocd-image-updater rolls production to the highest
-#      X.Y.Z image (the chart, deploy/chart/task, pins none),
+#      X.Y.Z image (the chart, deploy/chart/task, no longer carries the
+#      release: until then a new tag's chart runs what is deployed),
 #   3. beside 2, publishes the GitHub Release (release.yml) with the notes
 #      from the change files added since the previous tag, then attaches
 #      what the version ships: the headless node binaries

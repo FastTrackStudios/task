@@ -34,7 +34,9 @@ hotfix: release/v26.10.2 (from the tag) <-- cherry-pick -x PR -- CI passed -- ju
 
 Production is the latest `v*` tag: starcommand's argocd-image-updater
 rolls the `task` app to the highest `X.Y.Z` image on GHCR (the chart,
-`deploy/chart/task`, pins none). Nothing deploys on a merge.
+`deploy/chart/task`, no longer carries the release: its `appVersion` stays
+at 26.10.1, so a new tag's chart runs what is deployed until the images
+land and the updater moves both). Nothing deploys on a merge.
 
 ## Shipping a change
 

@@ -266,8 +266,9 @@ Sequence for k8s: `just release` pushes `v<version>` on a green commit of
 main; the tag builds and pushes the images to GHCR (images.yml, from
 deploy.yml); starcommand's Argo CD Application renders the chart at the
 newest `v*` tag, and argocd-image-updater sets both image tags to the
-highest `<version>` on GHCR (the chart pins none: `latest` by default).
-The server pod recreates (`Recreate` strategy frees the PVC first), web
-pods roll whenever — they are stateless. Self-hosting with the chart's
-default `latest` and `pullPolicy: IfNotPresent` never re-pulls: pin
-`server.image.tag` / `web.image.tag` to a release instead.
+highest `<version>` on GHCR. Releases no longer bump the chart's
+`appVersion` (it stays at 26.10.1, a real image), so a new tag's chart
+runs what is already deployed until the updater moves it. The server pod
+recreates (`Recreate` strategy frees the PVC first), web pods roll
+whenever — they are stateless. Self-hosting from the chart: set
+`server.image.tag` / `web.image.tag` to the release you want.
