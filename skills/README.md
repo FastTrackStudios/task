@@ -32,12 +32,12 @@ on the CLI for idempotence + audit.
   ci-local` on the top, `gh stack submit`, normal or forced merge, green
   main. Symlinked as `.claude/skills/ship-stack/SKILL.md` for Claude Code.
 
-- [`release-workflow.md`](release-workflow.md) — Task's specifics of
-  fleet flow v4 (the fleet `release-workflow` skill is the source of
-  truth): branch from main, PR into main with a cargo-rail change file,
-  squash; a release is a CalVer tag `vYY.M.MICRO` (`just release-prepare`,
-  release PR, `just release-tag`) and the tag alone deploys; hotfix
-  branches, rollback, what runs where.
+- [`release-workflow.md`](release-workflow.md) — how a change reaches
+  production (tag-from-main, studio's flow): branch from main, PR into
+  main with a cargo-rail change file, squash; a release is a CalVer tag
+  `vYY.M.MICRO` that `just release` pushes on main's newest green commit,
+  and the tag alone ships; no release PRs; hotfix lines, rollback, what
+  runs where.
 - [`live-dev.md`](live-dev.md) — the local web app against the
   deployed server and the real issuer, signed in as the account in
   `.env` (`just live`); the CLI as that account; the traps that make

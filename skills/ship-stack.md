@@ -12,8 +12,8 @@ says the change affects, on the warm local target dir. When it's green,
 the hook posts the **`Local CI`** commit status, with how long it took.
 **GitHub** runs one free job on a PR, then the full suite once per merge
 to main. PR jobs run on GitHub's free hosted runners; everything that runs
-after code is on main (the post-merge suite, release commits, images, the
-desktop cache) runs on THEBATTLESHIP's self-hosted pools, `task-main` and
+after code is on main (the post-merge suite) or on a release tag (images,
+the desktop cache) runs on THEBATTLESHIP's self-hosted pools, `task-main` and
 `task-release`, whose target dirs stay warm. Their job gate refuses any
 PR job: the repo is public.
 
@@ -34,24 +34,17 @@ worktree with its own `target/` costs a cold build.
 | `git commit` | prek pre-commit (`prek.toml`) | your machine | rustfmt, shellcheck, actionlint on the **staged** files |
 | `git push` | prek pre-push → `scripts/ci-local-hook.sh` → `just ci-local` | your machine | the PR gate's expensive half; posts **`Local CI`** |
 | PR into main | `PR / PR checks` (`pr.yml`) | free hosted, rustup + cargo-rail, no nix | fmt, change files, rail route cases |
-| PR into main | `Release / Release guard` | free hosted | judges `release/pending` PRs only; passes otherwise |
 | push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | Lint/Tests/Wasm on THEBATTLESHIP `task-main` (warm target dir per kind); Plan, Dependency cache, `CI passed` free hosted | the full suite (tests narrowed by rail evidence), once per merge; a newer merge cancels the older run |
 | PR into `release/**` | `CI` | free hosted, nix `.#ci` + a rust-cache per build kind saved on main | a hotfix: the full suite |
-| release commit on main | `CI` (never cancelled) | THEBATTLESHIP `task-main`, the same dev target dirs as every merge | the full suite, every test; `release-tag` needs its `CI passed` |
-| release commit on main | `Images` (+ `Deploy` / `Desktop cache` at the tag) | THEBATTLESHIP `task-release`: release-profile artifacts only (Deploy's own jobs, node binaries and release assets stay free hosted) | GHCR images; `release-tag` waits for them |
+| push of a `v*` tag (`just release`) | `Deploy` (Tag guard, Images, GitHub Release, node binaries, release assets, Desktop cache, Verify live), `task-ios`, `task-macos` | Images and Desktop cache on THEBATTLESHIP `task-release` (release-profile artifacts only); Deploy's own jobs, node binaries and release assets free hosted; the Apple builds on airlock | the release, from the tag alone; every build stamps the tag's version first; no tests (the tag guard checks `CI passed`) |
 | `git pull` onto main | prek post-merge → `scripts/rail-evidence-hook.sh` | your machine, in the background | rail evidence for the new HEAD, so the next `ci-local` narrows |
 
-**Main requires:** `PR checks`, `Release guard` and `Local CI` (ruleset
-25572114). `just release-tag` separately requires `CI passed` on the
-release commit.
+**Main requires:** `PR checks` only (ruleset 25572114). `Local CI` is an
+indicator, not a gate. `just release` separately requires `CI passed` on
+the commit it tags.
 
 **`just ci-local`, in order** (`scripts/ci-local.sh`):
 
-0. **A release commit** (`just release-prepare`'s one commit: version
-   lines, CHANGELOG, deleted change files; the base commit's
-   `release.sh release-only` decides) is vouched for at once, with no
-   build: its code was checked on its base. So `just release-pr` pushes
-   in seconds.
 1. **checks:** `ci-fmt`, `ci-changes <base>` (every touched crate has a
    `.changes/*.md`), `ci-versions` (one version everywhere), `ci-manifests`
    (Cargo.lock matches), `ci-architect-css` (the token sheet comes through
@@ -163,8 +156,8 @@ on GitHub for that branch, which posts `Local CI` when green:
 
 ### 6. Merge
 
-**Normal:** when `gh pr checks <n>` shows `PR checks`, `Release guard` and
-`Local CI` passing on every layer:
+**Normal:** when `gh pr checks <n>` shows `PR checks` passing on every
+layer (and `Local CI`, if the push ran the hook):
 
 ```bash
 gh stack merge <top pr> --yes --squash      # all-or-nothing, bottom-up
@@ -212,9 +205,9 @@ Each merge to main starts a `CI` run on the `task-main` pool: warm
 target dirs, so it compiles what the merge changed, and Tests runs only
 the tests the diff affects since the last commit whose tests passed
 there (rail evidence in the pool's store). A newer merge CANCELS the
-older run, so only the newest main is checked; a release commit's run
-(`chore(release): …`) is never cancelled, because `release-tag` needs its
-own `CI passed`. Anything that leaves the pools cold (a toolchain bump, a
+older run, so only the newest main is checked; `just release` tags the
+newest commit whose `CI passed` is green, so a cancelled run only means
+that commit is skipped. Anything that leaves the pools cold (a toolchain bump, a
 lockfile overhaul, a wiped cache): run `just pre-warm-ci` (or
 `just pre-warm-ci both <branch> fresh` before merging the bump) so the
 pools build once, ahead of the merges. To look at the queue:
@@ -224,13 +217,14 @@ gh run list -b main -w checks.yml -L 5 --json databaseId,status,headSha
 ```
 
 Done when the run on main's head commit has a green `CI passed`.
-`just release-tag` requires it.
+`just release` requires it.
 
 ## Reference
 
 **Escape hatches**
-- `SKIP=local-ci git push`: push without local CI; the PR waits on
-  `Local CI`. (`local-ci` is the prek hook id; `Local CI` is the status.)
+- `SKIP=local-ci git push`: push without local CI; the PR gets no `Local
+  CI` status and can still merge. (`local-ci` is the prek hook id; `Local
+  CI` is the status.)
 - `gh workflow run checks.yml --ref <branch>`: the full suite on GitHub;
   posts `Local CI` when green.
 - `just ci-local <base>`: a narrower run against another base. It records
@@ -258,8 +252,8 @@ once the image's unused SDKs are deleted)
   nothing, check `gh cache list --sort size_in_bytes`. The usual cause is
   a new writer saving per branch and overflowing the budget.
 - **Slow is expected:** the post-merge suite blocks no one. Only
-  `just release-tag` waits on `CI passed` and on the Images build, so start
-  a release once main's run is green.
+  `just release` waits on `CI passed`: it tags the newest green commit,
+  and production follows once the tag's Images build lands.
 - **Disk full on Tests or Images:** the free-disk step must run before the
   build. Check the `Disk` step's `df` output.
 - WarpBuild ran Lint and Tests until 2026-10-23. It was dropped because the

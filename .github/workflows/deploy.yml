@@ -1,40 +1,36 @@
-# Deploy: a release tag goes live. Production is the latest `v*` tag.
+# Deploy: a release tag ships. Production is the latest `v*` tag.
 #
-# starcommand's Argo CD `task` Application follows the newest `v*` tag of
-# this repo (deploy/chart/task, `targetRevision: "*"`) and renders the
-# chart with `image.registry: ghcr.io/fasttrackstudios` and no tag
-# override, so the tag itself is the deploy: Argo pulls
-#
-#   ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
-#   ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
-#
-# (the chart's appVersion, which the release commit sets). Those images
-# are built and pushed by images.yml when the release commit lands on
-# main, BEFORE the tag exists: `just release-tag` refuses to tag until
-# both are on GHCR, public, and built from the commit it tags. Nothing
-# here needs the LAN, so every job runs on a hosted runner.
-#
-# Releases follow fleet flow v4 (the `release-workflow` skill): CalVer tags
-# vYY.M.MICRO on the release PR's squash commit on main, or on a release/v*
-# hotfix branch. This workflow, on the tag (`just release-tag` pushes it as
-# fts-forge once the commit's full suite is green; a tag pushed with
-# GITHUB_TOKEN would start nothing):
-#   1. checks the tag is a release commit (on main or a release/v* branch)
-#      and its images exist,
-#   2. publishes the GitHub Release (release.yml), then attaches what the
-#      version ships to it — the headless node binaries (node-binaries.yml),
-#      the web bundle and the Linux AppImage (release-assets.yml) — and
-#      pushes the Linux desktop to cachix. The macOS app joins the same
-#      release from task-macos.yml, so one `v*` release carries everything.
-#   3. beside 2, and for our sake only: waits for task.starcommand.live to
-#      serve the tagged commit (the GitHub Deployment goes Active only
+# Releases are tags (tag-from-main, the same flow as studio's): `just
+# release` pushes vYY.M.MICRO on main's newest commit whose `CI passed` is
+# green (or on a release/v* hotfix line), as a person or fts-forge (a tag
+# pushed with GITHUB_TOKEN would start nothing). Nothing is committed for
+# a release: every job that builds stamps the tag's version into its own
+# checkout (`release.sh stamp`). This workflow, on the tag:
+#   1. stamps and checks the tag: vX.Y.Z on a commit of main or a
+#      release/v* line, with `CI passed` green on it (the suite is not run
+#      again),
+#   2. builds and pushes the images (images.yml)
+#        ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
+#        ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
+#      starcommand's argocd-image-updater rolls production to the highest
+#      X.Y.Z image (the chart, deploy/chart/task, no longer carries the
+#      release: until then a new tag's chart runs what is deployed),
+#   3. beside 2, publishes the GitHub Release (release.yml) with the notes
+#      from the change files added since the previous tag, then attaches
+#      what the version ships: the headless node binaries
+#      (node-binaries.yml), the web bundle and the Linux AppImage
+#      (release-assets.yml, after the images), and pushes the Linux desktop
+#      to cachix. The macOS app joins the same release from task-macos.yml,
+#      so one `v*` release carries everything,
+#   4. for our sake only, after the images: waits for task.starcommand.live
+#      to serve the tagged commit (the GitHub Deployment goes Active only
 #      then). The release is the artifacts, not our deployment of them, so
 #      nothing waits on it and its failure fails nothing.
 #
-# Rollback: Argo deploys the NEWEST tag, so redeploying an old one is not
-# possible from here. Revert on main and cut a new release (or, in an
-# emergency, pin `targetRevision` in starcommand). A workflow_dispatch on
-# a tag re-runs the checks, the verification and the publishing.
+# Rollback: image-updater runs the HIGHEST version, so redeploying an old
+# one is not possible from here. Revert on main and release again (or, in
+# an emergency, pin the image tag in starcommand). A workflow_dispatch on a
+# tag re-runs the checks, the build, the verification and the publishing.
 
 name: Deploy
 
@@ -51,34 +47,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The tag is a release commit, and the images the chart at it
-  # renders are on GHCR, pullable anonymously, built from this commit.
-  # (`just release-tag` checked the same before tagging; this catches a
-  # tag pushed some other way.)
+  # The tag is a release: vX.Y.Z on a commit of main or a release/v* line,
+  # with `CI passed` green on it. (`just release` checked the same before
+  # tagging; this catches a tag pushed some other way.) Everything else
+  # waits on it.
   deploy:
-    name: Release tag + images
+    name: Tag guard
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
         with:
           # The tag guard walks main's and release/v*'s history.
           fetch-depth: 0
-
-      # The tag must be `v<Cargo.toml version>` on a commit of main (or of a
-      # release/v* hotfix branch) that carries that version's CHANGELOG
-      # section: a release commit.
+      # Releases commit no version: the tag's goes into the checkout.
+      - name: Stamp the release version
+        run: bash scripts/release.sh stamp "$GITHUB_REF_NAME"
       - name: Tag guard
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/release.sh tag-guard
 
-      - name: Images on GHCR
-        run: |
-          set -euo pipefail
-          tag="$(bash scripts/ghcr-images.sh tag)"
-          bash scripts/ghcr-images.sh check "$tag" "$GITHUB_SHA"
+  # task-server + task-web `:X.Y.Z` on GHCR, built from the tag on the
+  # `task-release` pool. Production follows once they are there.
+  images:
+    name: Images
+    needs: deploy
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/images.yml
 
   # The GitHub Deployment goes Active only when the cluster serves this
   # commit — both halves, web and server — so "Active" keeps meaning
@@ -92,7 +95,8 @@ jobs:
   verify:
     name: Verify live
     runs-on: ubuntu-latest
-    needs: deploy
+    # Production can roll only once the images exist.
+    needs: images
     continue-on-error: true
     timeout-minutes: 30
     environment:
@@ -150,15 +154,15 @@ jobs:
           done
           [ "$bad" = 0 ] || { echo "UNHEALTHY: an org did not answer ok"; exit 1; }
 
-  # The tag is a release commit with its images: publish the GitHub Release
-  # for it (CHANGELOG section, migrations list, moved git deps). A no-op when
-  # the release already exists (a re-run, a dispatch on an older tag).
+  # The tag is a release: publish the GitHub Release for it (notes from the
+  # change files added since the previous tag, migrations list, moved git
+  # deps). A no-op when the release already exists (a re-run, a dispatch
+  # on an older tag).
   #
-  # It needs only the tag guard, not Verify live: a release is what the
-  # version ships, for anyone to install, and doesn't wait on (or mean) our
-  # own production rolling it out. The tag itself was pushed before (just
-  # release-tag, after images.yml pushed the images): it is what started
-  # this run, and the Apple builds.
+  # It needs only the tag guard, not the images or Verify live: a release
+  # is what the version ships, for anyone to install, and doesn't wait on
+  # (or mean) our own production rolling it out. The tag was pushed by
+  # `just release`: it is what started this run, and the Apple builds.
   release:
     name: GitHub Release
     needs: deploy
@@ -195,7 +199,8 @@ jobs:
   # task-macos.yml, on the Mac.)
   release-assets:
     name: Web bundle + Linux desktop
-    needs: release
+    # The web bundle comes out of the published task-web image.
+    needs: [release, images]
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     permissions:
       contents: write

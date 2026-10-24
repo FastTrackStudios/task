@@ -18,12 +18,12 @@ image is a `dockerTools.streamLayeredImage` defined in the repo-root
 itself a Nix derivation (`task-webapp`'s `dx build`), so the images
 self-contain their content with no out-of-band bundle step.
 
-Prebuilt images (public, on GHCR; pushed by `.github/workflows/images.yml`
-when a release commit lands on main, before its `v*` tag exists):
+Prebuilt images (public, on GHCR; built and pushed by
+`.github/workflows/images.yml` from every release tag `v<version>`):
 
 | image | tags |
 |---|---|
-| `ghcr.io/fasttrackstudios/task-server` | `<version>` (= the chart's appVersion at tag `v<version>`), `sha-<short>`, `latest` (the last release) |
+| `ghcr.io/fasttrackstudios/task-server` | `<version>` (the release tag without its `v`), `sha-<short>`, `latest` (the newest release) |
 | `ghcr.io/fasttrackstudios/task-web`    | same |
 
 ## The one architectural rule: same origin
@@ -262,8 +262,13 @@ against the instance to surface stamp drift / migration needs. Roll back by
 pinning the previous release's image tag (data is forward-written —
 verify a backup exists before big jumps).
 
-Sequence for k8s: the release commit on main pushes the images to GHCR
-(images.yml), then `just release-tag` pushes `v<version>`; starcommand's
-ArgoCD Application follows the newest `v*` tag (chart, images `:<appVersion>`),
-the server pod recreates (`Recreate` strategy frees the PVC first), web pods
-roll whenever — they are stateless.
+Sequence for k8s: `just release` pushes `v<version>` on a green commit of
+main; the tag builds and pushes the images to GHCR (images.yml, from
+deploy.yml); starcommand's Argo CD Application renders the chart at the
+newest `v*` tag, and argocd-image-updater sets both image tags to the
+highest `<version>` on GHCR. Releases no longer bump the chart's
+`appVersion` (it stays at 26.10.1, a real image), so a new tag's chart
+runs what is already deployed until the updater moves it. The server pod
+recreates (`Recreate` strategy frees the PVC first), web pods roll
+whenever — they are stateless. Self-hosting from the chart: set
+`server.image.tag` / `web.image.tag` to the release you want.

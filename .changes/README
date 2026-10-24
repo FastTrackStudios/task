@@ -1,11 +1,13 @@
 Change files: release intent and release notes, one file per change
 ====================================================================
 
-Every PR that changes a workspace crate adds a change file here. The
-release (`just release-prepare`) turns the pending files into the
-CHANGELOG.md section and deletes them in the release commit. Nobody edits
-CHANGELOG.md outside a release. CI enforces it on every PR
-(`cargo rail change check`; locally: `just ci-changes`).
+Every PR that changes a workspace crate adds a change file here. A
+release (`just release`) builds its notes from the change files ADDED
+since the previous tag, read at the tagged commit, and puts them in the
+GitHub Release. Nothing is deleted or committed: the files stay here as
+the record. CHANGELOG.md ends at 26.10.1 and is no longer written. CI
+enforces the files on every PR (`cargo rail change check`; locally:
+`just ci-changes`). To fix a note, edit its file on main before releasing.
 
 Write one with cargo-rail (in the dev or CI shell):
 
@@ -39,6 +41,7 @@ computed at release time.
 This file has no .md extension on purpose: cargo-rail parses every .md in
 this directory as a change file.
 
-Source of truth: the fleet `release-workflow` skill
+Task's release flow: skills/release-workflow.md (tag-from-main). The
+fleet `release-workflow` skill holds the shared change-file rules
 (fleet-skills, skills/release-workflow/references/changelog.md and
 cargo-rail.md).

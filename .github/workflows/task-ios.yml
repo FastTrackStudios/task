@@ -59,6 +59,10 @@ concurrency:
 jobs:
   testflight:
     runs-on: [self-hosted, macos, task-release-mac]
+    # The tag guard reads the tagged commit's `CI passed`.
+    permissions:
+      contents: read
+      checks: read
     # Fail loudly when the airlock Mac isn't there. Without this a job
     # with no available runner just QUEUES, and is eventually cancelled —
     # which reads as "cancelled", not "failed", so nothing alerts and
@@ -89,17 +93,26 @@ jobs:
           clean: false
           fetch-depth: 0
 
-      # A pushed tag must be a release commit on main or a release/v*
-      # hotfix branch (tag == v<Cargo version>, CHANGELOG section present). Without this a stray v* tag
-      # on a branch would build TestFlight. A manual dispatch is exempt.
+      # Releases commit no version: on a release tag, write the tag's into
+      # this checkout (the next checkout's --force discards it again).
+      - name: Stamp the release version
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: bash scripts/release.sh stamp "$GITHUB_REF_NAME"
+
+      # A pushed tag must be vX.Y.Z on a commit of main or a release/v*
+      # hotfix line, with `CI passed` green on it. Without this a stray v*
+      # tag on a branch would build TestFlight. A manual dispatch is exempt.
       - name: Tag guard
         if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/release.sh tag-guard
 
-      # One version for every shipped thing: the release's, from
-      # [workspace.package] in Cargo.toml (scripts/release.sh). The build is
-      # triggered by the release tag, so TestFlight shows the same number as
-      # the GitHub Release and the server.
+      # One version for every shipped thing: the release's, which the stamp
+      # above wrote into [workspace.package] in Cargo.toml (scripts/
+      # release.sh). The build is triggered by the release tag, so
+      # TestFlight shows the same number as the GitHub Release and the
+      # server.
       - name: Version
         env:
           INPUT_VERSION: ${{ inputs.marketing_version }}

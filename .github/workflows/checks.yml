@@ -13,7 +13,7 @@
 #                  the rail-planned tests). Main requires both.
 #   push to main   the FULL set, once per merge. It catches two PRs that each
 #                  passed alone but break together, and its green
-#                  `CI passed` is what `just release-tag` requires.
+#                  `CI passed` is what `just release` requires.
 #
 # WHERE EACH JOB RUNS. The builds run on THEBATTLESHIP's `task-main`
 # runner pool (self-hosted; ~/.flake hosts/THEBATTLESHIP/github-runners.nix),
@@ -30,11 +30,9 @@
 #   tests           task-main       the nextest build + rail evidence
 #   wasm            task-main       the wasm32 check
 #
-# A release commit's run is the same dev-profile build as any merge, so it
-# runs on `task-main` too, on the same warm target dirs; it just has a
-# concurrency group of its own that no later merge cancels. (The
-# `task-release` pool holds only release-profile artifacts: images.yml and
-# desktop-cache.yml.) Three instances, so a run's lint, tests and wasm build
+# The `task-release` pool holds only release-profile artifacts (images.yml
+# and desktop-cache.yml, built from a release tag); every check runs on
+# `task-main`. Three instances, so a run's lint, tests and wasm build
 # at once, each on the pool's warm target dir for its kind
 # ($TASK_CACHE_DIR/<kind>).
 #   checks-passed   ubuntu-latest   the aggregator
@@ -77,9 +75,7 @@ name: CI
 #   PR into main        never (pr.yml).
 #   PR into release/**  a hotfix: the FULL set (no narrowing, and nothing
 #                       left to a hook, on a branch that ships straight to
-#                       production). A hotfix release PR (release/pending:
-#                       version + changelog only, proved by the BASE commit's
-#                       release.sh) skips everything.
+#                       production).
 #   push to main        the FULL set, once per merge, and records rail
 #   or release/v*       evidence for that commit.
 #   by hand             `gh workflow run checks.yml --ref <branch>` runs
@@ -97,8 +93,7 @@ on:
   pull_request:
     branches: ["release/**"]
   push:
-    # release/v* (hotfix branches), not release/pending: a release PR's
-    # head is version + changelog only and gets no full run of its own.
+    # main, and the release/v* hotfix lines `just release <sha>` tags.
     branches: [main, "release/v*"]
   workflow_dispatch:
     inputs:
@@ -122,21 +117,14 @@ on:
 #
 #   push to main /      one group per branch, cancel-in-progress: a newer
 #   release/v*          merge cancels the older run, so the runner always
-#                       works on the newest main.
-#   a release commit    (`chore(release): vX.Y.Z`) a group of its OWN, keyed
-#                       by its commit, never cancelled: `just release-tag`
-#                       tags only a commit whose own `CI passed` is green,
-#                       so a merge right behind a release must not cancel
-#                       it. It queues on task-main instead.
+#                       works on the newest main. `just release` tags the
+#                       newest commit whose `CI passed` is green, so a
+#                       cancelled run only means that commit is skipped.
 #   hotfix PR           one group per PR; a newer push cancels the older.
 #   dispatch            its own group (the run id): never cancelled.
-#
-# A group holds ONE pending run and a newer arrival replaces it, which is
-# why a release commit never shares a group: it could be dropped while
-# queued even with cancel-in-progress off.
 concurrency:
-  group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore(release):') && format('release-{0}', github.sha) || github.event_name == 'push' && github.ref || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(release):')) }}
+  group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 env:
   # mold for the host target only -- 326 test binaries get linked on a
@@ -165,7 +153,6 @@ jobs:
       tests: ${{ steps.filter.outputs.tests }}
       test_filter: ${{ steps.filter.outputs.test_filter }}
       wasm: ${{ steps.filter.outputs.wasm }}
-      skip: ${{ steps.filter.outputs.skip }}
       ref: ${{ steps.filter.outputs.ref }}
       record: ${{ steps.filter.outputs.record }}
     steps:
@@ -207,9 +194,7 @@ jobs:
         id: filter
         env:
           BASE: ${{ steps.base.outputs.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           EVIDENCE: ~/rail-evidence/cargo.test.json
         run: |
           set -u
@@ -221,25 +206,12 @@ jobs:
             printf 'full=true\ncargo=true\ntests=true\ntest_filter=\nwasm=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           }
-          skip_all() {
-            echo "plan: $1 — nothing to run"
-            printf 'skip=true\nfull=false\ncargo=false\ntests=false\ntest_filter=\nwasm=false\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          }
           # Full runs record evidence for the commit they check, so later
           # plans against it can narrow.
           record() { echo "record=true" >> "$GITHUB_OUTPUT"; }
 
           case "${GITHUB_EVENT_NAME:-}" in
             pull_request)
-              # The release commit: its content was checked before it.
-              # The BASE commit's release.sh decides, never the PR's own
-              # copy: a release/pending branch that edited the script
-              # must not be able to skip every check.
-              git show "${BASE_SHA}:scripts/release.sh" > "${RUNNER_TEMP}/release-base.sh"
-              if bash "${RUNNER_TEMP}/release-base.sh" release-only; then
-                skip_all "release commit only (${HEAD_REF})"
-              fi
               # Only PRs into release/** reach this workflow (pr.yml has main).
               run_all "PR into ${BASE_REF} (hotfix): full set" ;;
             push)
@@ -300,7 +272,6 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
     timeout-minutes: 90
     needs: plan
-    if: ${{ needs.plan.outputs.skip != 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -328,6 +299,10 @@ jobs:
       - name: One version everywhere
         if: ${{ !cancelled() }}
         run: just ci-versions
+      # scripts/release.sh end to end, offline (seconds).
+      - name: Release tooling
+        if: ${{ !cancelled() }}
+        run: just release-sandbox
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
         run: just ci-manifests
@@ -359,7 +334,7 @@ jobs:
     # A cold workspace build on 4 vCPUs (dependencies from the rust-cache).
     timeout-minutes: 120
     needs: plan
-    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.tests == 'true' }}
+    if: ${{ needs.plan.outputs.tests == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -404,7 +379,7 @@ jobs:
           TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
           TASK_CI_TEST_FILTER: ${{ needs.plan.outputs.test_filter }}
           RECORD: ${{ needs.plan.outputs.record }}
-          NARROW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):') }}
+          NARROW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           PREWARM: ${{ inputs.prewarm == true }}
         run: |
           # ~/rail-evidence: the literal path the hosted plan job restores
@@ -508,7 +483,7 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
     timeout-minutes: 60
     needs: plan
-    if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.wasm == 'true' }}
+    if: ${{ needs.plan.outputs.wasm == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -535,7 +510,7 @@ jobs:
       - name: wasm check (task-app-web)
         run: just ci-wasm
 
-  # The aggregate: scripts/release.sh (CHECK_NAME) refuses to tag a commit
+  # The aggregate: scripts/release.sh (BUILD_CHECK) refuses to tag a commit
   # on main where `CI passed` isn't green, so rename both together. (PRs
   # into main are gated by pr.yml's `PR checks` + `Local CI` instead.)
   # This never skips: it fails unless every job the plan asked for
@@ -553,7 +528,6 @@ jobs:
       - name: Every required job succeeded
         env:
           PLAN: ${{ needs.plan.result }}
-          SKIP: ${{ needs.plan.outputs.skip }}
           LINT: ${{ needs.lint.result }}
           TESTS: ${{ needs.tests.result }}
           WANT_TESTS: ${{ needs.plan.outputs.tests }}
@@ -564,9 +538,6 @@ jobs:
           fail=0
           bad() { echo "::error::$1"; fail=1; }
           [ "$PLAN" = success ] || bad "plan: $PLAN"
-          if [ "$SKIP" = "true" ]; then
-            echo "plan: nothing to run"; exit "$fail"
-          fi
           check() { # name result wanted
             if [ "$3" = "true" ]; then
               [ "$2" = success ] || bad "$1: $2"

@@ -8,11 +8,12 @@ type: application
 home: https://codeberg.org/FastTrackStudios/Task
 sources:
   - https://codeberg.org/FastTrackStudios/Task
-# Both follow the repo's one version (Cargo.toml [workspace.package]
-# version): the release commit (scripts/release.sh) rewrites these two
-# lines with the bump, and scripts/check-versions.sh holds them to it.
-# appVersion is the image tag the chart renders when values set none, so
-# the chart at tag vX.Y.Z deploys ghcr.io/fasttrackstudios/task-*:X.Y.Z,
-# which the release pushes before the tag exists (images.yml).
+# Static: a release changes neither (releases commit nothing). Each image
+# renders its image.tag, else this appVersion: 26.10.1, the last release
+# that committed one, a real image. On starcommand argocd-image-updater
+# writes the release into the image tags (the highest X.Y.Z task-server /
+# task-web on GHCR, which every release tag's Images job pushes), so a new
+# tag's chart runs what is already deployed until its images land. Bump
+# `version` by hand when the chart itself changes.
 version: 26.10.1
 appVersion: "26.10.1"

@@ -37,7 +37,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Release tag to cache. Empty = v<Cargo.toml version> at the ref."
+        description: "Release tag to cache. Empty = the v* tag the run is on."
         type: string
         required: false
         default: ""
@@ -47,7 +47,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to cache (v<X.Y.Z>). Empty = v<Cargo.toml version> at the ref."
+        description: "Release tag to cache (v<X.Y.Z>). Empty = the v* tag the run is on."
         required: false
         default: ""
 
@@ -97,11 +97,22 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet --tags --force origin
-          tag="${INPUT_TAG:-v$(bash scripts/release.sh version)}"
+          # The input, else the release tag this run is on (deploy.yml's
+          # call on a tag push, or a dispatch with the tag as its ref).
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/v*) tag="${GITHUB_REF#refs/tags/}" ;;
+              *) echo "::error::pass the tag input, or run on a v* tag (ref is $GITHUB_REF)"; exit 1 ;;
+            esac
+          fi
           rev="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")" \
-            || { echo "::error::no tag $tag — this caches a release that has been tagged (release.yml)"; exit 1; }
-          v="$(git show "$tag:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
-          [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
+            || { echo "::error::no tag $tag — this caches a release that has been tagged (just release)"; exit 1; }
+          # This is the PURE flake at the tag, the derivation a NixOS host
+          # builds from the same ref, so the cache hits. Releases commit no
+          # version and this build is not stamped, so the package reports
+          # the version committed at the tag, not the tag's.
+          v="$(bash scripts/release.sh version "$tag")"
           {
             echo "tag=$tag"
             echo "version=$v"
@@ -124,7 +135,7 @@ jobs:
           got="$("$out/bin/task-app-desktop" --version)"
           echo "$got"
           [ "$got" = "task-app-desktop $VERSION" ] \
-            || echo "::warning::--version says '$got', not 'task-app-desktop $VERSION' (releases before v0.2.4 have no --version)"
+            || echo "::warning::--version says '$got', not 'task-app-desktop $VERSION' (the version committed at the tag; releases before v0.2.4 have no --version)"
 
       - name: Push to cachix
         env:

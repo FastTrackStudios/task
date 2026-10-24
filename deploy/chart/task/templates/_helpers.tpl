@@ -31,8 +31,11 @@ app.kubernetes.io/component: {{ .component }}
 {{/* Image ref for a component; call with (dict "ctx" . "img" .Values.server.image).
 A repository containing "/" is treated as a FULL image name and used
 verbatim (no registry prefix); a bare name gets image.registry
-prepended. The tag defaults to the chart's appVersion, which the release
-commit sets to the release version (scripts/ghcr-images.sh). */}}
+prepended. The tag is the component's image.tag, else the chart's
+appVersion: the last release that committed one (26.10.1), a real image,
+so a new release tag's chart renders what is already running until
+argocd-image-updater (starcommand) sets each tag to the highest X.Y.Z on
+GHCR, which every release tag pushes. Releases no longer bump appVersion. */}}
 {{- define "task.image" -}}
 {{- $tag := .img.tag | default .ctx.Chart.AppVersion -}}
 {{- if contains "/" .img.repository -}}

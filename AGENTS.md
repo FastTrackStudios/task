@@ -117,9 +117,10 @@ enough for git). Add new songs there, never by hand.
 
 ## Branches, PRs and releases
 
-Fleet flow v4: the **`release-workflow` fleet skill** is the source of
-truth (branch names, PR titles, change files, CalVer, hotfixes, rollback);
-Task's specifics are in `skills/release-workflow.md`. Shipping any change,
+Tag-from-main, the same flow as studio's: the **`release-workflow` fleet
+skill** holds the shared rules (branch names, PR titles, change files,
+CalVer); Task's specifics, which win where the two disagree, are in
+`skills/release-workflow.md`. Shipping any change,
 from first branch through stack, local CI, PRs and merge to a green main,
 follows `skills/ship-stack.md`. In short:
 
@@ -142,9 +143,9 @@ follows `skills/ship-stack.md`. In short:
   (one version everywhere, manifests + lockfile, the architect-ui sheet),
   and the clippy, wasm and tests that `cargo rail plan` says the change
   affects. It runs on the warm local target dir and, when green, marks the
-  pushed commits with the `Local CI` status. The PR then gets only the
-  `PR` workflow's `PR checks`, a minimal free backstop on rustup, no nix
-  (fmt, change files, rail routes). The `CI` workflow (the full set)
+  pushed commits with the `Local CI` status, an indicator: `main`
+  requires only the `PR` workflow's `PR checks`, a minimal free backstop
+  on rustup, no nix (fmt, change files, rail routes). The `CI` workflow (the full set)
   runs after the merge. A
   stack is vouched for when you push it from its TOP branch. For a long
   run, `just ci-local` BEFORE pushing: the hook then finds the pass and
@@ -157,13 +158,15 @@ follows `skills/ship-stack.md`. In short:
   dirs stay warm between merges (`task-release` builds only the release
   artifacts: images and the desktop cache; `~/.flake`
   hosts/THEBATTLESHIP/github-runners.nix).
-  A newer merge cancels the older run; a release commit's run is never
-  cancelled. After pulling `main`, the `post-merge` hook records rail
-  evidence in the background so your next `ci-local` narrows
-  (`just install-hooks` once to get it).
-- A release is a CalVer tag `vYY.M.MICRO` (`just release-plan`,
-  `release-prepare`, `release-pr`, `release-tag`). Only the tag deploys;
-  a push to `main` deploys nothing.
+  A newer merge cancels the older run. After pulling `main`, the
+  `post-merge` hook records rail evidence in the background so your next
+  `ci-local` narrows (`just install-hooks` once to get it).
+- A release is a CalVer tag `vYY.M.MICRO` that `just release` pushes on
+  `main`'s newest commit whose `CI passed` is green (`just release-plan`
+  first; `just release --dry-run` names the commit). There are no release
+  PRs and no release commits: every release build stamps the tag's
+  version into its own checkout. Only the tag ships; a push to `main`
+  deploys nothing.
 
 Never use GitHub's own skip tokens here — the bracketed `skip ci`,
 `ci skip`, `no ci`, `skip actions` and `actions skip` forms. They are

@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-# Task's production images on GHCR, and the one rule that ties them to a
-# release: the image tag is EXACTLY what the chart renders.
+# Task's production images on GHCR:
 #
-#   ghcr.io/fasttrackstudios/task-server:<appVersion>
-#   ghcr.io/fasttrackstudios/task-web:<appVersion>
+#   ghcr.io/fasttrackstudios/task-server:<X.Y.Z>
+#   ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
 #
-# starcommand's Argo CD `task` Application follows the latest `v*` tag of
-# this repo and renders deploy/chart/task with `image.registry:
-# ghcr.io/fasttrackstudios` and no tag override, so each image is
-# `<registry>/<repo>:<Chart.yaml appVersion>` (templates/_helpers.tpl).
-# The release commit sets appVersion to the release version (release.sh),
-# so for vX.Y.Z the tag is `X.Y.Z`, no `v`.
+# Every release tag vX.Y.Z builds and pushes both as `X.Y.Z` (no `v`;
+# `release.sh image-tag`), plus `sha-<short>` and, for the highest
+# release, `latest` (images.yml). starcommand's argocd-image-updater rolls
+# production to the highest X.Y.Z, so the images must be pullable
+# anonymously, as the cluster pulls them.
 #
-#   scripts/ghcr-images.sh tag [REV]         the image tag at REV (default HEAD)
 #   scripts/ghcr-images.sh check TAG [REV]   both images TAG exist and are
 #                                            pullable WITHOUT credentials (as
 #                                            the cluster pulls them); with REV,
@@ -28,18 +25,9 @@ cd "$ROOT"
 REGISTRY="ghcr.io"
 NAMESPACE="fasttrackstudios"
 IMAGES=(task-server task-web)
-CHART="deploy/chart/task/Chart.yaml"
 MANIFEST_TYPES="application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json"
 
 die() { echo "ghcr-images: $*" >&2; exit 1; }
-
-cmd_tag() { # [rev]
-    local c t
-    c="$(git show "${1:-HEAD}:$CHART")" || die "no $CHART at ${1:-HEAD}"
-    t="$(sed -n 's/^appVersion: *"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' <<<"$c" | head -1)"
-    [ -n "$t" ] || die "$CHART at ${1:-HEAD} has no appVersion"
-    echo "$t"
-}
 
 # GET a registry path with an anonymous pull token; prints the body.
 registry_get() { # <image> <path> [accept]
@@ -82,7 +70,6 @@ cmd_check() { # <tag> [rev]
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
-    tag) cmd_tag "$@" ;;
     check) cmd_check "$@" ;;
-    *) sed -n '2,23p' "$0" >&2; exit 2 ;;
+    *) sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; exit 2 ;;
 esac
