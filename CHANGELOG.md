@@ -8,6 +8,12 @@ release). Each release's section is built by `just release-prepare` from the
 cargo-rail change files (`.changes/*.md`) its PRs carried; never edit this
 file by hand outside a release PR.
 
+## [26.10.1] - 2026-10-24
+
+### Added
+
+- Every release now carries the desktop apps for macOS and Linux (an AppImage) beside the server binaries and the web bundle, and an installed app updates itself from it: macOS from the release's notarized zip, Linux AppImages in place
+
 ## [26.10.0] - 2026-10-23
 
 ### Fixed and improved
