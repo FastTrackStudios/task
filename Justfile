@@ -481,7 +481,8 @@ ci-docs: css
 
 # Everything the full run after a merge checks, in its order (all the
 # tests, not just the affected ones). The PR gate is `ci-local`, below.
-# (`ci-docs` runs on full runs; `just ci-release` adds it. `ci-changes` is
+# (`ci-docs` runs in no CI job since 2026-10-24, too slow for what it
+# catches; `just ci-release` adds it, or run it by hand. `ci-changes` is
 # separate: it needs cargo-rail.)
 ci: ci-fmt ci-manifests ci-versions ci-architect-css ci-tests ci-clippy ci-wasm
 
