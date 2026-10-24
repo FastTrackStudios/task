@@ -338,6 +338,11 @@ jobs:
           # can never save the previous run's evidence under this commit.
           export EVIDENCE_DIR="$HOME/rail-evidence"
           rm -rf "${EVIDENCE_DIR}"
+          # The app crates embed the generated tailwind.css (`asset!`), and
+          # `ci-tests` only generates it after this recording: without it
+          # the recorder's build died at task-app-web after ~18 minutes on
+          # every run, recorded nothing, and the test build started over.
+          just css
           if [ "${RECORD}" = "true" ]; then
             mkdir -p "${EVIDENCE_DIR}"
             cargo rail plan evidence --work cargo.test \
