@@ -44,6 +44,12 @@ fn task(data_root: &Path, args: &[&str]) -> Output {
         // Keep sign-ins inside the scratch root, away from the
         // developer's real ~/.local/share/task/session.json.
         .env("TASK_SESSION_FILE", data_root.join("session.json"))
+        // And away from a desktop app running on this machine: the CLI
+        // dials its node (and its sign-in) under the app data dir
+        // (`task_client::desktop`), which this points into the scratch
+        // root.
+        .env("XDG_DATA_HOME", data_root.join("app-data"))
+        .env_remove("TASK_NODE_ROOT")
         .output()
         .expect("spawn task binary")
 }
