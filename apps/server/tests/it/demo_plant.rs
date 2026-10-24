@@ -1610,3 +1610,259 @@ async fn demo_plants_the_edit_lane() -> eyre::Result<()> {
     );
     Ok(())
 }
+
+/// Run `task-server admin adopt-principal --email <addr>` against
+/// `data_root` — the membership step `just demo` takes after planting.
+fn adopt_principal(data_root: &std::path::Path, email: &str) -> eyre::Result<()> {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_task-server"))
+        .args(["admin", "adopt-principal", "--email", email])
+        .env("TASK_DATA_ROOT", data_root)
+        .stdout(std::process::Stdio::null())
+        .status()?;
+    eyre::ensure!(
+        status.success(),
+        "admin adopt-principal --email {email} failed"
+    );
+    Ok(())
+}
+
+/// Crescendum, planted the way `just demo` plants it: FastTrackAudio's
+/// album, shared from FastTrackAudio with Jordan of Rockstars of
+/// Tomorrow (`docs/spec/sharing.md`).
+///
+/// - Jordan holds a membership row in Rockstars and NONE in
+///   FastTrackAudio, and the grant on Crescendum is theirs, live, read +
+///   comment, granted by FastTrackAudio's owner, audited once — and a
+///   replant writes no second one.
+/// - The S4 resolver over the planted disk returns the album, both songs
+///   and the song's nested sub-project, Crescendum's File Root and its
+///   notes; Northbeam Jingles — its project, tasks, root and notes — is
+///   out. The stored digest is the one a preview of the planted subtree
+///   computes.
+/// - The money the grant must keep out exists beside it: both clients,
+///   the billed session and exactly one invoice.
+// t[verify sharing.grant.membership-free]
+// t[verify sharing.grant.subtree]
+// t[verify sharing.grant.exclusions]
+// t[verify sharing.grant.preview]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_crescendum_shared_with_a_rockstars_person_and_nothing_beside_it()
+-> eyre::Result<()> {
+    use project::ProjectService as _;
+    use sea_orm::{ConnectionTrait as _, EntityTrait as _};
+    use task_server::example_org::{self as ex, CRESCENDUM_ID};
+    use task_server::sharing::{self, GrantEventKind, ObjectRef, OwnerStore, Subtree as _};
+
+    const FTA: &str = "fasttrackaudio";
+    const ROT: &str = "rockstars-of-tomorrow";
+
+    let tmp = tempfile::tempdir()?;
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    // The order `just demo` plants in: the guest's org first, because
+    // the grant names a person whose account it holds.
+    plant(tmp.path(), ROT)?;
+    plant(tmp.path(), FTA)?;
+    plant(tmp.path(), FTA)?;
+    for email in ["taylor@fasttrackaudio.test", "jordan@rockstars.test"] {
+        adopt_principal(tmp.path(), email)?;
+    }
+    let data_root = org_proto::DataRoot::new(tmp.path().to_owned());
+    let fta = data_root.org(FTA);
+
+    // ── the grant ──
+    let store = sharing::GrantStore::open(&fta.sharing_db(), FTA).await?;
+    let grants = store.list().await?;
+    eyre::ensure!(
+        grants.len() == 1,
+        "one grant however often planted: {grants:?}"
+    );
+    let grant = &grants[0];
+    eyre::ensure!(grant.root_id == CRESCENDUM_ID, "on Crescendum: {grant:?}");
+    eyre::ensure!(
+        grant.owner_org == FTA && grant.guest_org == ROT,
+        "{grant:?}"
+    );
+    eyre::ensure!(
+        grant.capabilities == share_proto::GrantCapabilities::ReadComment,
+        "read + comment: {grant:?}"
+    );
+    eyre::ensure!(
+        sharing::is_live(grant, sharing::now_unix()) && grant.expires_at.is_none(),
+        "the planted grant is live: {grant:?}"
+    );
+    let events = store.events(grant.id).await?;
+    eyre::ensure!(
+        events.len() == 1 && events[0].kind == GrantEventKind::Created,
+        "created, audited once: {events:?}"
+    );
+
+    // ── who: membership rows, in the home org's store ──
+    let orgs = data_root.scan_orgs().map_err(|e| eyre::eyre!("{e}"))?;
+    let home = orgs
+        .iter()
+        .find(|(_, m)| m.is_home)
+        .map(|(r, _)| r)
+        .ok_or_else(|| eyre::eyre!("no home org"))?;
+    let memberships = task_server::memberships::Memberships::open(&home.memberships_db()).await?;
+    let guest_rows: Vec<String> = memberships
+        .for_user(grant.subject)
+        .await?
+        .into_iter()
+        .map(|m| m.org_slug)
+        .collect();
+    eyre::ensure!(
+        guest_rows == [ROT.to_owned()],
+        "the subject is Jordan, a member of {ROT} and of nothing else: {guest_rows:?}"
+    );
+    eyre::ensure!(
+        memberships.role_for(grant.subject, FTA).await?.is_none(),
+        "the guest holds no membership row in {FTA}"
+    );
+    let granter = memberships
+        .role_for(grant.granted_by, FTA)
+        .await?
+        .ok_or_else(|| eyre::eyre!("granted by someone with no {FTA} membership"))?;
+    eyre::ensure!(
+        matches!(granter.role.as_deref(), Some("owner" | "admin")),
+        "granted by an owner or admin of {FTA}: {granter:?}"
+    );
+
+    // ── what it reaches: the S4 resolver over the planted disk ──
+    let projects = project::ProjectBackend::new(fta.projects_dir());
+    let files = files::FilesBackend::new(fta.path().join("files"), fta.vault_dir())
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    let subtree = OwnerStore::new(projects.clone(), fta.projects_dir())
+        .with_tasks(task::TaskBackend::new(fta.vault_dir()))
+        .with_milestones(milestone::MilestoneBackend::new(fta.projects_dir()))
+        .with_workstreams(workstream::WorkstreamBackend::new(fta.projects_dir()))
+        .with_files(files.clone());
+    let scope = subtree
+        .scope(CRESCENDUM_ID)
+        .ok_or_else(|| eyre::eyre!("Crescendum does not resolve"))?;
+    let titles: std::collections::BTreeSet<&str> =
+        scope.projects.values().map(String::as_str).collect();
+    let want: std::collections::BTreeSet<&str> =
+        ["Crescendum", "First Light", "Undertow", "Undertow Strings"]
+            .into_iter()
+            .collect();
+    eyre::ensure!(
+        titles == want,
+        "the album, both songs and the nested one: {titles:?}"
+    );
+
+    let all = projects.list().map_err(|e| eyre::eyre!("{e}"))?;
+    let hidden = all
+        .iter()
+        .find(|p| p.title == "Northbeam Jingles")
+        .ok_or_else(|| eyre::eyre!("Northbeam Jingles is planted"))?;
+    eyre::ensure!(
+        !scope.in_scope(&ObjectRef::Project(hidden.id)),
+        "the second project is out"
+    );
+    let hidden_dir = hidden
+        .path
+        .rsplit_once('/')
+        .map(|(d, _)| d.to_owned())
+        .unwrap_or_default();
+    eyre::ensure!(
+        !scope.in_scope(&ObjectRef::Note(format!("{hidden_dir}/Notes/Brief.md"))),
+        "Northbeam's brief is out"
+    );
+    eyre::ensure!(
+        scope.in_scope(&ObjectRef::Note("crescendum/Notes/Album concept.md".into())),
+        "Crescendum's notes are in"
+    );
+
+    let tasks = task::TaskBackend::new(fta.vault_dir());
+    for t in task::TaskService::list(&tasks).map_err(|e| eyre::eyre!("{e}"))? {
+        let declared =
+            ex::declared_of(FTA).find(|d| d.tasks.iter().any(|(title, _, _)| *title == t.title));
+        let Some(declared) = declared else { continue };
+        let shared = declared.dir == "Crescendum" || declared.dir.starts_with("Crescendum/");
+        eyre::ensure!(
+            scope.in_scope(&ObjectRef::Task(t.id)) == shared,
+            "`{}` ({}): in scope should be {shared}",
+            t.title,
+            declared.title
+        );
+    }
+
+    let roots = files.registered_roots();
+    let root_named = |name: &str| {
+        roots
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.id)
+            .ok_or_else(|| eyre::eyre!("no File Root {name}"))
+    };
+    let crescendum_root = root_named("Crescendum")?;
+    let hidden_root = root_named("Northbeam Jingles")?;
+    eyre::ensure!(
+        scope.file_roots.contains_key(&crescendum_root),
+        "Crescendum's File Root is in: {:?}",
+        scope.file_roots
+    );
+    eyre::ensure!(
+        !scope.file_roots.contains_key(&hidden_root),
+        "Northbeam's File Root is out"
+    );
+
+    // The digest the grant stores is the one a preview of the planted
+    // subtree shows right now.
+    let visible = subtree
+        .visible(CRESCENDUM_ID)
+        .ok_or_else(|| eyre::eyre!("no preview"))?;
+    eyre::ensure!(
+        grant.preview_digest == sharing::digest(CRESCENDUM_ID, &visible),
+        "the stored digest is not the planted subtree's"
+    );
+
+    // ── the money beside it ──
+    let crescendum = all
+        .iter()
+        .find(|p| p.id == CRESCENDUM_ID)
+        .ok_or_else(|| eyre::eyre!("Crescendum is planted under its fixed id"))?;
+    eyre::ensure!(
+        crescendum.client_id.is_some() && crescendum.default_rate_cents > 0,
+        "Crescendum carries billing for the projection to strip: {:?} / {}",
+        crescendum.client_id,
+        crescendum.default_rate_cents
+    );
+    let timer =
+        sea_orm::Database::connect(format!("sqlite://{}?mode=ro", fta.timer_db().display()))
+            .await?;
+    let clients = timer::entity::ClientEntity::find().all(&timer).await?;
+    for c in ex::clients_of(FTA) {
+        eyre::ensure!(
+            clients
+                .iter()
+                .any(|row| row.id == c.id && row.name == c.name),
+            "client {} on the books: {clients:?}",
+            c.name
+        );
+    }
+    let sessions = timer::entity::WorkSessionEntity::find().all(&timer).await?;
+    eyre::ensure!(
+        sessions
+            .iter()
+            .any(|s| s.project_id == Some(hidden.id) && s.billable),
+        "billed time on Northbeam Jingles"
+    );
+    #[cfg(feature = "plugin-finance")]
+    {
+        let finance =
+            sea_orm::Database::connect(format!("sqlite://{}?mode=ro", fta.finance_db().display()))
+                .await?;
+        let row = finance
+            .query_one(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS n FROM finance_invoices",
+            ))
+            .await?
+            .ok_or_else(|| eyre::eyre!("no count"))?;
+        let n: i64 = row.try_get("", "n")?;
+        eyre::ensure!(n == 1, "one invoice however often planted, got {n}");
+    }
+    Ok(())
+}

@@ -30,6 +30,13 @@
 //! cannot exist without it (originals never stream — renditions do, and
 //! renditions belong to a root).
 //!
+//! The one thing it does make across an org line is a same-server
+//! Sharing Grant (`example_org::SEED_GRANTS`): FastTrackAudio's
+//! Crescendum, granted to a person of Rockstars of Tomorrow planted on
+//! the same data root. That is the owner's act, not a negotiation
+//! between servers, and the lanes that admit the guest need a live grant
+//! in the planted world to be reachable from it.
+//!
 //! DEV ONLY, like `seed`: it plants known-password accounts, so it is
 //! compiled out of release builds entirely.
 
@@ -441,6 +448,15 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
         Err(e) => println!("  activity: not planted ({e})"),
     }
 
+    // Money, where the seed declares some: the billable clients project
+    // pages point at, a member's rate on a project, billed time and the
+    // invoice raised from it. FastTrackAudio's, so a Sharing Grant on
+    // Crescendum has real billing beside it to keep out
+    // (`sharing.grant.exclusions`).
+    plant_billing(&org, &slug, &auth)
+        .await
+        .wrap_err("plant the billing")?;
+
     // Video deliverables: generated rather than committed — even a tiny
     // mp4 is binary weight git keeps forever, and ffmpeg synthesises a
     // perfectly good one in a second (the dev shell carries ffmpeg).
@@ -592,6 +608,13 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
         }
 
         plant_devices(&backend, &slug).await?;
+
+        // Last, because a grant's preview digest is over the subtree as
+        // it now stands — File Roots included, and they were adopted
+        // just above.
+        plant_grants(data_root, &org, &slug, &auth, &backend)
+            .await
+            .wrap_err("plant the sharing grants")?;
     }
 
     println!("\nplanted. sign in with any of:");
@@ -619,6 +642,329 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
         for name in names {
             println!("  {}", projects.join(name).display());
         }
+    }
+    Ok(())
+}
+
+/// Plant the org's declared money: the `timer_clients` rows its project
+/// pages point at (`DECLARED_CLIENTS`), and for each `SEED_BILLING`
+/// entry the member's rate on the project, one billable session and the
+/// invoice generated from it.
+///
+/// Idempotent by what already exists: a client row is kept by id, the
+/// rate is an upsert, a session is logged only when the member has none
+/// on the project, and an invoice is generated only while the project
+/// still has billable time on no invoice — which is false the moment the
+/// first plant raised one.
+async fn plant_billing(
+    org: &org_proto::OrgRoot,
+    slug: &str,
+    auth: &crate::AuthState,
+) -> eyre::Result<()> {
+    use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, Set};
+    use sea_orm_migration::MigratorTrait as _;
+    use timer::entity::{ClientActive, ClientEntity, WorkSessionColumn, WorkSessionEntity};
+    use timer_proto::TimerService as _;
+
+    if example_org::clients_of(slug).next().is_none()
+        && example_org::billing_of(slug).next().is_none()
+    {
+        return Ok(());
+    }
+    let timer_url = format!("sqlite://{}?mode=rwc", org.timer_db().display());
+    let timer_conn = sea_orm::Database::connect(&timer_url)
+        .await
+        .wrap_err("open the timer store")?;
+    timer::Migrator::up(&timer_conn, None)
+        .await
+        .wrap_err("migrate the timer store")?;
+
+    for c in example_org::clients_of(slug) {
+        if ClientEntity::find_by_id(c.id)
+            .one(&timer_conn)
+            .await
+            .wrap_err("look up a client")?
+            .is_some()
+        {
+            continue;
+        }
+        let now = chrono::Utc::now();
+        ClientEntity::insert(ClientActive {
+            id: Set(c.id),
+            org_id: Set(uuid::Uuid::nil()),
+            name: Set(c.name.to_owned()),
+            notes: Set(String::new()),
+            archived: Set(false),
+            created_at: Set(now),
+            updated_at: Set(now),
+        })
+        .exec(&timer_conn)
+        .await
+        .wrap_err_with(|| format!("add the client {}", c.name))?;
+        println!("  client: {} on the books", c.name);
+    }
+
+    let timer = timer::Store::new(
+        timer_conn.clone(),
+        std::sync::Arc::new(timer::store::VaultProjectDefaults {
+            projects_root: org.projects_dir(),
+        }),
+    );
+    let projects = project::ProjectBackend::new(org.projects_dir());
+    for b in example_org::billing_of(slug) {
+        use project::ProjectService as _;
+        let Some(declared) = example_org::declared_of(slug).find(|p| p.title == b.project) else {
+            bail!(
+                "billing names `{}`, which {slug} does not declare",
+                b.project
+            );
+        };
+        let page = format!(
+            "{}/{}",
+            example_org::project_rel(declared.dir),
+            org_proto::PROJECT_PAGE
+        );
+        let info = projects
+            .get_by_path(&page)
+            .map_err(|e| eyre::eyre!("billing: no page for {}: {e}", b.project))?;
+        let Some(member) = auth
+            .auth
+            .find_user_by_email(b.member)
+            .await
+            .map_err(|e| eyre::eyre!("look up `{}`: {e:?}", b.member))?
+        else {
+            println!(
+                "  billing: no account `{}` — {} not billed",
+                b.member, b.project
+            );
+            continue;
+        };
+        timer
+            .set_project_member_rate(info.id, member.id, b.hourly_cents)
+            .await
+            .map_err(|e| eyre::eyre!("rate on {}: {e:?}", b.project))?;
+        // The declared session itself, not any time on the project: time a
+        // demo user logged there must not stand in for the seed's.
+        let description = format!("{} — first batch", b.project);
+        let logged = WorkSessionEntity::find()
+            .filter(WorkSessionColumn::ProjectId.eq(info.id))
+            .filter(WorkSessionColumn::UserId.eq(member.id))
+            .filter(WorkSessionColumn::Description.eq(description.clone()))
+            .one(&timer_conn)
+            .await
+            .wrap_err("look up billed time")?
+            .is_some();
+        if !logged {
+            let end = chrono::Utc::now() - chrono::Duration::days(2);
+            timer
+                .log_session(timer_proto::LogSessionRequest {
+                    user_id: member.id,
+                    org_id: uuid::Uuid::nil(),
+                    project_id: Some(info.id),
+                    project_path: info.path.clone(),
+                    task_note_path: String::new(),
+                    description,
+                    start_time: end - chrono::Duration::hours(b.hours),
+                    end_time: end,
+                    billable_override: Some(true),
+                })
+                .await
+                .map_err(|e| eyre::eyre!("log time on {}: {e:?}", b.project))?;
+            println!("  timer: {}h billed on {}", b.hours, b.project);
+        }
+        #[cfg(feature = "plugin-finance")]
+        plant_invoice(org, &timer_conn, info.id, b).await?;
+    }
+    Ok(())
+}
+
+/// Raise the invoice for a project's billable time not yet on one.
+#[cfg(feature = "plugin-finance")]
+async fn plant_invoice(
+    org: &org_proto::OrgRoot,
+    timer_conn: &sea_orm::DatabaseConnection,
+    project_id: uuid::Uuid,
+    b: &'static example_org::DeclaredBilling,
+) -> eyre::Result<()> {
+    use finance_proto::service::invoicing::{GenerateInvoice, Invoicing as _};
+    use sea_orm_migration::MigratorTrait as _;
+
+    let finance_url = format!("sqlite://{}?mode=rwc", org.finance_db().display());
+    let finance_conn = sea_orm::Database::connect(&finance_url)
+        .await
+        .wrap_err("open the finance store")?;
+    finance_db::Migrator::up(&finance_conn, None)
+        .await
+        .wrap_err("migrate the finance store")?;
+    let ledger = finance::LedgerService::new(finance_conn.clone())
+        .map_err(|e| eyre::eyre!("ledger: {e}"))?;
+    let book = org
+        .manifest()
+        .map_or_else(|_| "Business".into(), |m| m.display_name);
+    let invoicing = finance::FinanceBackend::new(finance_conn, timer_conn.clone(), book, ledger)
+        .map_err(|e| eyre::eyre!("finance backend: {e}"))?;
+    // The backend drives its async store with `block_on`, which only a
+    // blocking thread may do.
+    let raised = tokio::task::spawn_blocking(move || -> Result<
+        Option<finance_proto::invoice::Invoice>,
+        finance_proto::error::FinanceError,
+    > {
+        let open = invoicing
+            .uninvoiced()?
+            .into_iter()
+            .any(|g| g.project_id == Some(project_id) && g.session_count > 0);
+        if !open {
+            return Ok(None);
+        }
+        invoicing
+            .generate_invoice(GenerateInvoice {
+                project_id: Some(project_id),
+                tag: String::new(),
+                client_name: b.client.to_owned(),
+                since: String::new(),
+                until: String::new(),
+                net_days: 30,
+            })
+            .map(Some)
+    })
+    .await
+    .wrap_err("the invoicing thread")?
+    .map_err(|e| eyre::eyre!("invoice {}: {e:?}", b.project))?;
+    if let Some(invoice) = raised {
+        println!(
+            "  invoice: {} to {} for {} ({} {})",
+            invoice.id, b.client, b.project, invoice.currency, invoice.total_minor
+        );
+    }
+    Ok(())
+}
+
+/// Make the org's declared Sharing Grants (`SEED_GRANTS`,
+/// `docs/spec/sharing.md`): one person of another org on this data root,
+/// read + comment on one project's subtree, with no membership here.
+///
+/// The row is written the way the `sharing` service writes one — the
+/// owner as `granted_by`, the preview digest over the subtree as it now
+/// stands, a `grant.created` audit line — but directly, because a seed
+/// has no signed-in owner to call the service as. Grants are immutable
+/// and never deleted, so idempotency is "a live grant for this person on
+/// this root already exists": then nothing is written.
+///
+/// The guest's account lives in the guest org's own store, so that org
+/// must be planted on this data root first (`just demo` plants
+/// Rockstars of Tomorrow before FastTrackAudio). Without it the grant is
+/// skipped with a line saying so, never invented.
+async fn plant_grants(
+    data_root: &org_proto::DataRoot,
+    org: &org_proto::OrgRoot,
+    slug: &str,
+    auth: &crate::AuthState,
+    files: &files::FilesBackend,
+) -> eyre::Result<()> {
+    use crate::sharing::{self, GrantEvent, GrantEventKind, SharingGrant, Subtree as _};
+    use project::ProjectService as _;
+
+    if example_org::grants_of(slug).next().is_none() {
+        return Ok(());
+    }
+    let store = sharing::GrantStore::open(&org.sharing_db(), slug)
+        .await
+        .wrap_err("open the sharing store")?;
+    let projects = project::ProjectBackend::new(org.projects_dir());
+    for g in example_org::grants_of(slug) {
+        let guest_root = data_root.org(g.guest_org);
+        if !guest_root.auth_db().exists() {
+            println!(
+                "  grant: {} not planted — `{}` is not on this data root (plant it first)",
+                g.root, g.guest_org
+            );
+            continue;
+        }
+        let guest_auth = crate::AuthState::open(
+            &format!("sqlite://{}?mode=rwc", guest_root.auth_db().display()),
+            &crate::auth_secret(),
+        )
+        .await
+        .wrap_err_with(|| format!("open the auth store of `{}`", g.guest_org))?;
+        let Some(guest) = guest_auth
+            .auth
+            .find_user_by_email(g.subject)
+            .await
+            .map_err(|e| eyre::eyre!("look up `{}`: {e:?}", g.subject))?
+        else {
+            println!(
+                "  grant: {} not planted — no `{}` in `{}`",
+                g.root, g.subject, g.guest_org
+            );
+            continue;
+        };
+        let Some(owner) = auth
+            .auth
+            .find_user_by_email(g.granted_by)
+            .await
+            .map_err(|e| eyre::eyre!("look up `{}`: {e:?}", g.granted_by))?
+        else {
+            bail!(
+                "the grant on {} names `{}`, who is not in {slug}",
+                g.root,
+                g.granted_by
+            );
+        };
+        let page = format!(
+            "{}/{}",
+            example_org::project_rel(g.root),
+            org_proto::PROJECT_PAGE
+        );
+        let root = projects
+            .get_by_path(&page)
+            .map_err(|e| eyre::eyre!("grant root {}: {e}", g.root))?
+            .id;
+        let now = sharing::now_unix();
+        let held = store
+            .for_subject(guest.id, root)
+            .await
+            .wrap_err("read the subject's grants")?;
+        if held.iter().any(|x| sharing::is_live(x, now)) {
+            println!("  grant: {} already shared with {}", g.root, g.subject);
+            continue;
+        }
+        // The same adapter the server builds (`build_org_state`), over
+        // the same stores, so the digest is the one a preview shows.
+        let subtree = sharing::OwnerStore::new(projects.clone(), org.projects_dir())
+            .with_tasks(task::TaskBackend::new(org.vault_dir()))
+            .with_milestones(milestone::MilestoneBackend::new(org.projects_dir()))
+            .with_workstreams(workstream::WorkstreamBackend::new(org.projects_dir()))
+            .with_files(files.clone());
+        let visible = tokio::task::spawn_blocking(move || subtree.visible(root))
+            .await
+            .wrap_err("the subtree walk")?
+            .ok_or_else(|| eyre::eyre!("the subtree of {} could not be read", g.root))?;
+        let grant = SharingGrant {
+            id: uuid::Uuid::new_v4(),
+            owner_org: slug.to_owned(),
+            root_id: root,
+            subject: guest.id,
+            guest_org: g.guest_org.to_owned(),
+            capabilities: g.capabilities,
+            expires_at: None,
+            granted_by: owner.id,
+            granted_at: now,
+            revoked_at: None,
+            revoked_by: None,
+            preview_digest: sharing::digest(root, &visible),
+        };
+        store.insert(&grant).await.wrap_err("write the grant")?;
+        sharing::audit(
+            slug,
+            &GrantEvent::of(&grant, GrantEventKind::Created, now, Some(owner.id)),
+        );
+        println!(
+            "  grant: {} shared with {} of {} ({} item(s), read + comment)",
+            g.root,
+            g.subject,
+            g.guest_org,
+            visible.len()
+        );
     }
     Ok(())
 }

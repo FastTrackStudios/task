@@ -105,6 +105,12 @@ pub const ORGS: &[(&str, &str)] = &[
     // Planted beside ACME, like Alice's own org, so Keyflow reaches it
     // through the one server the demo points at.
     ("rockstars-of-tomorrow", "Rockstars of Tomorrow"),
+    // The owner of Crescendum, the album shared across the org line
+    // with a person from Rockstars of Tomorrow (`docs/spec/sharing.md`,
+    // `SEED_GRANTS`). Planted after Rockstars on ACME's data root:
+    // grants in v1 cover owner and guest orgs on one server, and the
+    // grant names a person whose account Rockstars already holds.
+    ("fasttrackaudio", "FastTrackAudio"),
 ];
 
 /// Whether the example describes this org.
@@ -521,6 +527,27 @@ pub const CAST: &[Member] = &[
         holds: Holds::Owner,
         scope: "",
     },
+    // Runs FastTrackAudio, owns Crescendum, and is the one who granted
+    // Jordan into it (`SEED_GRANTS`).
+    Member {
+        email: "taylor@fasttrackaudio.test",
+        name: "Taylor",
+        org: "fasttrackaudio",
+        holds: Holds::Owner,
+        scope: "",
+    },
+    // The guest: a person of Rockstars of Tomorrow, and only of it. No
+    // account in FastTrackAudio's store and no membership row there —
+    // what Jordan reaches of Crescendum is the Sharing Grant and nothing
+    // else (`sharing.grant.membership-free`). A person, never a bot:
+    // there is no guest bot (Captain decision 2).
+    Member {
+        email: "jordan@rockstars.test",
+        name: "Jordan",
+        org: "rockstars-of-tomorrow",
+        holds: Holds::Employee,
+        scope: "",
+    },
 ];
 
 /// The password every example account is created with.
@@ -550,6 +577,10 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Return the hired mic stands", "alice@acme.test"),
     ("Vacuum the live room", "alice@acme.test"),
     ("Take the studio recycling out", "alice@acme.test"),
+    // FastTrackAudio's board, on both sides of the grant's line.
+    ("Sequence Crescendum", "taylor@fasttrackaudio.test"),
+    ("Mix First Light", "taylor@fasttrackaudio.test"),
+    ("Write the Northbeam stings", "taylor@fasttrackaudio.test"),
 ];
 
 /// Where or when a seeded task can be done, as `(task title, contexts)`
@@ -1583,7 +1614,199 @@ pub const DECLARED: &[DeclaredProject] = &[
             ),
         ],
     },
+    // ── FastTrackAudio: one project shared across the org line, one not ──
+    //
+    // Crescendum is the album a Rockstars of Tomorrow person is granted
+    // into (`SEED_GRANTS`). Its committed pages carry FIXED ids — the
+    // grant, the docs and the leak tests all name Crescendum by
+    // `CRESCENDUM_ID` — and the album's own page carries a client and a
+    // rate, so the guest projection has billing to strip
+    // (`sharing.grant.exclusions`). Its subtree is two songs, one of
+    // which has a sub-project one level further down, each with parts,
+    // tasks and notes, and the album's directory is adopted as a File
+    // Root like every declared project's.
+    DeclaredProject {
+        org: "fasttrackaudio",
+        dir: "Crescendum",
+        parent: None,
+        title: "Crescendum",
+        clients: "",
+        form: Some(project::Form::Album),
+        capabilities: &["music-production"],
+        parts: &["Overture", "First Light", "Undertow", "Coda"],
+        deliverables: &[],
+        tasks: &[
+            ("Sequence Crescendum", "open", Some(6)),
+            ("Print the Overture motif for the Coda", "done", None),
+        ],
+    },
+    DeclaredProject {
+        org: "fasttrackaudio",
+        dir: "Crescendum/First Light",
+        parent: Some("Crescendum"),
+        title: "First Light",
+        clients: "",
+        form: Some(project::Form::Song),
+        capabilities: &["music-production"],
+        parts: &["Lead Vocal", "Drums"],
+        deliverables: &[],
+        tasks: &[
+            ("Mix First Light", "in-progress", Some(2)),
+            ("Choose the First Light bridge", "open", None),
+        ],
+    },
+    DeclaredProject {
+        org: "fasttrackaudio",
+        dir: "Crescendum/Undertow",
+        parent: Some("Crescendum"),
+        title: "Undertow",
+        clients: "",
+        form: Some(project::Form::Song),
+        capabilities: &["music-production"],
+        parts: &["Bass", "Strings"],
+        deliverables: &[],
+        tasks: &[("Comp the Undertow bass", "open", Some(4))],
+    },
+    // The nested one: a part of Undertow that became a project, so a
+    // grant on the album has to reach two levels down.
+    DeclaredProject {
+        org: "fasttrackaudio",
+        dir: "Crescendum/Undertow/Strings",
+        parent: Some("Crescendum/Undertow"),
+        title: "Undertow Strings",
+        clients: "",
+        form: None,
+        capabilities: &["music-production"],
+        parts: &["Violins", "Cello"],
+        deliverables: &[],
+        tasks: &[("Book the string session", "in-progress", Some(1))],
+    },
+    // The project the grant must keep out: FastTrackAudio's own client
+    // work, with tasks, a note, a rate, a client contact, billed time
+    // and an invoice (`SEED_BILLING`). Shared with nobody.
+    DeclaredProject {
+        org: "fasttrackaudio",
+        dir: "Northbeam Jingles - Northbeam Records",
+        parent: None,
+        title: "Northbeam Jingles",
+        clients: "Northbeam Records",
+        form: None,
+        capabilities: &["music-production"],
+        parts: &[],
+        deliverables: &[],
+        tasks: &[
+            ("Write the Northbeam stings", "in-progress", Some(3)),
+            ("Invoice Northbeam for the first batch", "done", None),
+        ],
+    },
 ];
+
+/// Crescendum's id: fixed, so the grant, the docs and every leak test
+/// name the same project on every plant. Committed in its `project.md`.
+pub const CRESCENDUM_ID: uuid::Uuid =
+    uuid::Uuid::from_u128(0x9880_bdc8_307f_4ed6_b6cb_6e05_ca73_3571);
+
+/// A billable client of an example org — a `timer_clients` row, planted
+/// by `admin demo` under a fixed id because a project page's `clientId`
+/// points at it.
+pub struct DeclaredClient {
+    pub org: &'static str,
+    pub id: uuid::Uuid,
+    pub name: &'static str,
+    /// The committed contact (`Vault/Records/contacts/<id>.md`) of the
+    /// person at the client, when there is one.
+    pub contact: Option<uuid::Uuid>,
+}
+
+/// The example's billable clients.
+pub const DECLARED_CLIENTS: &[DeclaredClient] = &[
+    // Crescendum's client — on the album's page and therefore exactly
+    // what a guest's projection of it must not carry.
+    DeclaredClient {
+        org: "fasttrackaudio",
+        id: uuid::Uuid::from_u128(0x7c2e_4b1d_6a3f_4e8b_9d20_1b5a_7c9e_3f01),
+        name: "Rockstars of Tomorrow",
+        contact: None,
+    },
+    DeclaredClient {
+        org: "fasttrackaudio",
+        id: uuid::Uuid::from_u128(0x7c2e_4b1d_6a3f_4e8b_9d20_1b5a_7c9e_3f02),
+        name: "Northbeam Records",
+        contact: Some(uuid::Uuid::from_u128(
+            0x8d4f_2a6c_1e3b_4a7d_b5c9_0e2f_4a6c_8b01,
+        )),
+    },
+];
+
+/// The example's billable clients of one org.
+pub fn clients_of(slug: &str) -> impl Iterator<Item = &'static DeclaredClient> + '_ {
+    DECLARED_CLIENTS.iter().filter(move |c| c.org == slug)
+}
+
+/// Time billed on a declared project, and the invoice raised from it:
+/// `admin demo` sets the member's rate on the project, logs one
+/// billable session of `hours`, and generates the invoice to `client`
+/// from it — once, however often it is planted.
+pub struct DeclaredBilling {
+    pub org: &'static str,
+    /// The declared project, by title.
+    pub project: &'static str,
+    /// Who did the work (a cast member of `org`).
+    pub member: &'static str,
+    /// The member's rate on this project, in cents an hour.
+    pub hourly_cents: i64,
+    pub hours: i64,
+    /// A declared client of `org`, by name: who the invoice is to.
+    pub client: &'static str,
+}
+
+/// The seed's billed work. Northbeam Jingles only: the money the
+/// Crescendum grant must never reach lives next to it, in the same org.
+pub const SEED_BILLING: &[DeclaredBilling] = &[DeclaredBilling {
+    org: "fasttrackaudio",
+    project: "Northbeam Jingles",
+    member: "taylor@fasttrackaudio.test",
+    hourly_cents: 15_000,
+    hours: 3,
+    client: "Northbeam Records",
+}];
+
+/// The seed's billed work in one org.
+pub fn billing_of(slug: &str) -> impl Iterator<Item = &'static DeclaredBilling> + '_ {
+    SEED_BILLING.iter().filter(move |b| b.org == slug)
+}
+
+/// A Sharing Grant the seed makes (`docs/spec/sharing.md`): one person
+/// of `guest_org`, read + comment on one project's subtree of
+/// `owner_org`, with no membership in `owner_org`.
+pub struct DeclaredGrant {
+    pub owner_org: &'static str,
+    /// The declared project at the grant's root, by `dir`.
+    pub root: &'static str,
+    /// The person granted — a cast member of `guest_org`, never a bot.
+    pub subject: &'static str,
+    pub guest_org: &'static str,
+    /// The owner or admin of `owner_org` who granted it.
+    pub granted_by: &'static str,
+    pub capabilities: share_proto::GrantCapabilities,
+}
+
+/// The seed's grants: Jordan of Rockstars of Tomorrow on Crescendum.
+/// Live (no expiry, never revoked), so the demo shows the shared album
+/// in both orgs and the lane cards have a guest to admit.
+pub const SEED_GRANTS: &[DeclaredGrant] = &[DeclaredGrant {
+    owner_org: "fasttrackaudio",
+    root: "Crescendum",
+    subject: "jordan@rockstars.test",
+    guest_org: "rockstars-of-tomorrow",
+    granted_by: "taylor@fasttrackaudio.test",
+    capabilities: share_proto::GrantCapabilities::ReadComment,
+}];
+
+/// The grants one org owns.
+pub fn grants_of(slug: &str) -> impl Iterator<Item = &'static DeclaredGrant> + '_ {
+    SEED_GRANTS.iter().filter(move |g| g.owner_org == slug)
+}
 
 /// The declared projects of one org.
 pub fn declared_of(slug: &str) -> impl Iterator<Item = &'static DeclaredProject> {
@@ -4362,6 +4585,328 @@ mod declared_tests {
                 "{}: capabilities outside the vocabulary: {:?}",
                 d.title,
                 caps.unrecognised
+            );
+        }
+    }
+
+    // ── Crescendum, the project it must keep out, and the grant ──────
+    //
+    // `docs/spec/sharing.md`. The seed's half of cross-org sharing: an
+    // album FastTrackAudio owns and shares with one person of Rockstars
+    // of Tomorrow, beside a project of FastTrackAudio's that nobody is
+    // granted, carrying the money a guest must never see.
+
+    const FTA: &str = "fasttrackaudio";
+    const ROT: &str = "rockstars-of-tomorrow";
+
+    fn declared_by_dir(org: &str, dir: &str) -> &'static DeclaredProject {
+        DECLARED
+            .iter()
+            .find(|d| d.org == org && d.dir == dir)
+            .unwrap_or_else(|| panic!("{org} declares no project at `{dir}`"))
+    }
+
+    /// The declared project's tier-relative page, as the server stores it.
+    fn page_of(d: &DeclaredProject) -> String {
+        format!("{}/{}", project_rel(d.dir), org_proto::PROJECT_PAGE)
+    }
+
+    /// A declared project's committed page, parsed the way the server
+    /// parses one.
+    fn committed_page(d: &DeclaredProject) -> project::ProjectInfo {
+        let path = format!("{}/Projects/{}/project.md", d.org, d.dir);
+        let raw = studio_file(&path)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .unwrap_or_else(|| panic!("{}: no committed page at {path}", d.title));
+        project::parse_str(&page_of(d), "project", raw)
+            .unwrap_or_else(|e| panic!("{}: the committed page does not parse: {e:?}", d.title))
+    }
+
+    /// Every file committed under a directory of the example, by its
+    /// path on the org's Projects tier.
+    fn committed_under(org: &str, dir: &str) -> Vec<String> {
+        fn walk(d: &Dir<'_>, out: &mut Vec<String>) {
+            for f in d.files() {
+                out.push(f.path().to_string_lossy().into_owned());
+            }
+            for sub in d.dirs() {
+                walk(sub, out);
+            }
+        }
+        let prefix = format!("{org}/Projects/");
+        let mut out = Vec::new();
+        walk(
+            STUDIO
+                .get_dir(format!("{prefix}{dir}"))
+                .unwrap_or_else(|| panic!("no committed tree at {prefix}{dir}")),
+            &mut out,
+        );
+        out.into_iter()
+            .map(|p| project_rel(p.strip_prefix(&prefix).unwrap_or(&p)))
+            .collect()
+    }
+
+    /// FastTrackAudio's projects commit their ids, so a replant, the
+    /// grant and every test name the same projects — Crescendum by
+    /// `CRESCENDUM_ID` — and each sub-project's committed `parentId` is
+    /// its declared parent's id.
+    #[test]
+    fn fasttrackaudios_projects_carry_fixed_ids() {
+        let declared: Vec<_> = declared_of(FTA).collect();
+        assert!(
+            declared.len() >= 5,
+            "FastTrackAudio declares {}",
+            declared.len()
+        );
+        let mut ids = std::collections::HashSet::new();
+        for d in &declared {
+            let path = format!("{}/Projects/{}/project.md", d.org, d.dir);
+            let raw = std::str::from_utf8(studio_file(&path).expect("committed page")).unwrap();
+            assert!(
+                raw.lines().any(|l| l.starts_with("id: ")),
+                "{}: the page must commit its id, or a move derives another",
+                d.title
+            );
+            let page = committed_page(d);
+            assert_eq!(page.title, d.title, "{}: committed title", d.title);
+            assert!(ids.insert(page.id), "{}: id {} reused", d.title, page.id);
+            let want_parent = d.parent.map(|p| committed_page(declared_by_dir(FTA, p)).id);
+            assert_eq!(
+                page.parent_id, want_parent,
+                "{}: committed parentId",
+                d.title
+            );
+        }
+        assert_eq!(
+            committed_page(declared_by_dir(FTA, "Crescendum")).id,
+            CRESCENDUM_ID,
+            "Crescendum is 9880bdc8-307f-4ed6-b6cb-6e05ca733571 everywhere"
+        );
+    }
+
+    /// Crescendum is an album with two song sub-projects, one of which
+    /// has a sub-project of its own a level further down — and it carries
+    /// a client and a rate, so a guest projection has billing to strip
+    /// (`sharing.grant.exclusions`).
+    #[test]
+    fn crescendum_is_an_album_of_two_songs_one_nested_deeper_with_billing() {
+        let album = declared_by_dir(FTA, "Crescendum");
+        assert_eq!(album.form, Some(project::Form::Album));
+        assert!(album.parent.is_none());
+        let songs: Vec<_> = DECLARED
+            .iter()
+            .filter(|d| d.org == FTA && d.parent == Some(album.dir))
+            .collect();
+        assert_eq!(
+            songs.len(),
+            2,
+            "two songs under Crescendum: {:?}",
+            songs.iter().map(|s| s.title).collect::<Vec<_>>()
+        );
+        assert!(songs.iter().all(|s| s.form == Some(project::Form::Song)));
+        let nested: Vec<_> = DECLARED
+            .iter()
+            .filter(|d| d.org == FTA && songs.iter().any(|s| d.parent == Some(s.dir)))
+            .collect();
+        assert_eq!(nested.len(), 1, "one sub-project a level below a song");
+        for d in songs.iter().chain(&nested).chain([&album]) {
+            assert!(!d.parts.is_empty(), "{}: parts", d.title);
+            assert!(!d.tasks.is_empty(), "{}: tasks", d.title);
+        }
+        assert!(
+            committed_under(FTA, album.dir)
+                .iter()
+                .any(|p| p.starts_with("crescendum/Notes/") && p.ends_with(".md")),
+            "notes under Crescendum's directory"
+        );
+
+        let page = committed_page(album);
+        let client = page.client_id.expect("Crescendum names a client");
+        assert!(
+            clients_of(FTA).any(|c| c.id == client),
+            "Crescendum's client {client} is a declared client"
+        );
+        assert!(page.default_rate_cents > 0, "Crescendum carries a rate");
+    }
+
+    /// FastTrackAudio's other project exists to be kept out: it is not
+    /// under Crescendum, and it holds tasks, a note, a rate, a client
+    /// with a committed contact, and the billed time and invoice
+    /// `SEED_BILLING` plants.
+    #[test]
+    fn the_hidden_project_holds_what_a_guest_must_never_see() {
+        let hidden = declared_by_dir(FTA, "Northbeam Jingles - Northbeam Records");
+        assert!(hidden.parent.is_none(), "beside Crescendum, not under it");
+        assert!(!hidden.tasks.is_empty());
+        assert!(
+            committed_under(FTA, hidden.dir)
+                .iter()
+                .any(|p| p.contains("/Notes/") && p.ends_with(".md")),
+            "a note in its directory"
+        );
+        let page = committed_page(hidden);
+        assert!(page.default_rate_cents > 0, "a rate on the page");
+        let client = clients_of(FTA)
+            .find(|c| Some(c.id) == page.client_id)
+            .expect("its clientId is a declared client");
+        let contact = client.contact.expect("the client has a contact");
+        let card = studio_file(&format!("{FTA}/Vault/Records/contacts/{contact}.md"))
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .expect("the contact is committed");
+        assert!(
+            card.contains(&format!("organization: {}", client.name)),
+            "the contact works at {}",
+            client.name
+        );
+        let billed = billing_of(FTA)
+            .find(|b| b.project == hidden.title)
+            .expect("billed time and an invoice");
+        assert_eq!(billed.client, client.name);
+        assert!(billed.hours > 0 && billed.hourly_cents > 0);
+        assert!(cast_of(FTA).iter().any(|m| m.email == billed.member));
+        assert!(
+            !SEED_GRANTS
+                .iter()
+                .any(|g| g.owner_org == FTA && g.root == hidden.dir),
+            "nobody is granted the hidden project"
+        );
+    }
+
+    /// The grant is one live, read + comment grant on Crescendum, to a
+    /// PERSON of Rockstars of Tomorrow who holds no account in
+    /// FastTrackAudio — and so, since the demo writes membership rows
+    /// only where an account exists (`admin adopt-principal`), no
+    /// membership row there either. Granted by FastTrackAudio's owner.
+    /// No bot is ever a subject (Captain decision 2).
+    // t[verify sharing.grant.membership-free]
+    #[test]
+    fn the_seed_grant_is_a_rockstars_person_with_no_fta_membership() {
+        let crescendum: Vec<_> = SEED_GRANTS
+            .iter()
+            .filter(|g| g.owner_org == FTA && g.root == "Crescendum")
+            .collect();
+        assert_eq!(crescendum.len(), 1, "one grant on Crescendum");
+        for g in SEED_GRANTS {
+            assert!(ORGS.iter().any(|(s, _)| *s == g.owner_org));
+            assert!(ORGS.iter().any(|(s, _)| *s == g.guest_org));
+            assert_ne!(g.owner_org, g.guest_org, "a grant crosses an org line");
+            let _ = declared_by_dir(g.owner_org, g.root);
+            assert!(
+                cast_of(g.guest_org).iter().any(|m| m.email == g.subject),
+                "{} is a person of {}",
+                g.subject,
+                g.guest_org
+            );
+            assert!(
+                !cast_of(g.owner_org).iter().any(|m| m.email == g.subject),
+                "{} holds an account in {} — and so would get a membership row there",
+                g.subject,
+                g.owner_org
+            );
+            assert!(
+                !BOTS.iter().any(|b| b.email == g.subject)
+                    && !g
+                        .subject
+                        .ends_with(&format!("@{}", crate::bots::BOT_DOMAIN)),
+                "{} is a bot; guests are people only",
+                g.subject
+            );
+            assert!(
+                cast_of(g.owner_org)
+                    .iter()
+                    .any(|m| m.email == g.granted_by && m.holds == Holds::Owner),
+                "{} is not an owner of {}",
+                g.granted_by,
+                g.owner_org
+            );
+            assert_eq!(g.capabilities, share_proto::GrantCapabilities::ReadComment);
+        }
+        assert_eq!(crescendum[0].guest_org, ROT);
+    }
+
+    /// The S4 resolver over the seed's Crescendum: the album, both songs
+    /// and the nested one, with their parts, tasks and notes — and none
+    /// of Northbeam Jingles. Over the committed pages and the declared
+    /// boards; `demo_plant.rs` asks the same of the planted disk.
+    // t[verify sharing.grant.subtree]
+    // t[verify sharing.grant.exclusions]
+    #[test]
+    fn the_grant_on_crescendum_reaches_its_subtree_and_nothing_else() {
+        use crate::sharing::subtree::{Attached, OwnerState, ProjectNode};
+
+        let mut state = OwnerState::default();
+        for d in declared_of(FTA) {
+            let page = committed_page(d);
+            state.projects.push(ProjectNode {
+                id: page.id,
+                parent_id: page.parent_id,
+                title: page.title.clone(),
+                page: page_of(d),
+                parts: d
+                    .parts
+                    .iter()
+                    .map(|n| {
+                        let key = format!("{}#{n}", d.dir);
+                        (
+                            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, key.as_bytes()),
+                            (*n).to_owned(),
+                        )
+                    })
+                    .collect(),
+            });
+            for (title, _, _) in d.tasks {
+                state.tasks.push(Attached {
+                    id: uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, title.as_bytes()),
+                    project_id: Some(page.id),
+                    title: (*title).to_owned(),
+                });
+            }
+        }
+        let scope = crate::sharing::resolve(&state, CRESCENDUM_ID).expect("Crescendum resolves");
+
+        let titles: std::collections::BTreeSet<&str> =
+            scope.projects.values().map(String::as_str).collect();
+        assert_eq!(
+            titles,
+            ["Crescendum", "First Light", "Undertow", "Undertow Strings"]
+                .into_iter()
+                .collect(),
+            "the album, both songs and the nested one"
+        );
+        let hidden = declared_by_dir(FTA, "Northbeam Jingles - Northbeam Records");
+        let hidden_id = committed_page(hidden).id;
+        assert!(!scope.in_scope(&crate::sharing::ObjectRef::Project(hidden_id)));
+        for (title, _, _) in hidden.tasks {
+            assert!(
+                !scope.tasks.values().any(|t| t == title),
+                "`{title}` is Northbeam's and out of scope"
+            );
+        }
+        let subtree_tasks: usize = declared_of(FTA)
+            .filter(|d| d.dir == "Crescendum" || d.dir.starts_with("Crescendum/"))
+            .map(|d| d.tasks.len())
+            .sum();
+        assert_eq!(
+            scope.tasks.len(),
+            subtree_tasks,
+            "every subtree task, no other"
+        );
+        let subtree_parts: usize = declared_of(FTA)
+            .filter(|d| d.dir == "Crescendum" || d.dir.starts_with("Crescendum/"))
+            .map(|d| d.parts.len())
+            .sum();
+        assert_eq!(scope.parts.len(), subtree_parts);
+
+        for note in committed_under(FTA, "Crescendum") {
+            assert!(
+                scope.in_scope(&crate::sharing::ObjectRef::Note(note.clone())),
+                "{note} is under Crescendum"
+            );
+        }
+        for note in committed_under(FTA, hidden.dir) {
+            assert!(
+                !scope.in_scope(&crate::sharing::ObjectRef::Note(note.clone())),
+                "{note} is Northbeam's"
             );
         }
     }

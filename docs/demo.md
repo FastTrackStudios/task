@@ -54,10 +54,13 @@ process".
 | Sam | ACME Audio | employee | the work, but cannot widen the guest list |
 | Casey | — | client | `Deliverables`, read and comment, no download |
 | Victor | VNT Video | owner | everything of VNT's |
+| Riley | Rockstars of Tomorrow | owner | the Adult Jam library, its setlists and shows |
+| Taylor | FastTrackAudio | owner | everything of FastTrackAudio's, and the one who shared Crescendum |
+| Jordan | Rockstars of Tomorrow | employee | Crescendum, **shared from FastTrackAudio** — read and comment, no membership there |
 
-All four use the same password. They are defined once, in
+All of them use the same password. They are defined once, in
 `apps/server/src/example_org.rs`, and the integration suite hires the
-same four from the same list — so what `tests/integration/tests/it/people.rs`
+same people from the same list — so what `tests/integration/tests/it/people.rs`
 proves about Casey is true of the Casey you can log in as.
 
 Casey is the one to look at. `Comment` without `Download` is a client who
@@ -70,6 +73,30 @@ coarse permit table, which asks only "is this a validated user". So Casey
 can list ACME's projects. `office.rs` asserts that deliberately, so
 closing it is a decision someone makes and sees fail there rather than a
 surprise.
+
+## Crescendum — shared from FastTrackAudio
+
+FastTrackAudio (planted on ACME's data root, after Rockstars of
+Tomorrow) owns the album **Crescendum** — project id
+`9880bdc8-307f-4ed6-b6cb-6e05ca733571`, fixed in its committed page —
+with two songs, *First Light* and *Undertow*, and *Undertow Strings*
+nested one level further down, each with parts, tasks and notes, and
+the album's directory adopted as a File Root.
+
+Crescendum is **shared from FastTrackAudio** with Jordan of Rockstars
+of Tomorrow by a live Sharing Grant (`docs/spec/sharing.md`): read and
+comment over that subtree, granted by Taylor, and nothing else. Jordan
+has no account in FastTrackAudio and no membership row there — the
+grant is the whole of their access — and there is no guest bot. The
+album shows in both orgs; FastTrackAudio keeps the only copy.
+
+Beside it, deliberately, is what the grant must keep out:
+**Northbeam Jingles**, FastTrackAudio's other project, with its own
+tasks, a brief, a File Root, a client (Northbeam Records, with a
+committed contact), a project rate, billed time and an invoice — and
+Crescendum's own page carries a client and a rate too, which a guest's
+view of it never shows. `demo_plant.rs` asserts all of this against the
+planted disk; `example_org::declared_tests` against the declaration.
 
 ## What is not done for you
 
