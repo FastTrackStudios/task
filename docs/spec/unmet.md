@@ -596,6 +596,22 @@ it is tagged): crdt `turso` (`TursoPersistence`), architect-atom
 `Mutation::run_queued`, `TursoRows`). Task opens one `<data dir>/device.db`
 for both (`crates/ui/src/device_store.rs`).
 
+### `offline.app-docs.*` — met in part
+
+Each org serves architect's `crdt::docs` (`apps/server/src/app_docs.rs`,
+`<org>/app_docs.sqlite`). Its pieces: the catalog (`Docs` and its
+`changes` stream), the content over the org's `DocSync` (live, then app
+docs, then vault), and the permits (`APP_DOCS`, `APP_DOCS_STREAM`). Devices
+run `crdt::docs::DocsDriver`. Verified by `app_docs_e2e` and architect's
+`crdt/tests/docs.rs`. Not yet:
+- presence on app docs: the org's `DocPresence` routes only live and vault
+  ids;
+- rename and delete while offline: the driver does them online only;
+- sharing a doc beyond its org;
+- device-to-device exchange (`DocPeer`) for app docs;
+- blobs a doc references (planned: architect's blobs layer);
+- any UI in Task.
+
 ### `offline.outbox` — met
 
 Timer start/stop/switch/log/edit/delete queue when the server is
