@@ -27,12 +27,15 @@
 # The version lives in ONE place, `[workspace.package] version` in the
 # root Cargo.toml. Every shipped thing reads it from there: task-server
 # and the web bundle through CARGO_PKG_VERSION, the iPhone and macOS
-# TestFlight builds through their workflows (MARKETING_VER), the
-# Developer-ID desktop app's `desktop-v<version>` release (which is what
-# the in-app updater follows), and the `v<version>` git tag + GitHub
-# Release cut by the tag's deploy, which then carries the standalone
-# headless node binaries (node-binaries.yml). scripts/check-versions.sh
-# (`just ci-versions`) holds every one of them to it.
+# TestFlight builds through their workflows (MARKETING_VER), and the
+# `v<version>` git tag + GitHub Release cut by the tag's deploy, which
+# then carries everything the version ships: the standalone headless node
+# binaries (node-binaries.yml), the web bundle and the Linux AppImage
+# (release-assets.yml), and the Developer-ID macOS app (task-macos.yml) —
+# the desktop downloads with the manifests the in-app updater follows.
+# (Until 26.10 the macOS app had its own `desktop-v<version>` release.)
+# scripts/check-versions.sh (`just ci-versions`) holds every one of them
+# to it.
 #
 # The CHANGELOG section is built from the pending cargo-rail change files
 # (`.changes/*.md`, one per PR, written by `cargo rail change add`), which
@@ -116,8 +119,8 @@ release_subject_re() { printf '^chore\\(release\\): v%s( \\(#[0-9]+\\))?$' "${1/
 # 26.10.10 > 26.10.9.
 gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
 
-# Product tags only: exactly vX.Y.Z. `desktop-v*` (the macOS updater's feed)
-# and any `-rc.N` style suffix never match. versionsort.suffix=- sorts a
+# Product tags only: exactly vX.Y.Z. `desktop-v*` (the macOS app's own
+# releases before 26.10) and any `-rc.N` style suffix never match. versionsort.suffix=- sorts a
 # suffixed tag before its release, should one ever exist.
 tags_sorted() { # [--merged REF]
     git -c versionsort.suffix=- tag --list 'v[0-9]*' "$@" --sort=-v:refname \
@@ -923,6 +926,32 @@ cmd_tag_guard() {
     echo "tag guard: ok ($tag at $(git rev-parse --short HEAD), on $on)"
 }
 
+# What a release carries, for its notes. The assets land after the release
+# is created (node-binaries.yml, release-assets.yml, task-macos.yml), so
+# this names them rather than listing what is attached at this moment.
+release_contents() { # <version> <tag>
+    local v="$1" tag="$2" dl="https://github.com/$REPO/releases/download/$2"
+    cat <<EOF
+### What this release carries
+Everything Task $v ships, from this one release:
+
+| | |
+|---|---|
+| **Desktop, macOS** (Apple silicon, notarized) | [\`Task-macos.dmg\`]($dl/Task-macos.dmg) — open it, drag Task to Applications |
+| **Desktop, Linux** (x86_64, glibc ≥ 2.35, WebKitGTK 4.1) | [\`Task-linux-x86_64.AppImage\`]($dl/Task-linux-x86_64.AppImage) — \`chmod +x\` and run |
+| **Server / headless node** | \`task-server-linux-x86_64\`, \`task-server-linux-aarch64\`, \`task-server-macos-aarch64\` + \`SHA256SUMS\` (signed: \`SHA256SUMS.minisig\`); \`curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-node.sh \| sh\` |
+| **Web app** | [\`task-web-$v.tar.gz\`]($dl/task-web-$v.tar.gz) — the static bundle production serves |
+| **Container images** | \`ghcr.io/fasttrackstudios/task-server:$v\`, \`ghcr.io/fasttrackstudios/task-web:$v\` |
+
+Installed desktop apps update themselves from this release: the app checks
+in the background, verifies the download (sha256; on macOS also our
+signature and Gatekeeper) and installs it on the next start — or now, from
+the tray's *Check for updates*. On Linux that is the AppImage; the NixOS
+package updates through the fleet. A running node updates with
+\`task-server self-update\`.
+EOF
+}
+
 # CI, on the tag after a deploy verified live (or by hand). Idempotent.
 # The tag already exists (cmd_tag pushed it); this attaches the GitHub
 # Release with the changelog section, migrations and moved git deps.
@@ -962,6 +991,8 @@ cmd_publish() {
             # shellcheck disable=SC2086 # $d is a word list
             printf -- '- %s\n' $d
         fi
+        echo
+        release_contents "$v" "$tag"
         echo
         echo "---"
         echo "Tag \`$tag\` at \`$(git rev-parse --short "$target")\` (images \`ghcr.io/fasttrackstudios/task-server:$v\`, \`task-web:$v\`)."

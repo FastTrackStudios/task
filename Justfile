@@ -146,10 +146,11 @@ mobile-css: css
 mobile-sim *ARGS:
     bash apps/mobile/ios/build-ios.sh {{ARGS}}
 
-# Publish the macOS app (signed, notarized) as GitHub release
-# `desktop-v<VERSION>`: a DMG for a first install, and the zip +
-# manifest installed copies update themselves from
-# (apps/desktop/src/updater.rs). Run on the Mac holding the signing keys.
+# Attach the macOS app (signed, notarized) to the release `v<VERSION>`
+# (waits for the deploy to create it): a DMG for a first install, and the
+# zip + manifest installed copies update themselves from
+# (apps/desktop/src/updater.rs). Run on the Mac holding the signing keys;
+# CI does the same on every tag (task-macos.yml).
 release-desktop VERSION:
     bash apps/desktop/macos/release.sh {{VERSION}}
 
@@ -163,10 +164,11 @@ release-desktop VERSION:
 # (one commit: version + CHANGELOG from the change files, which it
 # deletes), its PR squash-merges into main, and `release-tag` pushes the
 # tag once the full suite on that commit is green. The tag deploys the
-# server + web, uploads TestFlight builds, attaches the node binaries and
-# publishes the GitHub Release. Production = the latest `v*` tag.
+# server + web, uploads TestFlight builds, and publishes the GitHub Release
+# carrying everything the version ships (node binaries, web bundle, macOS
+# and Linux desktop apps). Production = the latest `v*` tag.
 
-# The product version (server, web, iOS, macOS, desktop-v*).
+# The product version (server, web, iOS, macOS, Linux desktop).
 version:
     @bash scripts/release.sh version
 

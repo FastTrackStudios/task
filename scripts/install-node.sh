@@ -66,7 +66,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 # Release tags, newest first (the API lists by date). Only v<X.Y.Z>:
-# desktop-v* releases are the desktop updater's.
+# desktop-v* releases (the macOS app's own, before 26.10) carry no node.
 if [ -n "$version" ]; then
     tags="v$version"
 else

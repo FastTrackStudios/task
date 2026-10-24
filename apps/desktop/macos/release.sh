@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Publish the macOS app as a GitHub release of FastTrackStudios/task:
-# build the notarized Developer-ID app (build-dmg.sh), then create the
-# release `desktop-v<version>` carrying
+# Attach the macOS app to the product release `v<version>` of
+# FastTrackStudios/task: build the notarized Developer-ID app
+# (build-dmg.sh), then upload, beside the node binaries, the web bundle and
+# the Linux AppImage the same release carries,
 #
 #   Task-macos.dmg      — a first install: drag to Applications
 #   Task-macos.zip      — what the in-app updater downloads
-#   latest-macos.json   — the zip's version and sha256 (the updater's
+#   latest-macos.json   — the zip's version, URL and sha256 (the updater's
 #                         manifest; apps/desktop/src/updater.rs)
 #
 # Installed copies find it on their own: the updater checks the releases
@@ -13,33 +14,36 @@
 # team's signature, Gatekeeper), and installs it on the next start or
 # from the tray's "Check for updates".
 #
-#   just release-desktop 0.0.3
+#   just release-desktop 26.10.1
+#
+# The release itself is made by the deploy (release.yml, after the tag
+# deploys and verifies live), so this waits for it — up to WAIT_MINUTES
+# (default 180) — rather than creating one. Re-running replaces the three
+# files (--clobber).
 #
 # Needs what build-dmg.sh needs (the Developer ID identity in the build
 # keychain, ~/.appstoreconnect/config.env for notarization) and `gh`
 # signed in with write access to the repo.
 #
-# PUBLISH=0 does everything up to the release itself — build, sign,
-# notarize, staple, the Gatekeeper check, the zip and manifest — and stops
-# before `gh release create`. CI's workflow_dispatch uses it to prove the
-# job on a branch without publishing anything.
+# PUBLISH=0 does everything up to the upload — build, sign, notarize,
+# staple, the Gatekeeper check, the zip and manifest — and stops there.
+# CI (task-macos.yml) builds with PUBLISH=0 and uploads itself, so it can
+# also attach a build to an older tag whose copy of this script predates
+# the single release.
 set -euo pipefail
 
-VERSION="${1:?usage: release.sh <version, e.g. 0.0.3>}"
+VERSION="${1:?usage: release.sh <version, e.g. 26.10.1>}"
 case "$VERSION" in
     [0-9]*.[0-9]*.[0-9]*) ;;
-    *) echo "version must be three numbers, e.g. 0.0.3" >&2; exit 2 ;;
+    *) echo "version must be three numbers, e.g. 26.10.1" >&2; exit 2 ;;
 esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
-TAG="desktop-v$VERSION"
+TAG="v$VERSION"
 PUBLISH="${PUBLISH:-1}"
-
-if [ "$PUBLISH" = 1 ] && gh release view "$TAG" --repo FastTrackStudios/task >/dev/null 2>&1; then
-    echo "release $TAG already exists — pick the next version" >&2
-    exit 1
-fi
+WAIT_MINUTES="${WAIT_MINUTES:-180}"
+REPO=FastTrackStudios/task
 
 MARKETING_VER="$VERSION" OUT_DIR="$OUT_DIR" \
     KEYCHAIN="${KEYCHAIN:-fts-build.keychain}" KEYCHAIN_PW="${KEYCHAIN_PW:-fts-build}" \
@@ -50,19 +54,23 @@ for f in Task-macos.dmg Task-macos.zip latest-macos.json; do
 done
 
 if [ "$PUBLISH" != 1 ]; then
-    echo "=== PUBLISH=$PUBLISH — built and notarized $TAG, not publishing ==="
+    echo "=== PUBLISH=$PUBLISH — built and notarized $VERSION, not uploading ==="
     cat "$OUT_DIR/latest-macos.json"
     exit 0
 fi
 
-echo "=== publishing $TAG ==="
-gh release create "$TAG" \
-    --repo FastTrackStudios/task \
-    --target "$(git -C "$ROOT" rev-parse HEAD)" \
-    --title "Task $VERSION for macOS" \
-    --notes "Task $VERSION for macOS — signed, notarized.
+echo "=== waiting for release $TAG (up to ${WAIT_MINUTES} min) ==="
+waited=0
+until gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; do
+    [ "$waited" -lt "$WAIT_MINUTES" ] \
+        || { echo "release $TAG did not appear in ${WAIT_MINUTES} min — has the deploy verified live?" >&2; exit 1; }
+    sleep 60
+    waited=$((waited + 1))
+done
 
-First install: download **Task-macos.dmg**, open it, drag Task to Applications.
-Already installed: Task updates itself (it checks in the background; the tray's *Check for updates* installs one now)." \
-    "$OUT_DIR/Task-macos.dmg" "$OUT_DIR/Task-macos.zip" "$OUT_DIR/latest-macos.json"
-echo "=== published: https://github.com/FastTrackStudios/task/releases/tag/$TAG ==="
+echo "=== attaching the macOS app to $TAG ==="
+# The app first: the manifest is what makes installed apps move, so it
+# must never name a zip that is not there yet.
+gh release upload "$TAG" --repo "$REPO" --clobber "$OUT_DIR/Task-macos.dmg" "$OUT_DIR/Task-macos.zip"
+gh release upload "$TAG" --repo "$REPO" --clobber "$OUT_DIR/latest-macos.json"
+echo "=== attached: https://github.com/$REPO/releases/tag/$TAG ==="

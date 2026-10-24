@@ -26,7 +26,7 @@ hotfix while main can't ship: release/v<latest tag> <-- cherry-pick -x from main
 | PR `release/pending` → `main` (one commit) | release guard (from the BASE commit's `scripts/release.sh`); `CI` skips the heavy jobs (version + changelog only) |
 | PR into `release/v*` (hotfix) | the FULL `CI`, release guard |
 | push to `main` or `release/v*` | FULL `CI` (on GitHub's free hosted runners; dependencies from a rust-cache saved on main) + rail evidence for the commit; `release-tag` needs its aggregator green. If the push is a release commit (the version changed): `images` builds and pushes `ghcr.io/fasttrackstudios/task-{server,web}:<version>`; `release-tag` needs those too |
-| tag `vYY.M.MICRO` | starcommand's Argo `task` app deploys the chart at the newest tag (images `:<appVersion>` = `:<version>`); `deploy` (tag guard → images on GHCR? → Verify live → GitHub Release → node binaries, desktop cache), `task-ios`, `task-macos` (TestFlight, `desktop-v*`) |
+| tag `vYY.M.MICRO` | starcommand's Argo `task` app deploys the chart at the newest tag (images `:<appVersion>` = `:<version>`); `deploy` (tag guard → images on GHCR? → Verify live → GitHub Release → attaches node binaries, web bundle + Linux AppImage; desktop cache), `task-ios`, `task-macos` (TestFlight; the macOS app attached to the same release). One `v*` release carries everything the version ships |
 
 Nothing deploys on a merge. Production is the latest `v*` tag.
 
@@ -87,10 +87,24 @@ deletes the consumed change files there. `release/*` is never merged back.
 
 ## Task specifics
 
+- **One release carries everything** the version ships: `task-server-*` +
+  `SHA256SUMS{,.minisig}` (node-binaries.yml), `task-web-<v>.tar.gz` and
+  `Task-linux-x86_64.AppImage` + `latest-linux.json` (release-assets.yml),
+  `Task-macos.{dmg,zip}` + `latest-macos.json` (task-macos.yml), and the
+  GHCR images named in the notes. The desktop updater reads only its
+  platform's manifest, so a release whose build is still uploading is
+  skipped until it lands. Every asset job is a no-op when the release has
+  its asset, and backfills an existing tag from main:
+  `gh workflow run release-assets.yml --ref main -f tag=vX.Y.Z`,
+  `gh workflow run node-binaries.yml --ref main -f tag=vX.Y.Z`,
+  `gh workflow run task-macos.yml --ref main -f desktop_release=publish -f tag=vX.Y.Z -f testflight=false`.
+  Before 26.10 the macOS app had its own `desktop-v*` release; the updater
+  still reads those.
 - **One version** for everything: `[workspace.package] version` in the root
   `Cargo.toml`. Server and web read `CARGO_PKG_VERSION`; the Apple
-  workflows read `just version`; `desktop-v<version>` (the macOS in-app
-  updater's feed) uses the same number. `just ci-versions`
+  workflows read `just version`; the desktop apps on the release (and the
+  `latest-macos.json` / `latest-linux.json` manifests the in-app updater
+  reads) carry the same number. `just ci-versions`
   (`scripts/check-versions.sh`) fails when an artifact takes its version
   from anywhere else. Every comparison is numeric per component (release.sh
   `sort -V`, `apps/desktop/src/updater.rs`, Apple), so `26.10.0 > 0.2.4`.

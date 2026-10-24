@@ -57,6 +57,10 @@ task-node-host = { workspace = true }
 # `release`: the updater finds desktop releases the way `task-server
 # self-update` finds node releases (src/updater.rs).
 architect = { workspace = true, features = ["release"] }
+# The updater reads an update's manifest (`latest-macos.json`,
+# `latest-linux.json`).
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 # Central sign-in through the system browser sheet (`src/mac_auth.rs`):
 # ASWebAuthenticationSession, its anchor (the key NSWindow), and the
@@ -76,9 +80,6 @@ objc2-foundation = "0.3"
 objc2-authentication-services = "0.3"
 objc2-app-kit = "0.3"
 block2 = "0.6"
-# The updater reads an update's manifest (`latest-macos.json`).
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 
 # The bundle's two other programs. Each is a one-call wrapper sharing its
 # name with another workspace target (`task-cli`'s `task` bin and the

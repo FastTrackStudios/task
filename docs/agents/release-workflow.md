@@ -11,9 +11,10 @@ the logic is `scripts/release.sh`, run through `just release-*`.
   (`.changes/README`), squash. The full suite runs after every merge.
 - **A release is a CalVer tag `vYY.M.MICRO`** on the release PR's squash
   commit (or on a `release/v*` hotfix branch). **The tag deploys**:
-  `deploy.yml` (server + web, Verify live), GitHub Release,
-  `node-binaries.yml`, `task-ios.yml`, `task-macos.yml` (TestFlight,
-  `desktop-v*`). No Captain approval for a release.
+  `deploy.yml` (server + web, Verify live), the GitHub Release carrying
+  everything (`node-binaries.yml`, `release-assets.yml`: web bundle + Linux
+  AppImage), `task-ios.yml`, `task-macos.yml` (TestFlight + the macOS app
+  on the same release). No Captain approval for a release.
 - **Production = the latest `v*` tag.**
 
 ## Commands

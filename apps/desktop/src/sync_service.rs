@@ -36,11 +36,42 @@ use std::process::Command;
 ///
 /// `Contents/MacOS/fts-files-daemon` in a bundle, a sibling file on
 /// Linux — both are "next to the executable", which is why one lookup
-/// covers them.
+/// covers them. An AppImage is the exception: what runs beside the
+/// window is inside the image's mount (`/tmp/.mount_…`), which is gone
+/// when the app exits, and the unit `install` writes names the agent's
+/// own path. So from an AppImage the agent is first copied out to
+/// `<data>/task/bin/` ([`stable_agent`]) and installed from there.
 fn agent_binary() -> Option<PathBuf> {
     let here = std::env::current_exe().ok()?;
     let candidate = here.parent()?.join("fts-files-daemon");
-    candidate.exists().then_some(candidate)
+    if !candidate.exists() {
+        return None;
+    }
+    if std::env::var_os("APPIMAGE").is_none() {
+        return Some(candidate);
+    }
+    let dir = data_dir()?.join("task").join("bin");
+    stable_agent(&candidate, &dir).ok()
+}
+
+/// `bundled`, copied to `dir` unless the copy there is already the same
+/// bytes. Written beside the target and renamed over it, so an agent
+/// running from the old copy keeps its file and never sees a half-written
+/// one; an unchanged agent keeps its mtime, and so its build stamp.
+fn stable_agent(bundled: &std::path::Path, dir: &std::path::Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let target = dir.join("fts-files-daemon");
+    let bytes = std::fs::read(bundled)?;
+    if std::fs::read(&target).is_ok_and(|have| have == bytes) {
+        return Ok(target);
+    }
+    std::fs::create_dir_all(dir)?;
+    let part = dir.join("fts-files-daemon.part");
+    std::fs::write(&part, &bytes)?;
+    std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&part, &target)?;
+    Ok(target)
 }
 
 /// Install the sync agent if it is not already installed, and reinstall
@@ -111,19 +142,25 @@ fn build_stamp(agent: &std::path::Path) -> Option<String> {
     Some(format!("{} {mtime}", meta.len()))
 }
 
-fn stamp_file() -> Option<PathBuf> {
+/// `$XDG_DATA_HOME`, else the platform's per-user data directory.
+fn data_dir() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(target_vendor = "apple") {
-                home.join("Library/Application Support")
-            } else {
-                home.join(".local/share")
-            }
-        });
-    Some(base.join("task").join("agent-build"))
+    Some(
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| {
+                if cfg!(target_vendor = "apple") {
+                    home.join("Library/Application Support")
+                } else {
+                    home.join(".local/share")
+                }
+            }),
+    )
+}
+
+fn stamp_file() -> Option<PathBuf> {
+    Some(data_dir()?.join("task").join("agent-build"))
 }
 
 fn read_stamp() -> Option<String> {
@@ -201,4 +238,41 @@ pub(crate) async fn agent()
         .establish()
         .await
         .map_err(|e| format!("no agent answering on {bind} ({e})"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stable_agent;
+
+    #[test]
+    fn an_appimage_agent_is_copied_out_once_and_refreshed_on_change() {
+        let root = std::env::temp_dir().join(format!("task-stable-agent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mount = root.join("mount");
+        std::fs::create_dir_all(&mount).expect("mount dir");
+        let bundled = mount.join("fts-files-daemon");
+        std::fs::write(&bundled, b"build one").expect("bundled agent");
+        let dir = root.join("data/task/bin");
+
+        let copied = stable_agent(&bundled, &dir).expect("first copy");
+        assert_eq!(copied, dir.join("fts-files-daemon"));
+        assert_eq!(std::fs::read(&copied).expect("copy"), b"build one");
+        let first = std::fs::metadata(&copied)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+
+        // The same bytes again: left alone, so its build stamp holds.
+        stable_agent(&bundled, &dir).expect("second call");
+        let again = std::fs::metadata(&copied)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        assert_eq!(first, again, "an unchanged agent must not be rewritten");
+
+        // An update ships a different agent: the copy follows it.
+        std::fs::write(&bundled, b"build two").expect("updated agent");
+        stable_agent(&bundled, &dir).expect("refresh");
+        assert_eq!(std::fs::read(&copied).expect("copy"), b"build two");
+        assert!(!dir.join("fts-files-daemon.part").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

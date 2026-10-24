@@ -68,9 +68,8 @@ commit_parsers = [
     { message = ".*", group = "<!-- 4 -->Changes" },
 ]
 filter_commits = false
-# Product releases only. Anchored: `desktop-v0.0.5` (the macOS updater's
-# feed, cut by apps/desktop/macos/release.sh) must not count as a release
-# of the whole product.
+# Product releases only. Anchored: `desktop-v0.0.5` (the macOS app.s own
+# releases before 26.10) must not count as a release of the whole product.
 tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
 sort_commits = "oldest"
 
