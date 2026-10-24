@@ -1,5 +1,5 @@
 //! Diagnostic, opt-in: `FTS_DIAG_REPO=<root>/.fts-files cargo nextest run
-//! -p files --test diag_heads --no-capture` prints every view head of a
+//! -p files --test it diag_heads --no-capture` prints every view head of a
 //! version store with its description and parents — the fastest way to
 //! see why a root reads as divergent.
 

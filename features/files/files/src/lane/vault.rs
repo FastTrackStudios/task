@@ -56,7 +56,7 @@ pub const VAULT_ROOT_NAME: &str = "Vault";
 /// flat containers — and the second to arrive must not open a second
 /// store over the first's `.fts-files`: two `FsStore`s over one on-disk
 /// chunk store in one process is the shape that hangs (see
-/// `tests/rpc_surface.rs`). So the second adopter finds the first here
+/// `tests/it/rpc_surface.rs`). So the second adopter finds the first here
 /// and leaves the binding alone. [`FilesBackend::release_vault`] takes
 /// the entry back out on shutdown, which is what lets a restart in the
 /// same process adopt afresh.
