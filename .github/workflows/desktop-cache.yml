@@ -11,8 +11,9 @@
 # merge on main and the tag on the release branch, which share a tree,
 # give the same path anyway.)
 #
-# WHEN: called from deploy.yml once the release is published (after
-# "Verify live" + "Tag + GitHub Release"). By hand, to backfill a release:
+# WHEN: called from deploy.yml once the release is published (after the
+# tag guard + "GitHub Release"; Verify live runs beside, informational).
+# By hand, to backfill a release:
 # `gh workflow run desktop-cache.yml --ref main -f tag=v0.2.3`. A release
 # already cached is harmless to re-run: cachix skips paths it holds.
 #

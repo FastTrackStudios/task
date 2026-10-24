@@ -21,13 +21,15 @@
 # GITHUB_TOKEN would start nothing):
 #   1. checks the tag is a release commit (on main or a release/v* branch)
 #      and its images exist,
-#   2. waits for task.starcommand.live to serve the tagged commit (the
-#      GitHub Deployment goes Active only then),
-#   3. publishes the GitHub Release (release.yml), then attaches what the
+#   2. publishes the GitHub Release (release.yml), then attaches what the
 #      version ships to it — the headless node binaries (node-binaries.yml),
 #      the web bundle and the Linux AppImage (release-assets.yml) — and
 #      pushes the Linux desktop to cachix. The macOS app joins the same
 #      release from task-macos.yml, so one `v*` release carries everything.
+#   3. beside 2, and for our sake only: waits for task.starcommand.live to
+#      serve the tagged commit (the GitHub Deployment goes Active only
+#      then). The release is the artifacts, not our deployment of them, so
+#      nothing waits on it and its failure fails nothing.
 #
 # Rollback: Argo deploys the NEWEST tag, so redeploying an old one is not
 # possible from here. Revert on main and cut a new release (or, in an
@@ -82,10 +84,16 @@ jobs:
   # commit — both halves, web and server — so "Active" keeps meaning
   # "serving", not "images pushed". Polling the public URL needs nothing
   # from the LAN, so it runs on a hosted runner and costs us no slot.
+  #
+  # Informational: the release (GitHub Release + assets) is published from
+  # the tag, not from our cluster, so it runs beside this rather than after
+  # it, and a red or timed-out verification shows on the run without
+  # failing it or holding back a release anyone else can install.
   verify:
     name: Verify live
     runs-on: ubuntu-latest
     needs: deploy
+    continue-on-error: true
     timeout-minutes: 30
     environment:
       name: task-production
@@ -142,17 +150,18 @@ jobs:
           done
           [ "$bad" = 0 ] || { echo "UNHEALTHY: an org did not answer ok"; exit 1; }
 
-  # Production serves this commit: publish the GitHub Release for the tag
-  # (CHANGELOG section, migrations list, moved git deps). A no-op when the
-  # release already exists (a re-run, a dispatch on an older tag).
+  # The tag is a release commit with its images: publish the GitHub Release
+  # for it (CHANGELOG section, migrations list, moved git deps). A no-op when
+  # the release already exists (a re-run, a dispatch on an older tag).
   #
-  # It sits HERE, after Verify live, so "a GitHub Release exists" means
-  # "production runs it". The tag itself was pushed before (just
+  # It needs only the tag guard, not Verify live: a release is what the
+  # version ships, for anyone to install, and doesn't wait on (or mean) our
+  # own production rolling it out. The tag itself was pushed before (just
   # release-tag, after images.yml pushed the images): it is what started
   # this run, and the Apple builds.
   release:
     name: GitHub Release
-    needs: verify
+    needs: deploy
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     permissions:
       contents: write

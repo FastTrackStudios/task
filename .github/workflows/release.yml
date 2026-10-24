@@ -16,8 +16,9 @@
 #                          The script runs from the BASE commit, never the
 #                          PR's head: a PR that edits release.sh must not
 #                          judge itself.
-#   workflow_call          from deploy.yml after "Verify live": the GitHub
-#                          Release for the tag that started the deploy.
+#   workflow_call          from deploy.yml after its tag guard: the GitHub
+#                          Release for the tag that started the deploy
+#                          (Verify live runs beside it, informational).
 #   workflow_dispatch      the same, by hand, with the tag as the ref.
 #
 # After a release PR squash-merges and its full suite is green,
