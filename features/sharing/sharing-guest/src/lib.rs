@@ -34,6 +34,6 @@ pub use project::{
     guest_deliverable_items, guest_part, guest_piece, guest_pieces, guest_project, guest_projects,
 };
 pub use task::{
-    GuestTask, GuestWorkflow, SHARED_TASK_FIELDS, SHARED_WORKFLOW_FIELDS, STRIPPED_TASK_FIELDS,
-    STRIPPED_WORKFLOW_FIELDS, guest_task, guest_tasks,
+    GuestAssignee, GuestTask, GuestWorkflow, SHARED_TASK_FIELDS, SHARED_WORKFLOW_FIELDS,
+    STRIPPED_TASK_FIELDS, STRIPPED_WORKFLOW_FIELDS, guest_task, guest_tasks,
 };
