@@ -80,6 +80,11 @@
 //!
 //! [`LocalServer`]: architect::local
 
+// Proving `Send`/`Sync` for the server's state (task_server::AppState ->
+// OrgAppState -> LiveHost -> …) runs deeper than the nightly trait
+// solver's default 128; apps/server/src/lib.rs carries the same limit.
+#![recursion_limit = "256"]
+
 pub mod desktop;
 pub mod error;
 pub mod session;

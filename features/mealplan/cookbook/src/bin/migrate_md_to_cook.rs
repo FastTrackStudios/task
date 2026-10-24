@@ -286,10 +286,7 @@ fn is_safe_position(s: &str, pos: usize, _needle: &str) -> bool {
     // Avoid rewriting inside `[[wikilink]]` or right after
     // `@` (already a cooklang token).
     let before = s.get(..pos).unwrap_or("");
-    if before.ends_with("[[") || before.ends_with('@') {
-        return false;
-    }
-    true
+    !(before.ends_with("[[") || before.ends_with('@'))
 }
 
 #[allow(dead_code)]

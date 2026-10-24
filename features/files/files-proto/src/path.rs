@@ -174,6 +174,9 @@ macro_rules! rel_path {
             }
         }
 
+        // `TryFrom<&str>` beside `TryFrom<String>` is this type's API; a
+        // `FromStr` in its place would break every `try_from("…")` caller.
+        #[allow(clippy::try_from_instead_of_from_str)]
         impl TryFrom<&str> for $name {
             type Error = PathError;
             fn try_from(raw: &str) -> Result<Self, PathError> {

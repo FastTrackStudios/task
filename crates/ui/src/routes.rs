@@ -6,6 +6,12 @@
 //! it in [`crate::nav::nav_tabs`], and add a title match arm in
 //! [`crate::nav::route_title`].
 
+// `Routable`'s expansion holds a call the nightly rustc proves unreachable
+// (`unreachable_code`, from inside the derive, not this file's code). A
+// derive's impls take their lint levels from the module, so the allow sits
+// here rather than on the enum.
+#![allow(unreachable_code)]
+
 use dioxus::prelude::*;
 
 use crate::pages;

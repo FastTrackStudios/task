@@ -496,7 +496,7 @@ impl FilesBackend {
                     }
                 }
             } else {
-                entries.push((rel.clone(), false, meta.len(), mtime));
+                entries.push((rel, false, meta.len(), mtime));
             }
         }
         entries.sort_by(|a, b| a.0.cmp(&b.0));

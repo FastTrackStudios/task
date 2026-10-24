@@ -24,6 +24,11 @@
 //! it (the first org discovery, usually). A remote-only session never
 //! opens the device's data root at all.
 
+// Proving `Send`/`Sync` for the server's state (task_server::AppState ->
+// OrgAppState -> LiveHost -> …) runs deeper than the nightly trait
+// solver's default 128; apps/server/src/lib.rs carries the same limit.
+#![recursion_limit = "256"]
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 

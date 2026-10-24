@@ -1,5 +1,9 @@
 //! `task-server`'s end-to-end tests, as **one** test binary.
 //!
+//! (`recursion_limit` below: proving `Send` for futures that hold the
+//! server's state runs deeper than the nightly trait solver's default 128;
+//! apps/server/src/lib.rs carries the same limit.)
+//!
 //! Same reasoning, same shape, as `tests/integration/tests/it/main.rs`:
 //! each file directly under `tests/` is its own binary, and these were
 //! fifty-three of them, every one linking the whole server. After an edit
@@ -28,6 +32,7 @@
 //! Write `tests/it/<name>.rs` and add a `mod` line below. A file directly
 //! under `tests/` would quietly become a fifty-fourth binary again.
 
+#![recursion_limit = "256"]
 // The copy lints, denied here once the crate is clean of them
 // (zero-copy audit S7, `docs/perf/zero-copy-audit.md`). They move into
 // `[workspace.lints.clippy]` once every crate carries this.

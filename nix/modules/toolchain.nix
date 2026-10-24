@@ -44,10 +44,12 @@
       );
     in
     {
-      # Rust toolchain — the FTS-wide pin (rust-toolchain.toml says the
-      # same: 1.98.1 + wasm32), with the iOS/Intel targets on darwin for
-      # apps/mobile and the macOS desktop builds.
-      fts.rustToolchain = pkgs.rust-bin.stable."1.98.1".default.override {
+      # Rust toolchain — a dated nightly (rust-toolchain.toml says the
+      # same: nightly-2026-10-23 + wasm32), with the iOS/Intel targets on
+      # darwin for apps/mobile and the macOS desktop builds. Nightly for
+      # the parallel front end (`-Zthreads`, .cargo/config.toml); dated so
+      # every machine and runner compiles with the same rustc.
+      fts.rustToolchain = pkgs.rust-bin.nightly."2026-10-23".default.override {
         extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         targets = [ "wasm32-unknown-unknown" ]
           ++ lib.optionals pkgs.stdenv.isDarwin [

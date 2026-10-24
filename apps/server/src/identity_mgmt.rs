@@ -193,10 +193,10 @@ impl IdentityService for IdentityServiceImpl {
         let (mut updated, mut pending, mut failed) = (Vec::new(), Vec::new(), Vec::new());
         for link in links {
             let Some(slug) = local_slug_for(&self.state, &link) else {
-                pending.push(link.remote_slug.clone());
+                pending.push(link.remote_slug);
                 continue;
             };
-            let Some(token) = link.token.clone() else {
+            let Some(token) = link.token else {
                 failed.push(format!("{slug}: no stored token — re-run `task auth link`"));
                 continue;
             };

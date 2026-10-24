@@ -159,7 +159,7 @@ pub async fn version_chain(
                             .read_copy(source_copy_id)
                             .await
                             .map_err(Error::from)?;
-                        let source_path = source_history.current_path.clone();
+                        let source_path = source_history.current_path;
                         (true, source_path.clone(), Some(source_path))
                     }
                     None => {
