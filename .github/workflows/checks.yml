@@ -343,11 +343,18 @@ jobs:
       - name: Docs
         if: ${{ !cancelled() && needs.plan.outputs.cargo == 'true' }}
         run: just ci-docs
+      # A hosted runner's disk is the build's limit; on a THEBATTLESHIP pool
+      # `du` of /nix/store alone is hundreds of GB and minutes of IO, so the
+      # pool only reports its cache disk.
       - name: Disk
         if: ${{ always() }}
         run: |
-          du -sh target ~/.cargo /nix/store 2>/dev/null || true
-          df -h / | tail -1
+          if [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
+            df -h "${TASK_CACHE_DIR:-/}" | tail -1
+          else
+            du -sh target ~/.cargo /nix/store 2>/dev/null || true
+            df -h / | tail -1
+          fi
 
   tests:
     name: Tests
@@ -486,11 +493,18 @@ jobs:
           path: ${{ runner.temp }}/nextest-ci.log
           if-no-files-found: ignore
           retention-days: 7
+      # A hosted runner's disk is the build's limit; on a THEBATTLESHIP pool
+      # `du` of /nix/store alone is hundreds of GB and minutes of IO, so the
+      # pool only reports its cache disk.
       - name: Disk
         if: ${{ always() }}
         run: |
-          du -sh target ~/.cargo /nix/store 2>/dev/null || true
-          df -h / | tail -1
+          if [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
+            df -h "${TASK_CACHE_DIR:-/}" | tail -1
+          else
+            du -sh target ~/.cargo /nix/store 2>/dev/null || true
+            df -h / | tail -1
+          fi
 
   wasm:
     name: Wasm
