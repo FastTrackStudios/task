@@ -42,6 +42,38 @@ mounts services by. For an org whose `org.toml` disables a plugin:
 This mirrors the wire exactly: a disabled plugin's vox services are
 never mounted on the org router, so neither surface can reach them.
 
+## Tools on the Action List
+
+Eight tools are actions on Task's Action List
+(`apps/server/src/actions/`), served through architect-mcp's named-tool
+mode under the names agents already call: `task_context`, `list_tasks`,
+`create_task`, `update_task`, `list_projects`, `capture_inbox`,
+`list_inbox`, `process_inbox_item`. The rest of the catalog is still
+hand-written in `mcp.rs` and moves over in later steps.
+
+For an agent nothing about the call changes: same names, same required
+arguments, same answers, the same bearer rules, org routing (`org` on
+`POST /mcp`) and plugin gate. What differs:
+
+- `inputSchema` is generated from the action's argument type, so an
+  optional argument reads `anyOf: [<type>, null]` and the field's
+  description sits beside it.
+- Each tool carries `annotations` from the action's effect:
+  `readOnlyHint` for `task_context` and the three `list_*` tools.
+- A failure's text is a JSON object, `{"error": "…"}`. Arguments of the
+  wrong type are refused before anything runs, with
+  `{"error": "bad arguments: …", "takes": <schema>}`.
+- A tool's answer is cut at 100,000 bytes (architect-mcp's `MAX_TEXT`)
+  with a note to ask for less. A `list_tasks` near `limit: 200` with
+  long titles is the one that can reach it.
+
+All eight are registered by hand rather than projected from their
+service traits with `#[architect::service(actions)]`: `TaskService`,
+`ProjectService` and `Inbox` are per-org services (one backend per org,
+and no per-org HTTP mount for the projection to go through), and the
+tools are not one method each (`task_context` reads three services,
+`create_task` parses quick-add text and stamps who made it).
+
 ## The catalog
 
 Descriptions in `tools/list` are written for the model (when to reach
