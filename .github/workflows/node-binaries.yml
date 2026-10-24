@@ -50,6 +50,14 @@ on:
         type: string
         required: false
         default: ""
+    secrets:
+      # Passed by name from deploy.yml. A called job that declares
+      # `environment:` still gets that environment's secrets only when the
+      # caller passes them; otherwise they resolve to "" with no error
+      # (which is how v26.10.0's binaries were refused as unsigned). Not
+      # `required`: a backfill of a pre-pin tag runs without it.
+      TASK_RELEASE_MINISIGN_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
