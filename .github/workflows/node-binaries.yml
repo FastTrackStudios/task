@@ -47,7 +47,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Release tag to attach to. Empty = v<Cargo.toml version> at the ref."
+        description: "Release tag to attach to. Empty = the v* tag the run is on."
         type: string
         required: false
         default: ""
@@ -62,7 +62,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to attach to (v<X.Y.Z>). Empty = v<Cargo.toml version> at the ref."
+        description: "Release tag to attach to (v<X.Y.Z>). Empty = the v* tag the run is on."
         required: false
         default: ""
       replace:

@@ -83,6 +83,15 @@ name = "files-store"
 version = "0.1.0"
 
 [[package]]
+name = "inventory"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "inventory"
+version = "26.9.4"
+
+[[package]]
 name = "serde"
 version = "26.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -94,6 +103,12 @@ version = "26.9.4"
 [[package]]
 name = "task-server"
 version = "26.9.4"
+dependencies = [
+ "files-store",
+ "inventory 0.3.0",
+ "inventory 26.9.4",
+ "serde",
+]
 EOF
 printf '# Changelog\n\n## [26.9.4] - 2026-09-30\n\n- the last committed section\n' > "$W/CHANGELOG.md"
 git -C "$W" init -q -b main; git -C "$W" add -A; git -C "$W" commit -qm "initial import"
@@ -224,6 +239,10 @@ eq "  ...task-server in Cargo.lock" "$(grep -A1 '^name = "task-server"$' Cargo.l
 eq "  ...task-app-desktop in Cargo.lock" "$(grep -A1 '^name = "task-app-desktop"$' Cargo.lock | tail -1)" 'version = "26.10.1"'
 eq "  ...files-store (its own version) did not move" "$(grep -A1 '^name = "files-store"$' Cargo.lock | tail -1)" 'version = "0.1.0"'
 eq "  ...serde (a registry crate at the same number) did not move" "$(grep -A1 '^name = "serde"$' Cargo.lock | tail -1)" 'version = "26.9.4"'
+eq "  ...the inventory member (named like a registry crate)" "$(grep -A2 '^name = "inventory"$' Cargo.lock | grep -A1 -v source | grep '^version' | paste -sd' ' -)" 'version = "0.3.0" version = "26.10.1"'
+eq "  ...its \"name version\" reference in a dependency list" "$(grep -c '^ "inventory 26.10.1",$' Cargo.lock)" 1
+eq "  ...but not the registry crate's" "$(grep -c '^ "inventory 0.3.0",$' Cargo.lock)" 1
+eq "  ...and no reference at the old version is left" "$(grep -c '"inventory 26.9.4"' Cargo.lock)" 0
 eq "  ...only Cargo.toml and Cargo.lock changed, uncommitted" "$(git status --porcelain | awk '{ print $2 }' | paste -sd' ' -)" "Cargo.lock Cargo.toml"
 eq "  ...HEAD still carries the committed version" "$(R version HEAD)" 26.9.4
 expect_ok "stamp again: a no-op" R stamp 26.10.1

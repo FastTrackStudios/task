@@ -540,8 +540,12 @@ cmd_release() { # [--dry-run] [--yes] [SHA]
 # then builds as the release, so CARGO_PKG_VERSION, the TestFlight
 # marketing version, the desktop app's version and the update check all
 # agree with the tag. A member is a [[package]] with no `source` line whose
-# version is the old workspace version; nothing else in the lockfile moves
-# (no cargo re-lock, which would re-resolve registry picks). Idempotent.
+# version is the old workspace version. Where a member shares its name with
+# another crate in the graph (inventory, notify), Cargo names it in
+# dependency lists as `"inventory <version>"`; those references move too,
+# or `cargo --locked` refuses the lockfile. Nothing else in the lockfile
+# moves (no cargo re-lock, which would re-resolve registry picks).
+# Idempotent.
 cmd_stamp() { # <X.Y.Z | vX.Y.Z>
     local v="${1:-}" cur lock
     v="${v#v}"
@@ -556,18 +560,34 @@ cmd_stamp() { # <X.Y.Z | vX.Y.Z>
         && mv Cargo.toml.stamp Cargo.toml
     [ "$(version_at)" = "$v" ] || die "stamp: failed to rewrite [workspace.package] version"
     lock="$(mktemp)"
+    # Two passes over Cargo.lock: the first collects the members' names, the
+    # second rewrites their versions and the `"<member> <old>"` references.
     awk -v cur="$cur" -v nv="$v" '
-        function flush(   i) {
+        function header(l) { return l ~ /^\[\[package\]\]$/ || l ~ /^\[\[patch\.unused\]\]$/ || l ~ /^\[metadata\]$/ }
+        function note_member() { if (pkg && name != "" && !src && ver == cur) member[name] = 1 }
+        function flush(   i, ref, sp) {
             for (i = 1; i <= n; i++) {
-                if (!src && buf[i] == "version = \"" cur "\"") buf[i] = "version = \"" nv "\""
+                if (pkg && !src && buf[i] == "version = \"" cur "\"") buf[i] = "version = \"" nv "\""
+                else if (buf[i] ~ /^ "[^" ]+ [^" ]+",?$/) {
+                    ref = buf[i]; sub(/^ "/, "", ref); sub(/",?$/, "", ref); sp = index(ref, " ")
+                    if ((substr(ref, 1, sp - 1) in member) && substr(ref, sp + 1) == cur) sub(cur "\"", nv "\"", buf[i])
+                }
                 print buf[i]
             }
-            n = 0; src = 0
+            n = 0; src = 0; pkg = 0
         }
-        /^\[\[package\]\]$/ || /^\[\[patch\.unused\]\]$/ || /^\[metadata\]$/ { flush() }
+        FNR == NR {
+            if (header($0)) { note_member(); pkg = ($0 == "[[package]]"); name = ""; ver = ""; src = 0; next }
+            if ($0 ~ /^name = "/) { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name) }
+            else if ($0 ~ /^version = "/) { ver = $0; sub(/^version = "/, "", ver); sub(/"$/, "", ver) }
+            else if ($0 ~ /^source = /) src = 1
+            next
+        }
+        FNR == 1 { note_member(); n = 0; src = 0; pkg = 0 }
+        header($0) { flush(); pkg = ($0 == "[[package]]") }
         { buf[++n] = $0; if ($0 ~ /^source = /) src = 1 }
         END { flush() }
-    ' Cargo.lock > "$lock" && cat "$lock" > Cargo.lock
+    ' Cargo.lock Cargo.lock > "$lock" && cat "$lock" > Cargo.lock
     rm -f "$lock"
     note "stamp: $cur -> $v in Cargo.toml and Cargo.lock (uncommitted: the committed version is not the released one)"
 }
