@@ -40,6 +40,7 @@ pub mod action;
 pub mod agent_lane;
 pub mod capture;
 pub mod doc;
+pub mod due;
 pub mod filing;
 pub mod model;
 pub mod relations;
@@ -51,6 +52,7 @@ pub mod wayfinder;
 pub use action::{is_assigned_to, is_mine, is_next_action, is_project_work};
 pub use agent_lane::{TriageLabel, has_triage_label, is_untriaged, triage_label, triage_labels};
 pub use capture::{capture, infer_project_id};
+pub use due::{due_order, due_queue, is_due_now, is_today_work, mode_focus, overdue_count};
 pub use filing::{Anchor, anchor, is_filed, is_unfiled};
 pub use model::{
     Priority, Relation, RelationKind, Status, TaskInfo, TimeEntry, close_open_time_entries,

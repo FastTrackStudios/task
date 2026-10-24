@@ -581,6 +581,11 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Sequence Crescendum", "taylor@fasttrackaudio.test"),
     ("Mix First Light", "taylor@fasttrackaudio.test"),
     ("Write the Northbeam stings", "taylor@fasttrackaudio.test"),
+    // The due answer's share (`task_proto::due`): one late, so Home,
+    // Tasks, the sidebar, `task task list --due` and `task brief` have
+    // overdue work to agree on; and a call that waits for the phone.
+    ("Send the label the stems", "alice@acme.test"),
+    ("Ring the piano tuner", "alice@acme.test"),
 ];
 
 /// Where or when a seeded task can be done, as `(task title, contexts)`
@@ -597,6 +602,10 @@ pub const TASK_CONTEXTS: &[(&str, &[&str])] = &[
     // `every_task_context_can_be_met` checks.
     ("Return the hired mic stands", &["@errands"]),
     ("Vacuum the live room", &["@chores"]),
+    // A device gate (`process.context.device`): the app fills in what
+    // it runs on, so the call shows on Alice's phone and waits on her
+    // computer, without her saying where she is.
+    ("Ring the piano tuner", &["@phone"]),
 ];
 
 /// Tags a seeded task carries, as `(task title, tags)` — no `#`, the
@@ -1479,8 +1488,14 @@ pub const DECLARED: &[DeclaredProject] = &[
             // `TASK_CONTEXTS` / `TASK_TAGS` and the committed
             // `Projects/Scheduling/templates/weekday.md`.
             ("Return the hired mic stands", "open", Some(3)),
-            ("Vacuum the live room", "open", None),
+            // Due today, and a chore: during the maintenance mode it
+            // leads the due work; outside it, the late stems lead.
+            ("Vacuum the live room", "open", Some(0)),
             ("Take the studio recycling out", "open", None),
+            // The due queue's late one, and the phone's call — see
+            // `TASK_OWNERS` / `TASK_CONTEXTS`.
+            ("Send the label the stems", "open", Some(-1)),
+            ("Ring the piano tuner", "open", None),
         ],
     },
     // The subproject, and the reason the seed has one: an album's song
@@ -3066,6 +3081,9 @@ mod declared_tests {
             "@morning",
             "@mealprep",
             "@evening",
+            // Devices — every client fills in what it runs on.
+            "@phone",
+            "@computer",
         ];
         for (title, contexts) in TASK_CONTEXTS {
             let org = org_of_task(title);
@@ -3150,6 +3168,111 @@ mod declared_tests {
             ),
             (16 * 60, 17 * 60),
             "the weekday maintenance hour is 16:00–17:00"
+        );
+    }
+
+    // t[verify process.focus.everywhere]
+    // t[verify process.context.device]
+    /// The seed gives Alice one due answer, and the committed maintenance
+    /// hour reorders it: her declared board, as planted (owners,
+    /// contexts, statuses, due dates relative to the plant), through the
+    /// one due queue every surface calls (`task_proto::due_queue`). The
+    /// work in hand leads; then outside the hour the late stems, inside
+    /// the mode the live room's vacuum (a chore, due today). The phone's
+    /// call waits on the computer and shows on the phone.
+    #[cfg(feature = "plugin-scheduling")]
+    #[test]
+    fn the_seed_gives_alice_one_due_answer_that_the_hour_reorders() {
+        use scheduling_proto::BlockCategory;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        let alice = "alice@acme.test";
+        let board: Vec<task::TaskInfo> = declared_of("acme-audio")
+            .flat_map(|p| p.tasks.iter())
+            .map(|(title, status, due)| {
+                let mut t = task::TaskInfo::new(*title);
+                t.status = (*status).to_owned();
+                t.due = due.map(|d| (today + chrono::Duration::days(d)).to_string());
+                if let Some((_, cs)) = TASK_CONTEXTS.iter().find(|(n, _)| n == title) {
+                    t.contexts = cs.iter().map(|c| (*c).to_owned()).collect();
+                }
+                if let Some((_, owner)) = TASK_OWNERS.iter().find(|(n, _)| n == title) {
+                    t.workflow = Some(task::model::WorkflowAttrs {
+                        assignees: task::model::AgentRefList(vec![
+                            task::workflows_proto::AgentRef::Human {
+                                user_id: (*owner).to_owned(),
+                                display_name: None,
+                            },
+                        ]),
+                        ..Default::default()
+                    });
+                }
+                t
+            })
+            .collect();
+        let weekday = committed_templates("acme-audio")
+            .into_iter()
+            .find(|t| t.id.0 == "weekday")
+            .expect("a weekday template");
+        let hour = weekday
+            .blocks
+            .iter()
+            .find(|b| b.category == BlockCategory::Maintenance)
+            .expect("a maintenance hour");
+        let minute = hour.start.minutes_since_midnight + 5;
+        // What the Suggested slot offers during the hour, and the name of
+        // the session Start opens — the mode. A day with no saved plan
+        // reads as its template (`scheduling_proto::merge_template`).
+        let day: Vec<scheduling_proto::PlannedBlock> =
+            scheduling_proto::merge_template(&[], &weekday.blocks)
+                .into_iter()
+                .map(|rb| rb.block)
+                .collect();
+        let mode = task::suggest::now_hint(&day, minute)
+            .and_then(|h| h.mode)
+            .expect("the maintenance hour suggests its mode");
+        let at = |device: &str| {
+            task::RelevanceContext::now(
+                today.to_string(),
+                Some(format!("{:02}:{:02}", minute / 60, minute % 60)),
+                None,
+                Some(device),
+            )
+        };
+        let titles =
+            |q: &[task::TaskInfo]| -> Vec<String> { q.iter().map(|t| t.title.clone()).collect() };
+        let plain = task::due_queue(&board, Some(alice), &at("computer"));
+        assert_eq!(
+            titles(&plain),
+            [
+                "Comp lead vocals — Track One",
+                "Send the label the stems",
+                "Vacuum the live room"
+            ],
+            "outside the mode: the work in hand, then oldest due"
+        );
+        assert_eq!(task::overdue_count(&plain, &today.to_string()), 1);
+        let in_mode = task::due_queue(
+            &board,
+            Some(alice),
+            &at("computer").with_session(&mode.title, None),
+        );
+        assert_eq!(
+            titles(&in_mode),
+            [
+                "Comp lead vocals — Track One",
+                "Vacuum the live room",
+                "Send the label the stems"
+            ],
+            "in the maintenance mode its chore leads the due work"
+        );
+        let call = board
+            .iter()
+            .find(|t| t.title == "Ring the piano tuner")
+            .expect("the phone's call is declared");
+        assert!(task::is_relevant(call, &at("phone")), "on the phone");
+        assert!(
+            !task::is_relevant(call, &at("computer")),
+            "not on the computer"
         );
     }
 

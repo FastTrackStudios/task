@@ -264,4 +264,81 @@ async fn decisions_on_captures_reach_the_other_device_with_no_host() {
         |i| i.is_some_and(|i| i.status == "processed" && i.processed_into.is_none()),
     )
     .await;
+
+    // ── one due answer on both devices, with no host ──
+    // The due queue (`task_proto::due`) is a function of the board, so
+    // two devices holding the same board give the same answer — the
+    // same count, the same order — and a maintenance mode reorders both
+    // alike. Planted on the phone; read on each.
+    let today_s = today.to_string();
+    let mut late = task::capture("Pay the rehearsal room");
+    late.due = Some((today - chrono::Duration::days(1)).to_string());
+    let late = a_tasks.create(late).await.expect("a late task");
+    let mut chore = task::capture("Coil the cables @chores");
+    chore.due = Some(today_s.clone());
+    let chore = a_tasks.create(chore).await.expect("a chore due today");
+    for t in [&late, &chore] {
+        let on_b = b.state().data_root.org(ORG).vault_dir().join(&t.path);
+        for _ in 0..20 {
+            if on_b.is_file() {
+                break;
+            }
+            exchange(&a, &b).await;
+        }
+    }
+    let ctx =
+        task::RelevanceContext::now(today_s.clone(), Some("16:05".into()), None, Some("phone"));
+    let due = |tasks: task::TaskServiceClient, ctx: task::RelevanceContext| async move {
+        tasks
+            .query(task::TaskListFilter {
+                relevance: Some(ctx),
+                due_now: true,
+                ..Default::default()
+            })
+            .await
+            .expect("the due query")
+            .into_iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>()
+    };
+    let mut on_b = Vec::new();
+    for _ in 0..100 {
+        on_b = due(b_tasks.clone(), ctx.clone()).await;
+        if on_b.contains(&late.id) && on_b.contains(&chore.id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let on_a = due(a_tasks.clone(), ctx.clone()).await;
+    assert_eq!(on_a, on_b, "the phone and the laptop give one due answer");
+    assert!(
+        on_a.iter().position(|id| *id == late.id) < on_a.iter().position(|id| *id == chore.id),
+        "outside the mode, oldest due leads"
+    );
+    let mode = ctx.with_session("Maintenance hour", None);
+    let (mode_a, mode_b) = (
+        due(a_tasks.clone(), mode.clone()).await,
+        due(b_tasks.clone(), mode).await,
+    );
+    assert_eq!(mode_a, mode_b, "and one answer in the maintenance mode");
+    assert!(
+        mode_a.iter().position(|id| *id == chore.id) < mode_a.iter().position(|id| *id == late.id),
+        "in the mode, its chore leads"
+    );
+    // The inbox half: the same captures due on both.
+    let (due_a, due_b) = (
+        a_inbox
+            .due_queue(today_s.clone())
+            .await
+            .expect("phone's due captures"),
+        b_inbox
+            .due_queue(today_s)
+            .await
+            .expect("laptop's due captures"),
+    );
+    assert_eq!(
+        due_a.iter().map(|i| &i.id).collect::<Vec<_>>(),
+        due_b.iter().map(|i| &i.id).collect::<Vec<_>>(),
+        "the same captures are due on both devices"
+    );
 }

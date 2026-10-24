@@ -69,12 +69,8 @@ pub fn InboxView() -> Element {
     if !*seeded.peek() {
         if let Some(rows) = result.value() {
             let today = Utc::now().date_naive().to_string();
-            let mut due: Vec<InboxItem> = rows
-                .iter()
-                .filter(|(_, it)| is_due(it, &today))
-                .map(|(_, it)| it.clone())
-                .collect();
-            due.sort_by(|a, b| a.created.cmp(&b.created));
+            // The lane's one due queue, oldest first.
+            let due = inbox_proto::due_queue(rows.iter().map(|(_, it)| it), &today);
             queue.set(due);
             seeded.set(true);
         }

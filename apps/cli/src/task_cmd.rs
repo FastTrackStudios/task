@@ -69,11 +69,20 @@ pub(crate) enum TaskCmd {
         /// Only tasks relevant *right now* (see task::relevance):
         /// time-window contexts (`@morning` / `@mealprep` /
         /// `@evening`) gate to their windows, `@<location>` /
-        /// `@<device>` gate to `--location` / `--device`,
-        /// due/scheduled-today always shows. Implies `--open`;
+        /// `@<device>` gate to `--location` / `--device` (this is a
+        /// computer unless `--device` says otherwise), due-today and
+        /// in-progress always show, and a running mode session
+        /// ("Maintenance hour") opens its gates and leads with its
+        /// work — the app's own context. Implies `--open`;
         /// active-timer-project rows sort first.
         #[arg(long)]
         relevant: bool,
+        /// The due queue — in progress or due today or before, yours,
+        /// in the one order Home's Today rail and the Tasks list show
+        /// (work in hand, the running mode's work, oldest due). The
+        /// count and order the app and `task brief` give.
+        #[arg(long, conflicts_with_all = ["relevant", "untriaged"])]
+        due: bool,
         /// Override the clock for `--relevant` (`HH:MM`, local).
         #[arg(long)]
         at: Option<String>,
@@ -384,6 +393,7 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
             open,
             untriaged,
             relevant,
+            due,
             at,
             location,
             device,
@@ -393,9 +403,40 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
             server,
             json,
         } => {
+            let org_override = org.clone();
             let slug = resolve_active_org(org)?;
             let url = resolve_org_vox_url(server, &slug);
             let client = connect_task_client(&url).await?;
+            if due {
+                // The one due queue (`task_proto::due`), asked of the
+                // server the way the brief asks — Home, Tasks and the
+                // sidebar run the same function on their stores.
+                let ctx = crate::now::context(
+                    org_override.as_deref(),
+                    at,
+                    location.as_deref(),
+                    device.as_deref(),
+                )
+                .await;
+                let me = crate::now::signed_in_user(&url, &slug);
+                let rows = crate::now::due_queue(&client, me, &ctx).await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&rows)
+                            .map_err(|e| eyre::eyre!("json: {e}"))?
+                    );
+                    return Ok(());
+                }
+                if rows.is_empty() {
+                    println!("(nothing due)");
+                    return Ok(());
+                }
+                for t in &rows {
+                    println!("{}", list_line(t, 0));
+                }
+                return Ok(());
+            }
             let ctx_filter = context.map(|c| {
                 if c.starts_with('@') {
                     c
@@ -502,21 +543,23 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
                 .collect();
             // Same business logic the web store applies — one
             // relevance implementation (task::relevance), two
-            // renderers. FUTURE: read the running timer session
-            // for the active-project boost.
-            let relevance_ctx = relevant.then(|| {
-                let now = chrono::Local::now();
-                task::RelevanceContext {
-                    local_hhmm: Some(at.unwrap_or_else(|| now.format("%H:%M").to_string())),
-                    local_date: Some(now.format("%Y-%m-%d").to_string()),
-                    location,
-                    device,
-                    active_project: None,
-                    // FUTURE: the current day-plan block's focus, as
-                    // the web board reads it.
-                    focus: Vec::new(),
-                }
-            });
+            // renderers — and the same context: the clock, place,
+            // device and the running timer session (its project; the
+            // mode's focus when it is one), built by the one builder
+            // (`crate::now`).
+            let relevance_ctx = if relevant {
+                Some(
+                    crate::now::context(
+                        org_override.as_deref(),
+                        at,
+                        location.as_deref(),
+                        device.as_deref(),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
             if let Some(ctx) = &relevance_ctx {
                 // Unfiled tasks are triage, not "right now" — same
                 // exclusion the server's `query` and the web board
@@ -575,24 +618,7 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
                 |t| t.workflow.as_ref().and_then(|w| w.parent),
             );
             for (depth, t) in &arranged {
-                let marker = match task::Status::from_str(&t.status) {
-                    Some(s) if s.is_done() => "[x]",
-                    Some(task::Status::InProgress) => "[~]",
-                    _ => "[ ]",
-                };
-                let due = t
-                    .due
-                    .as_deref()
-                    .map(|d| format!(" (due {d})"))
-                    .unwrap_or_default();
-                let prio = match t.priority.as_str() {
-                    "critical" => " !!",
-                    "high" => " !",
-                    _ => "",
-                };
-                let ms = if t.milestone_id.is_some() { " *" } else { "" };
-                let indent = if *depth > 0 { "  ↳ " } else { "" };
-                println!("{marker} {indent}{}{prio}{due}{ms}    {}", t.title, t.path);
+                println!("{}", list_line(t, *depth));
             }
         }
         TaskCmd::Get {
@@ -1023,6 +1049,29 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
 
 pub(crate) async fn connect_task_client(url: &str) -> eyre::Result<task::TaskServiceClient> {
     establish_for_url(url).await
+}
+
+/// One `task list` row: status marker, title, priority, due, milestone,
+/// path — `depth > 0` indents it under its parent.
+pub(crate) fn list_line(t: &task::TaskInfo, depth: u8) -> String {
+    let marker = match task::Status::from_str(&t.status) {
+        Some(s) if s.is_done() => "[x]",
+        Some(task::Status::InProgress) => "[~]",
+        _ => "[ ]",
+    };
+    let due = t
+        .due
+        .as_deref()
+        .map(|d| format!(" (due {d})"))
+        .unwrap_or_default();
+    let prio = match t.priority.as_str() {
+        "critical" => " !!",
+        "high" => " !",
+        _ => "",
+    };
+    let ms = if t.milestone_id.is_some() { " *" } else { "" };
+    let indent = if depth > 0 { "  ↳ " } else { "" };
+    format!("{marker} {indent}{}{prio}{due}{ms}    {}", t.title, t.path)
 }
 
 /// Resolve a task reference — uuid, vault path, title, or a unique

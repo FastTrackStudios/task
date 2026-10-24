@@ -11,26 +11,53 @@ use std::collections::HashMap;
 use task_proto::TaskInfo;
 use uuid::Uuid;
 
+/// What this client is, for `@phone` / `@computer` gates
+/// (`process.context.device`): the phone app, or a browser at the phone
+/// layout's width, is a phone; everything else is a computer.
+#[must_use]
+// t[impl process.context.device]
+pub fn this_device(phone_layout: bool) -> &'static str {
+    if cfg!(any(target_os = "ios", target_os = "android")) || phone_layout {
+        "phone"
+    } else {
+        "computer"
+    }
+}
+
 /// The relevance context for "now": the local clock and date, where
-/// the person says they are, the project their timer runs on, and what
-/// the current time block is for (`focus` — see
-/// [`crate::now_block::use_focus`]; empty unless a mode is running).
+/// the person says they are, what device this is, and their open timer
+/// session — whose project ranks first and which, when it is a mode
+/// ("Maintenance hour"), brings the mode's focus forward. Assembled by
+/// `task_proto`'s one builder, the same the CLI and the brief use.
 #[must_use]
 pub fn relevance_ctx(
     location: &str,
-    active_project: Option<Uuid>,
-    focus: Vec<String>,
+    device: &str,
+    open_session: Option<(&str, Option<Uuid>)>,
 ) -> task_proto::RelevanceContext {
     let now = chrono::Local::now();
-    task_proto::RelevanceContext {
-        local_hhmm: Some(now.format("%H:%M").to_string()),
-        local_date: Some(now.format("%Y-%m-%d").to_string()),
-        // FUTURE(relevancy-and-inbox): device from user-agent.
-        location: (!location.is_empty()).then(|| location.to_owned()),
-        device: None,
-        active_project,
-        focus,
+    let ctx = task_proto::RelevanceContext::now(
+        now.format("%Y-%m-%d").to_string(),
+        Some(now.format("%H:%M").to_string()),
+        Some(location),
+        Some(device),
+    );
+    match open_session {
+        Some((description, project)) => ctx.with_session(description, project),
+        None => ctx,
     }
+}
+
+/// The due queue for the board's person (`task_proto::due_queue`) — what
+/// Home's Today rail lists, the Tasks list's Today section orders by and
+/// the Work sidebar counts.
+#[must_use]
+pub fn due_queue(
+    all: &[&TaskInfo],
+    me: Option<&str>,
+    ctx: &task_proto::RelevanceContext,
+) -> Vec<TaskInfo> {
+    task_proto::due_queue(all.iter().copied(), me, ctx)
 }
 
 /// What the person's filters keep, and what they hold back.
@@ -260,7 +287,7 @@ mod tests {
         let open = action("a", "open");
         let done = action("b", "done");
         let all = [&open, &done];
-        let ctx = relevance_ctx("computer", None, Vec::new());
+        let ctx = relevance_ctx("", "computer", None);
         let f = filter(&all, Scope::Actions, None, true, false, &ctx);
         assert_eq!(f.visible.len(), 1);
         assert_eq!(f.hidden_note().as_deref(), Some("1 done hidden"));
@@ -286,7 +313,7 @@ mod tests {
             None,
             true,
             true,
-            &relevance_ctx("studio", None, Vec::new()),
+            &relevance_ctx("studio", "computer", None),
         );
         assert_eq!(f.visible.len(), 1);
         assert_eq!(f.held_by, ["@errands", "@home"]);
@@ -299,7 +326,7 @@ mod tests {
         let epic = task("EPIC: orchestral renderer", "open");
         let shipped = task("old issue", "done");
         let all = [&errand, &epic, &shipped];
-        let ctx = relevance_ctx("computer", None, Vec::new());
+        let ctx = relevance_ctx("", "computer", None);
         let tasks = filter(&all, Scope::Actions, None, true, false, &ctx);
         assert_eq!(tasks.visible.len(), 1);
         assert_eq!(
@@ -309,6 +336,27 @@ mod tests {
         let work = filter(&all, Scope::ProjectWork, None, true, false, &ctx);
         assert_eq!(work.visible.len(), 1);
         assert_eq!(work.visible[0].title, "EPIC: orchestral renderer");
+    }
+
+    /// A running mode session is the mode: the board's context gets its
+    /// focus, and its errand leads the due work; the phone layout is a
+    /// phone.
+    #[test]
+    fn the_board_reads_the_mode_from_the_open_session() {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut late = task("late mix notes", "open");
+        late.due = Some("2000-01-01".into());
+        let mut errand = task("return the mic stands", "open");
+        errand.due = Some(today);
+        errand.contexts.push("@errands".to_owned());
+        let all = [&late, &errand];
+        let plain = due_queue(&all, None, &relevance_ctx("", "computer", None));
+        assert_eq!(plain[0].title, "late mix notes");
+        let mode = relevance_ctx("", "computer", Some(("Maintenance hour", None)));
+        assert_eq!(mode.device.as_deref(), Some("computer"));
+        let led = due_queue(&all, None, &mode);
+        assert_eq!(led[0].title, "return the mic stands");
+        assert_eq!(this_device(true), "phone");
     }
 
     #[test]

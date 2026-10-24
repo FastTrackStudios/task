@@ -4,8 +4,9 @@
 //!
 //! - **Find or write** — search as a field, and a new note beside it
 //!   (the `<space> n` flow, straight into naming).
-//! - **Today** — the task list's own Today section (in progress,
-//!   overdue, due today), behind the same three-state checkbox as the
+//! - **Today** — the due queue (`task_proto::due_queue`): the Tasks
+//!   list's Today section in its order (work in hand, a running mode's
+//!   work, oldest due), behind the same three-state checkbox as the
 //!   board.
 //! - **Projects** — each active project's pulse (status, done/total
 //!   progress) and its first action. Capped; the full grid lives at
@@ -77,27 +78,20 @@ pub fn HomeView() -> Element {
         build_cards(&project_refs, &task_refs)
     });
 
-    // The Today rail: the task list's own Today section — in progress,
-    // then overdue, then due today — so Home and Tasks never disagree
-    // about what today holds.
+    // The Today rail: the due queue (`task_proto::due`) — the list the
+    // Tasks page's Today section holds, in its order, and the number the
+    // sidebar counts — so Home, Tasks, the CLI and the brief never
+    // disagree about what today holds.
+    let now_ctx = crate::now_block::use_now_ctx();
+    let account = use_context::<crate::auth::AuthCtx>().active;
     let today_tasks = use_memo(move || {
-        let today = chrono::Local::now().date_naive();
         let entries = task_store.entries();
-        let mut due: Vec<DbTask> = stores::unique_tasks(&entries)
+        let all: Vec<&DbTask> = stores::unique_tasks(&entries)
             .into_iter()
-            .map(|r| r.task.clone())
-            .filter(|t| is_open_task(t))
-            .filter(|t| task_ui::task_section(t, today) == task_ui::TaskSection::Today)
+            .map(|r| &r.task)
             .collect();
-        due.sort_by(|a, b| {
-            let working = |t: &DbTask| t.status != "in-progress";
-            working(a)
-                .cmp(&working(b))
-                .then_with(|| a.due.cmp(&b.due))
-                .then_with(|| priority_rank(&a.priority).cmp(&priority_rank(&b.priority)))
-                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-        });
-        due
+        let me = account.read().as_ref().map(|a| a.user_id.to_string());
+        crate::task_board::due_queue(&all, me.as_deref(), &now_ctx.read())
     });
 
     // Same as the Tasks page: completing offers Undo.

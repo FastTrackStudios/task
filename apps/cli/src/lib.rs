@@ -70,6 +70,7 @@ mod mealprep;
 mod media;
 mod milestone;
 mod mount;
+mod now;
 mod org;
 mod org_ctx;
 // `intake` (fitness) reuses pantry's client helpers, so the module

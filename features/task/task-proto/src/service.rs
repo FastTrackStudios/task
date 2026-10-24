@@ -102,6 +102,22 @@ pub struct TaskListFilter {
     pub limit: Option<u32>,
     /// Rows to skip (after filtering). `None` = 0.
     pub offset: Option<u32>,
+    // New fields go last, so a peer that predates them still reads
+    // the ones it knows in place.
+    /// The due queue instead of a list ([`crate::due::due_queue`]):
+    /// [`Self::me`]'s tasks that are due now on `relevance.local_date`
+    /// (required — no date, no queue), in the queue's one order. What
+    /// the CLI's `--due` and the morning brief ask for, so they agree
+    /// with Home, the Tasks list and the sidebar, which run the same
+    /// function on their stores. Takes the place of the relevance
+    /// list's condensing: nothing due is folded away.
+    #[serde(default)]
+    pub due_now: bool,
+    /// Whose due queue — the signed-in person's user id
+    /// ([`crate::is_mine`]); `None` reads it as nobody signed in (next
+    /// actions). Only [`Self::due_now`] reads it.
+    #[serde(default)]
+    pub me: Option<String>,
 }
 
 /// One entry of [`TaskService::reverse_relations_batch`]: the

@@ -389,13 +389,7 @@ async fn gather(
         .filter(|t| task::is_mine(t, Some(&me)))
         .collect();
     let active = org.timer.active_timer(user_id).await.map_err(internal)?;
-    let to_process = org
-        .inbox
-        .list_inbox()
-        .map_err(internal)?
-        .iter()
-        .filter(|it| it.is_due(date))
-        .count();
+    let to_process = inbox_proto::due_queue(&org.inbox.list_inbox().map_err(internal)?, date).len();
     Ok(Gathered {
         hint,
         mine,
