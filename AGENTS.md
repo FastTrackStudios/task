@@ -152,7 +152,7 @@ follows `skills/ship-stack.md`. In short:
   GitHub). With no hook, a dirty tree or `SKIP=local-ci`, run
   `gh workflow run checks.yml --ref <branch>` instead:
   it posts `Local CI` when green. PRs squash-merge, and the full set
-  (clippy, docs, the tests the merge affects) runs after every merge to
+  (clippy, wasm, the tests the merge affects) runs after every merge to
   `main` on THEBATTLESHIP's self-hosted `task-main` pool, whose target
   dirs stay warm between merges (`task-release` builds only the release
   artifacts: images and the desktop cache; `~/.flake`
