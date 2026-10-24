@@ -574,6 +574,18 @@ rail-evidence: css
     cargo rail plan evidence --work cargo.test -o "$ev" -- test --workspace --locked --no-run
     cargo rail plan evidence --work cargo.clippy -o "$ev" -- clippy --workspace --all-targets -- -D warnings
     echo "rail evidence: $ev"
+    # Incomplete evidence narrows nothing: rail widens every change to the
+    # whole workspace. The usual cause is an untracked file a compile read,
+    # e.g. a Finder .DS_Store under examples/studio, which task-server
+    # embeds whole (`include_dir!`).
+    python3 - "$ev" <<'EOF'
+    import json, sys
+    for work, w in json.load(open(sys.argv[1]))["work"].items():
+        if not w["complete"]:
+            print(f"rail evidence: {work} is INCOMPLETE ({', '.join(w['bypasses'])}); it will not narrow", file=sys.stderr)
+    EOF
+    untracked="$(git ls-files --others --exclude-standard --ignored examples/studio)"
+    [ -z "$untracked" ] || printf 'rail evidence: untracked files under examples/studio (embedded by task-server):\n%s\n' "$untracked" >&2
 
 # ── Aliases ──────────────────────────────────────────────────────────────
 

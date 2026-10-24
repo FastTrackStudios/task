@@ -10,11 +10,14 @@
 #            tests `cargo rail plan` says the change affects, on this
 #            machine's warm target dir, then the `Local CI` status on the
 #            pushed commit, which main requires (checks.yml header).
+#   merge    after a pull onto main, rail evidence for the new HEAD
+#            (scripts/rail-evidence-hook.sh -> `just rail-evidence`), in
+#            the background, so local CI on the next branch narrows.
 #
 # Skip one hook by its id: `SKIP=local-ci git push` (the PR then waits on the
 # `Local CI` status
 # until a checked push or `gh workflow run checks.yml --ref <branch>`).
-default_install_hook_types = ["pre-commit", "pre-push"]
+default_install_hook_types = ["pre-commit", "pre-push", "post-merge"]
 
 [[repos]]
 repo = "local"
@@ -54,3 +57,12 @@ always_run = true
 pass_filenames = false
 require_serial = true
 stages = ["pre-push"]
+
+[[repos.hooks]]
+id = "rail-evidence"
+name = "rail evidence for main's new HEAD (background)"
+language = "system"
+entry = "bash scripts/rail-evidence-hook.sh"
+always_run = true
+pass_filenames = false
+stages = ["post-merge"]
