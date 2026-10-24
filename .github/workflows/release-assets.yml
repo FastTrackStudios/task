@@ -7,9 +7,11 @@
 #                                  production serves: extracted from the
 #                                  published ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
 #                                  image, not rebuilt
-#   Task-linux-x86_64.AppImage     the desktop app for Linux (glibc >= 2.35,
-#                                  built on Ubuntu 22.04; uses the host's
+#   Task-linux-x86_64.AppImage     the desktop app for Linux (uses the host's
 #                                  WebKitGTK 4.1 and libayatana-appindicator3)
+#   Task-linux-x86_64.flatpak      the same app as a single-file Flatpak
+#                                  bundle on the GNOME 51 runtime
+#                                  (`flatpak install Task-linux-x86_64.flatpak`)
 #   latest-linux.json              its version, download URL and sha256: the
 #                                  manifest the Linux in-app updater reads
 #                                  (apps/desktop/src/updater.rs)
@@ -25,11 +27,13 @@
 # asset, unless `replace` is set: a published checksum must not change
 # under anyone who verified it.
 #
-# WHERE: GitHub-hosted runners. The AppImage must run on hosts without Nix,
-# so it is built against Ubuntu's libraries with rustup's toolchain
-# (rust-toolchain.toml) and the dx the dev shell pins (nix/modules/dx.nix),
-# not inside the Nix dev shell, whose binaries link /nix/store. NixOS hosts
-# keep installing the nix package from cachix (desktop-cache.yml).
+# WHERE: the Linux packages build on THEBATTLESHIP's `task-release` pool,
+# from one release build in the Nix dev shell (warm target dir), packaged by
+# scripts/desktop/linux.sh, which takes every binary off /nix/store and
+# prints the glibc floor (the Nix toolchain's: a recent-distro floor,
+# decision 2026-10-24). The web bundle job only copies files out of the
+# published image (docker), so it stays on a hosted runner. NixOS hosts keep
+# installing the nix package from cachix (desktop-cache.yml).
 
 name: Release assets
 
@@ -124,7 +128,12 @@ jobs:
             echo "version=$v"
             echo "ref=$ref"
             echo "web=$(wants "task-web-$v.tar.gz")"
-            echo "linux=$(wants latest-linux.json)"
+            # Both Linux packages come from one build: rebuild if either is missing.
+            if [ "$(wants latest-linux.json)" = true ] || [ "$(wants Task-linux-x86_64.flatpak)" = true ]; then
+              echo "linux=true"
+            else
+              echo "linux=false"
+            fi
           } >> "$GITHUB_OUTPUT"
           echo "release $tag ($v) at $ref"
 
@@ -184,129 +193,31 @@ jobs:
           echo "### Web bundle attached to $TAG: \`task-web-$V.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
 
   linux-desktop:
-    name: Linux desktop (AppImage)
+    name: Linux desktop (AppImage + Flatpak)
     needs: plan
     if: ${{ needs.plan.outputs.linux == 'true' }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    # THEBATTLESHIP's `task-release` pool: the release-profile build reuses
+    # the pool's warm target dir ($TASK_CACHE_DIR/desktop), and one build is
+    # packaged twice by scripts/desktop/linux.sh (which says what each
+    # package carries and why its glibc floor is the Nix toolchain's).
+    runs-on: [self-hosted, task-release]
+    timeout-minutes: 120
     permissions:
       contents: write
-    env:
-      CARGO_TERM_COLOR: always
-      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
 
-      - name: Free disk
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
-      # The webview/tray stack nix/modules/toolchain.nix assembles for the
-      # dev shell, from Ubuntu instead.
-      - name: Native build dependencies
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q pkg-config libssl-dev cmake clang python3 \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
-            libayatana-appindicator3-dev libxdo-dev librsvg2-dev \
-            libfontconfig1-dev libfreetype-dev libxkbcommon-dev \
-            libfuse2 file desktop-file-utils
-
-      # rustup reads rust-toolchain.toml: the same compiler as the dev shell.
-      - name: Toolchain
-        run: |
-          rustup toolchain install --profile minimal
-          rustc --version
-
-      # The dx the dev shell pins: its git source and rev, read from
-      # nix/modules/dx.nix so the two cannot drift. Tailwind at the dev
-      # shell's major (v4).
-      - name: dx + tailwind
-        run: |
-          set -euo pipefail
-          dx_nix=nix/modules/dx.nix
-          owner="$(sed -n 's/^ *owner = "\(.*\)";/\1/p' "$dx_nix" | head -1)"
-          repo="$(sed -n 's/^ *repo = "\(.*\)";/\1/p' "$dx_nix" | head -1)"
-          rev="$(sed -n 's/^ *rev = "\([0-9a-f]\{40\}\)";/\1/p' "$dx_nix" | head -1)"
-          [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$rev" ] \
-            || { echo "::error::could not read dx's source from $dx_nix"; exit 1; }
-          cargo install --locked --git "https://github.com/$owner/$repo" --rev "$rev" dioxus-cli
-          dx --version
-          bin="$RUNNER_TEMP/bin"
-          mkdir -p "$bin"
-          curl -fsSL -o "$bin/tailwindcss" \
-            https://github.com/tailwindlabs/tailwindcss/releases/download/v4.2.2/tailwindcss-linux-x64
-          chmod +x "$bin/tailwindcss"
-          "$bin/tailwindcss" --help | head -1
-          echo "$bin" >> "$GITHUB_PATH"
-
-      # As nix/modules/packages/desktop-apps.nix builds it: `dx build` (so
-      # every asset!() resolves to the bundled assets/ beside the binary),
-      # then the CLI and the sync agent, which the app looks for next to
-      # its own executable.
-      - name: Build
-        run: |
-          set -euo pipefail
-          bash scripts/architect-ui-link.sh
-          (cd apps && tailwindcss -i tailwind.css -o desktop/assets/tailwind.css)
-          (cd apps/desktop && dx build --release --linux)
-          cargo build --release --locked -p task-app-desktop --bin task --bin fts-files-daemon
-
-      - name: AppImage
+      - name: Build the AppImage and the Flatpak
         env:
-          V: ${{ needs.plan.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          app="$(dirname "$(find target/dx/task-app-desktop/release -type f -name task-app-desktop -perm -u+x | head -1)")"
-          [ -d "$app/assets" ] || { echo "::error::dx wrote no assets/ beside the binary at '$app'"; exit 1; }
-          bash scripts/check-versions.sh --bin "$app/task-app-desktop"
-          ldd "$app/task-app-desktop"
-          if ldd "$app/task-app-desktop" | grep -E '/nix/store|not found'; then
-            echo "::error::the app links a library a fresh host lacks"; exit 1
-          fi
-          appdir=Task.AppDir
-          mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor/512x512/apps"
-          cp -R "$app/." "$appdir/usr/bin/"
-          install -m755 target/release/task target/release/fts-files-daemon "$appdir/usr/bin/"
-          icon=apps/web/assets/icon-512.png
-          cp "$icon" "$appdir/task.png"
-          cp "$icon" "$appdir/usr/share/icons/hicolor/512x512/apps/task.png"
-          printf '%s\n' \
-            '[Desktop Entry]' \
-            'Type=Application' \
-            'Name=Task' \
-            'Comment=FastTrackStudio Task' \
-            'Exec=task-app-desktop' \
-            'Icon=task' \
-            'Categories=Office;ProjectManagement;' \
-            'StartupWMClass=task-app-desktop' \
-            "X-AppImage-Version=$V" > "$appdir/task.desktop"
-          cp "$appdir/task.desktop" "$appdir/usr/share/applications/"
-          desktop-file-validate "$appdir/task.desktop"
-          # AppRun: the window, from inside the image. Compositing off by
-          # default, as the nix package does (a white window on some GPUs);
-          # a user's own setting wins. Single quotes on purpose: these lines
-          # expand when AppRun runs, not here.
-          # shellcheck disable=SC2016
-          printf '%s\n' \
-            '#!/bin/sh' \
-            'HERE="$(dirname "$(readlink -f "$0")")"' \
-            ': "${WEBKIT_DISABLE_COMPOSITING_MODE:=1}"' \
-            'export WEBKIT_DISABLE_COMPOSITING_MODE' \
-            'exec "$HERE/usr/bin/task-app-desktop" "$@"' > "$appdir/AppRun"
-          chmod 755 "$appdir/AppRun"
-          curl -fsSL -o appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
-          chmod +x appimagetool
-          mkdir -p dist
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" dist/Task-linux-x86_64.AppImage
-          # The image starts and reports the release (`--version` opens no window).
-          got="$(dist/Task-linux-x86_64.AppImage --appimage-extract-and-run --version)"
-          [ "$got" = "task-app-desktop $V" ] \
-            || { echo "::error::the AppImage says '$got', not 'task-app-desktop $V'"; exit 1; }
+          export CARGO_TARGET_DIR="$TASK_CACHE_DIR/desktop" OUT_DIR="$PWD/dist"
+          rm -rf dist
+          bash scripts/desktop/linux.sh
+          ls -la dist
 
       - name: Manifest + attach
         env:
@@ -315,18 +226,21 @@ jobs:
           V: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
+          # gh is not on the runner's PATH; the flake's nixpkgs has it.
+          gh() { nix run --quiet nixpkgs#gh -- "$@"; }
           cd dist
           sha="$(sha256sum Task-linux-x86_64.AppImage | awk '{print $1}')"
           printf '{\n  "version": "%s",\n  "appimage": "https://github.com/%s/releases/download/%s/Task-linux-x86_64.AppImage",\n  "sha256": "%s"\n}\n' \
             "$V" "$GITHUB_REPOSITORY" "$TAG" "$sha" > latest-linux.json
           cat latest-linux.json
-          # The AppImage first: the manifest is what makes installed apps
+          # The packages first: the manifest is what makes installed apps
           # move, so it must never name an asset that is not there yet.
-          gh release upload "$TAG" Task-linux-x86_64.AppImage --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" Task-linux-x86_64.AppImage Task-linux-x86_64.flatpak --clobber --repo "$GITHUB_REPOSITORY"
           gh release upload "$TAG" latest-linux.json --clobber --repo "$GITHUB_REPOSITORY"
           {
             echo "### Linux desktop attached to $TAG"
             echo '```'
-            ls -la Task-linux-x86_64.AppImage latest-linux.json
+            ls -la Task-linux-x86_64.AppImage Task-linux-x86_64.flatpak latest-linux.json
+            echo "glibc floor: $(cat Task-linux-x86_64.AppImage-glibc-floor.txt)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

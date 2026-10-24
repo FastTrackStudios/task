@@ -2,7 +2,8 @@
 # GitHub Release `v<version>`, for running a Task node outside the cluster
 # and outside Nix: on a desktop, a home server, a VPS (docs/headless-node.md).
 #
-#   task-server-linux-x86_64     glibc >= 2.35 (built on Ubuntu 22.04)
+#   task-server-linux-x86_64     glibc >= the Nix toolchain's floor (2.39 today;
+#                                built on THEBATTLESHIP, printed by the build)
 #   task-server-linux-aarch64    glibc >= 2.35
 #   task-server-macos-aarch64    macOS 14+, Apple silicon
 #   SHA256SUMS                   `sha256sum` format, over all three
@@ -32,13 +33,13 @@
 # unless `replace` is set: a published checksum must not change under
 # anyone who verified it.
 #
-# WHERE: GitHub-hosted runners, not Task's self-hosted ones. The binaries
-# must run on hosts without Nix, so they are built against the OS's own
-# libc with rustup's toolchain (rust-toolchain.toml), not inside the Nix
-# dev shell, whose binaries link /nix/store. OpenSSL is linked statically
-# (OPENSSL_STATIC) so the only runtime dependency is the platform's libc.
-# The repo is public, so the hosted runners (incl. ubuntu-22.04-arm) cost
-# nothing; the build is cold every time (~1h), which a release can afford.
+# WHERE: linux-x86_64 on THEBATTLESHIP's `task-release` pool, in the Nix dev
+# shell on a warm target dir (scripts/node-binary-linux.sh: OpenSSL and
+# bzip2 static, the binary taken off /nix/store, so it needs only glibc and
+# libgcc_s; its glibc floor is the Nix toolchain's, decision 2026-10-24).
+# linux-aarch64 (ubuntu-22.04-arm) and macos-aarch64 stay on GitHub-hosted
+# runners until they get machines of their own: built against the OS's own
+# libc with rustup's toolchain, OpenSSL static (OPENSSL_STATIC).
 
 name: Node binaries
 
@@ -151,14 +152,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # THEBATTLESHIP's `task-release` pool, from the Nix dev shell:
+          # scripts/node-binary-linux.sh links OpenSSL and bzip2 statically
+          # and takes the binary off /nix/store (glibc floor: the Nix
+          # toolchain's, decision 2026-10-24).
           - asset: task-server-linux-x86_64
-            os: ubuntu-22.04
+            os: [self-hosted, task-release]
             target: x86_64-unknown-linux-gnu
           - asset: task-server-linux-aarch64
             os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
+          # airlock's `task-release-mac` runner (as Studio's macOS release
+          # builds): Homebrew's OpenSSL static + rust-toolchain.toml's rustup
+          # toolchain, so the binary links only the OS (checked below).
           - asset: task-server-macos-aarch64
-            os: macos-14
+            os: [self-hosted, macos, task-release-mac]
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 150
@@ -178,7 +186,7 @@ jobs:
           ref: ${{ needs.plan.outputs.ref }}
 
       - name: Native build dependencies (Linux)
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' }}
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q pkg-config libssl-dev cmake clang
@@ -193,6 +201,12 @@ jobs:
       - name: Native build dependencies (macOS)
         if: ${{ runner.os == 'macOS' }}
         run: |
+          # airlock: Homebrew and rustup live outside the runner's PATH.
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+            export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+            echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
           brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
           echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
           # The oldest macOS the binary promises to run on.
@@ -200,13 +214,22 @@ jobs:
 
       # rustup reads rust-toolchain.toml: the same compiler as the dev shell.
       - name: Toolchain
+        if: ${{ runner.environment == 'github-hosted' || runner.os == 'macOS' }}
         run: |
           rustup toolchain install --profile minimal
           rustup target add ${{ matrix.target }}
           rustc --version
 
       - name: Build
+        if: ${{ runner.environment == 'github-hosted' || runner.os == 'macOS' }}
         run: cargo build --release --locked -p task-server --target ${{ matrix.target }}
+
+      # Builds, checks what the binary needs and its glibc floor, and runs it.
+      - name: Build (THEBATTLESHIP, Nix)
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          CARGO_TARGET_DIR="$TASK_CACHE_DIR/node" OUT_DIR="$PWD/dist" \
+            bash scripts/node-binary-linux.sh
 
       # The binary reports the release's version, and links nothing but
       # the platform's own libraries.
@@ -215,10 +238,15 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          bin="target/${{ matrix.target }}/release/task-server"
-          bash scripts/check-versions.sh --bin "$bin"
           [ "v$(bash scripts/release.sh version)" = "$TAG" ] \
             || { echo "::error::built $(bash scripts/release.sh version), releasing $TAG"; exit 1; }
+          # The Nix build checked itself (scripts/node-binary-linux.sh).
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && [ "$RUNNER_OS" = Linux ]; then
+            ls -la "dist/${{ matrix.asset }}"
+            exit 0
+          fi
+          bin="target/${{ matrix.target }}/release/task-server"
+          bash scripts/check-versions.sh --bin "$bin"
           if [ "$RUNNER_OS" = Linux ]; then
             ldd "$bin"
             if ldd "$bin" | grep -E 'libssl|libcrypto|/nix/store'; then

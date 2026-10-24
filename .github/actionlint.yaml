@@ -1,7 +1,9 @@
 # actionlint: the self-hosted runner labels this repo's workflows use.
 # PRs run on GitHub's free hosted ubuntu-latest (the repo is public;
 # checks.yml header); code already on main runs on THEBATTLESHIP.
-#   `airlock`       the Mac that builds and signs the Apple apps.
+#   `airlock`       the Mac (its general runner).
+#   `task-release-mac`  airlock's runner for Task's Apple release builds
+#                   (macOS app, iOS, the macOS node binary).
 #   `task-main`     THEBATTLESHIP's pool for merges to main (checks.yml).
 #   `task-release`  THEBATTLESHIP's pool for release-profile artifacts only
 #                   (images, the desktop cache); release commits' checks run
@@ -11,3 +13,4 @@ self-hosted-runner:
     - airlock
     - task-main
     - task-release
+    - task-release-mac
