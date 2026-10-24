@@ -457,6 +457,15 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
         .await
         .wrap_err("plant the billing")?;
 
+    // App documents (`crdt::docs`): a setlist and a session project with
+    // a branch, as Studio would have made them, so a client app signed
+    // in as the cast finds a catalog to sync. Idempotent (fixed ids).
+    match example_org::plant_app_docs(&org, &slug).await {
+        Ok(0) => {}
+        Ok(n) => println!("  app docs: {n} planted"),
+        Err(e) => println!("  app docs: not planted ({e})"),
+    }
+
     // Video deliverables: generated rather than committed — even a tiny
     // mp4 is binary weight git keeps forever, and ffmpeg synthesises a
     // perfectly good one in a second (the dev shell carries ffmpeg).

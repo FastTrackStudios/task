@@ -580,11 +580,12 @@ impl live_proto::LiveSessionsStreamSource for GuestLiveLane {
 }
 
 /// The org's one `DocSync`: a live doc to the live host (read-only where
-/// this connection observes it), anything else to the vault's registry.
+/// this connection observes it), anything else to the org's app docs or
+/// its vault ([`crate::app_docs::OrgDocSync`]).
 #[derive(Clone)]
 pub struct DocSyncRouter {
     pub live: LiveHost,
-    pub vault: vault_collab::VaultCollab,
+    pub rest: crate::app_docs::OrgDocSync,
     /// This connection's access, shared with its [`LiveLane`].
     pub access: LiveAccess,
 }
@@ -602,7 +603,7 @@ impl DocSync for DocSyncRouter {
                 .sync_as(&self.access, doc_id, from, up, down)
                 .await
         } else {
-            self.vault.sync(doc_id, from, up, down).await
+            self.rest.sync(doc_id, from, up, down).await
         }
     }
 }

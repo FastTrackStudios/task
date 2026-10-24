@@ -334,6 +334,48 @@ silently dropped.
 
 ---
 
+## App documents
+
+An app that is a client of Task (Studio first) keeps its own data as Loro
+documents: a project, a setlist, a rig, a patch. Task stores and relays them
+and never reads one. A doc's `kind` is the app's word, and its `parent` (a
+branch's fork point) is carried without being interpreted. The machinery is
+architect's `crdt::docs`; each org serves it (`apps/server/src/app_docs.rs`).
+
+### An app doc is made on the device
+
+t[offline.app-docs.create]
+A device creates an app doc with no connection, under an id it chooses, and
+registers it when the connection returns. Registering is idempotent on the id
+(a retry is the same doc), and a branch registers after its parent. A doc
+made on one device is adopted by every other device of its owner, which
+makes its local storage then.
+
+### App docs converge, and the org keeps them
+
+t[offline.app-docs.replica]
+Two devices editing one app doc apart converge when they reconnect, both
+keeping their edits. A device writes what it receives to its own storage, so
+a restart while offline loses nothing. The org keeps the catalog and the
+bytes in `<org>/app_docs.sqlite`, across restarts. The personal org is where
+a person's own docs live; a band's org holds the band's.
+
+### A deleted app doc stays deleted everywhere
+
+t[offline.app-docs.tombstone]
+Deleting an app doc leaves a tombstone in the catalog. A device that was away
+learns of it on reconnect. The id cannot be registered again, and its content
+is no longer served.
+
+### App docs answer the org's members
+
+t[offline.app-docs.access]
+The catalog (register, list, rename, delete, the change stream) and each
+doc's content answer only callers the org's permits admit: a member, or in a
+personal org its owner. Sharing one doc beyond its org is not built.
+
+---
+
 ## Computed records
 
 ### What isn't authored is cached, and offline service calls queue
@@ -377,6 +419,8 @@ app never claims a change synced that has not.
 | `offline.cli` | e2e (`apps/server/tests/it/desktop_cli_e2e.rs`): a node served on loopback with its person's sign-in in the desktop token store; an unconfigured `TaskClient` finds it, writes a task as that person and both sides list it. Not yet: the `PATH` link, a CLI sign-in landing in the desktop store |
 | `offline.server-peer` | Unit: `peer_cli` (the issuer's vox lane, the account kept owner-only). The pass itself is `offline.account`'s e2e. Not yet: an e2e of `task-server peer` against an in-process issuer, the session's refresh |
 | `offline.doc.access` | e2e: a document for a path the person can't write is refused and kept local. Today: `offline_doc_e2e::refused_documents_stay_on_the_device` (foreign lineage, unadmitted path); the per-person write refusal itself is `wiki_edits` (`open_collab` refused for a non-Editor) |
+| `offline.app-docs.create`, `offline.app-docs.replica`, `offline.app-docs.tombstone` | e2e: `app_docs_e2e::app_docs_made_and_edited_apart_converge_and_survive_a_restart` (two `DocsDriver` devices over WebSocket; a project and its branch made offline; edits apart converge; a delete reaches both; a second server over the same data root serves both to a new device). Architect: `crdt/tests/docs.rs` (parent-first adoption, a received edit surviving an offline restart) |
+| `offline.app-docs.access` | e2e: `app_docs_e2e::only_members_reach_the_catalog_and_the_content` (enforcing; a member registers, anonymous is refused on list, create, `changes` and `DocSync`) |
 | `offline.outbox` | unit tests over a fake transport; e2e: timer started offline lands on reconnect |
 | `offline.boot`, `offline.visible` | iOS simulator check with the demo server stopped (manual until a UI harness exists) |
 
