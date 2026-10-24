@@ -107,6 +107,7 @@ families here when you introduce them.
 | `wiki.edit.id` / `wiki.edit.outcome` | Edit Request id and its fate (`opened`, `auto_approved`, `held`, `claimed`, `accepted`, `landing`, `rejected`, `returned`, `conflict`, `refused`) | `wiki-live::edits_backend` |
 | `wiki.source.outcome` / `wiki.source.commit` | repo-sourced sync result (`synced`, `unchanged`, `failed`) and the commit reflected | `wiki-live`, `task_server::wiki_repo` |
 | `wiki.subscribe.source` / `wiki.subscribe.outcome` | the qualified source and whether the subscription was `subscribed` or `refused` | `wiki-live::subscriptions_backend` |
+| `updater.platform` / `updater.outcome` / `updater.version` | one desktop update check (`macos` \| `linux`): `staged` (a newer release is downloaded and verified, `updater.version` says which) \| `up_to_date` \| `failed` (also one `warn!`) — one `updater/check` span per check | `task-app-desktop::updater` |
 
 `auth.outcome` is the model example of a field earning its place:
 `rejected` (token sent, store said no) and `absent` (no token) are the

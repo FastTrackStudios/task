@@ -212,8 +212,8 @@ as it was.
   changes with the package. Rolling back is `nixos-rebuild --rollback`.
   `task-server self-update` refuses to touch a binary in `/nix/store`.
 - **Everywhere else, `task-server self-update`.** It asks the GitHub
-  releases API for the newest `vX.Y.Z` release (not `desktop-v*`, not
-  drafts or prereleases) that carries this platform's asset and
+  releases API for the newest `vX.Y.Z` release (not drafts or
+  prereleases) that carries this platform's asset and
   `SHA256SUMS`; checks `SHA256SUMS.minisig` is a signature of
   `SHA256SUMS` by the release key pinned in the binary
   (`RELEASE_SIGNING_KEY`, apps/server/src/self_update.rs) whose trusted
@@ -230,8 +230,8 @@ as it was.
     `task-server self-update --then systemctl try-restart task-server.service`;
   - launchd: `app.fasttrackstudio.task-server.update` (daily and at login)
     runs `task-server self-update --then … launchctl kickstart -k …`.
-  The same logic the macOS desktop updater uses for `desktop-v*` releases
-  (apps/desktop/src/updater.rs): newest release by version, verify the
+  The same logic the desktop updater uses for its own assets on the same
+  release (apps/desktop/src/updater.rs): newest release by version, verify the
   checksum, verify the thing itself, swap only then.
   **Why the signature:** the binary and `SHA256SUMS` come from the same
   release, so the checksum alone only proves the download is intact.

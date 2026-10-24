@@ -53,7 +53,7 @@ BUILD_NO="${BUILD_NO:-$(date +%s)}"
 
 # Notarization credentials live where the TestFlight flow already keeps
 # them. Absent is fine until we actually notarize — DRY_RUN never does.
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091
 [ -f "$HOME/.appstoreconnect/config.env" ] && source "$HOME/.appstoreconnect/config.env"
 
 NIX="${NIX:-}"
@@ -92,6 +92,9 @@ else
     echo "=== building macOS app (dx, release) ==="
     # shellcheck disable=SC2086
     rm -rf $APP_GLOB
+    # The inner script is expanded twice on purpose: single-quoted paths are
+    # baked in here, escaped \$(…) runs in the dev shell.
+    # shellcheck disable=SC2016
     "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
         set -euo pipefail
         cd '$ROOT/$DX_APP_DIR'
@@ -101,7 +104,7 @@ else
     " > /tmp/task-macos-dmg-build.log 2>&1 || true
     tail -3 /tmp/task-macos-dmg-build.log
 fi
-# shellcheck disable=SC2086
+# shellcheck disable=SC2086,SC2012
 APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
 [ -n "$APP" ] && [ -d "$APP" ] || { echo "ERROR: build produced no app"; tail -30 /tmp/task-macos-dmg-build.log; exit 1; }
 # dx exits non-zero even on success, so its status is ignored above. But a
@@ -341,7 +344,7 @@ rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 ZIP_SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
 MANIFEST="$OUT_DIR/latest-macos.json"
-RELEASE_TAG="desktop-v$MARKETING_VER"
+RELEASE_TAG="v$MARKETING_VER"
 cat > "$MANIFEST" <<JSON
 {
   "version": "$MARKETING_VER",

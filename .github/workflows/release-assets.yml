@@ -1,0 +1,326 @@
+# Release assets — the web bundle and the Linux desktop app, attached to the
+# GitHub Release `v<version>` beside the node binaries (node-binaries.yml)
+# and the macOS app (task-macos.yml), so one release carries everything
+# that version ships:
+#
+#   task-web-<X.Y.Z>.tar.gz        the static web bundle, the exact bytes
+#                                  production serves: extracted from the
+#                                  published ghcr.io/fasttrackstudios/task-web:<X.Y.Z>
+#                                  image, not rebuilt
+#   Task-linux-x86_64.AppImage     the desktop app for Linux (glibc >= 2.35,
+#                                  built on Ubuntu 22.04; uses the host's
+#                                  WebKitGTK 4.1 and libayatana-appindicator3)
+#   latest-linux.json              its version, download URL and sha256: the
+#                                  manifest the Linux in-app updater reads
+#                                  (apps/desktop/src/updater.rs)
+#
+# The asset names are a contract with the updater (`latest-linux.json`, and
+# the AppImage URL it names) and with anyone scripting a download.
+#
+# WHEN: called from deploy.yml once the release is published (after
+# "Verify live" + "GitHub Release"). By hand, for a release that already
+# exists (a backfill): `gh workflow run release-assets.yml --ref main -f
+# tag=v26.10.0`. Every job is a no-op when the release already carries its
+# asset, unless `replace` is set: a published checksum must not change
+# under anyone who verified it.
+#
+# WHERE: GitHub-hosted runners. The AppImage must run on hosts without Nix,
+# so it is built against Ubuntu's libraries with rustup's toolchain
+# (rust-toolchain.toml) and the dx the dev shell pins (nix/modules/dx.nix),
+# not inside the Nix dev shell, whose binaries link /nix/store. NixOS hosts
+# keep installing the nix package from cachix (desktop-cache.yml).
+
+name: Release assets
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to attach to. Empty = v<Cargo.toml version> at the ref."
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach to (v<X.Y.Z>). Empty = v<Cargo.toml version> at the ref."
+        required: false
+        default: ""
+      replace:
+        description: "Rebuild and replace assets a release already carries."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-assets-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Which release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      web: ${{ steps.plan.outputs.web }}
+      linux: ${{ steps.plan.outputs.linux }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REPLACE: ${{ inputs.replace && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+              || { echo "::error::no tag $tag"; exit 1; }
+          else
+            # No tag input: the run must itself be on a release tag (the
+            # deploy's workflow_call, or a dispatch with the tag as its
+            # ref). A branch dispatch would attach branch-built assets to a
+            # published release.
+            case "${GITHUB_REF}" in
+              refs/tags/v*) ;;
+              *) echo "::error::run this on a v* tag (ref is ${GITHUB_REF}), or pass the tag input"; exit 1 ;;
+            esac
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          ref="$(git rev-parse "refs/tags/$tag^{commit}")"
+          # The tag's own version must be the one it is named for.
+          v="$(git show "$ref:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' | head -1)"
+          [ "v$v" = "$tag" ] || { echo "::error::$tag's Cargo.toml says $v"; exit 1; }
+          # Assets attach to releases of main, not to branch builds.
+          git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$ref" origin/main \
+            || { echo "::error::$tag is not in main's history"; exit 1; }
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::no GitHub Release $tag — assets attach to a published release (release.yml publishes it)"
+            exit 1
+          fi
+          have="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
+          wants() { # <asset> -> true unless the release has it (and replace is off)
+            if grep -qx "$1" <<<"$have" && [ "$REPLACE" != true ]; then
+              echo "::notice::$tag already carries $1 — skipped (dispatch with replace=true to rebuild)" >&2
+              echo false
+            else
+              echo true
+            fi
+          }
+          {
+            echo "tag=$tag"
+            echo "version=$v"
+            echo "ref=$ref"
+            echo "web=$(wants "task-web-$v.tar.gz")"
+            echo "linux=$(wants latest-linux.json)"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $tag ($v) at $ref"
+
+  web:
+    name: Web bundle
+    needs: plan
+    if: ${{ needs.plan.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+      # The bundle production serves is the one in the image the chart at
+      # this tag deploys (scripts/ghcr-images.sh): proven to be public and
+      # built from the tag's commit before anything is extracted from it.
+      - name: Extract from the image
+        env:
+          V: ${{ needs.plan.outputs.version }}
+          REF: ${{ needs.plan.outputs.ref }}
+        run: |
+          set -euo pipefail
+          bash scripts/ghcr-images.sh check "$V" "$REF"
+          img="ghcr.io/fasttrackstudios/task-web:$V"
+          docker pull --quiet "$img"
+          # static-web-server's config is the image's Cmd
+          # (`--config-file <sws.toml>`, nix/modules/packages/static-site.nix);
+          # its `root` is the site.
+          cfg="$(docker inspect "$img" --format '{{ index .Config.Cmd 1 }}')"
+          cid="$(docker create "$img")"
+          docker cp "$cid:$cfg" sws.toml
+          root="$(sed -n 's/^root = "\(.*\)"$/\1/p' sws.toml)"
+          [ -n "$root" ] || { echo "::error::no root in $cfg"; cat sws.toml; exit 1; }
+          mkdir site
+          docker cp "$cid:$root/." site/
+          docker rm "$cid" >/dev/null
+          test -f site/index.html || { echo "::error::$root has no index.html"; exit 1; }
+          mkdir -p dist
+          tar -C site --owner=0 --group=0 --numeric-owner -czf "dist/task-web-$V.tar.gz" .
+          ls -la dist
+          du -sh site
+      - name: Attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          V: ${{ needs.plan.outputs.version }}
+        run: |
+          gh release upload "$TAG" "dist/task-web-$V.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "### Web bundle attached to $TAG: \`task-web-$V.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
+
+  linux-desktop:
+    name: Linux desktop (AppImage)
+    needs: plan
+    if: ${{ needs.plan.outputs.linux == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # The webview/tray stack nix/modules/toolchain.nix assembles for the
+      # dev shell, from Ubuntu instead.
+      - name: Native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config libssl-dev cmake clang python3 \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev libxdo-dev librsvg2-dev \
+            libfontconfig1-dev libfreetype-dev libxkbcommon-dev \
+            libfuse2 file desktop-file-utils
+
+      # rustup reads rust-toolchain.toml: the same compiler as the dev shell.
+      - name: Toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustc --version
+
+      # The dx the dev shell pins: its git source and rev, read from
+      # nix/modules/dx.nix so the two cannot drift. Tailwind at the dev
+      # shell's major (v4).
+      - name: dx + tailwind
+        run: |
+          set -euo pipefail
+          dx_nix=nix/modules/dx.nix
+          owner="$(sed -n 's/^ *owner = "\(.*\)";/\1/p' "$dx_nix" | head -1)"
+          repo="$(sed -n 's/^ *repo = "\(.*\)";/\1/p' "$dx_nix" | head -1)"
+          rev="$(sed -n 's/^ *rev = "\([0-9a-f]\{40\}\)";/\1/p' "$dx_nix" | head -1)"
+          [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$rev" ] \
+            || { echo "::error::could not read dx's source from $dx_nix"; exit 1; }
+          cargo install --locked --git "https://github.com/$owner/$repo" --rev "$rev" dioxus-cli
+          dx --version
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -fsSL -o "$bin/tailwindcss" \
+            https://github.com/tailwindlabs/tailwindcss/releases/download/v4.2.2/tailwindcss-linux-x64
+          chmod +x "$bin/tailwindcss"
+          "$bin/tailwindcss" --help | head -1
+          echo "$bin" >> "$GITHUB_PATH"
+
+      # As nix/modules/packages/desktop-apps.nix builds it: `dx build` (so
+      # every asset!() resolves to the bundled assets/ beside the binary),
+      # then the CLI and the sync agent, which the app looks for next to
+      # its own executable.
+      - name: Build
+        run: |
+          set -euo pipefail
+          bash scripts/architect-ui-link.sh
+          (cd apps && tailwindcss -i tailwind.css -o desktop/assets/tailwind.css)
+          (cd apps/desktop && dx build --release --linux)
+          cargo build --release --locked -p task-app-desktop --bin task --bin fts-files-daemon
+
+      - name: AppImage
+        env:
+          V: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          app="$(dirname "$(find target/dx/task-app-desktop/release -type f -name task-app-desktop -perm -u+x | head -1)")"
+          [ -d "$app/assets" ] || { echo "::error::dx wrote no assets/ beside the binary at '$app'"; exit 1; }
+          bash scripts/check-versions.sh --bin "$app/task-app-desktop"
+          ldd "$app/task-app-desktop"
+          if ldd "$app/task-app-desktop" | grep -E '/nix/store|not found'; then
+            echo "::error::the app links a library a fresh host lacks"; exit 1
+          fi
+          appdir=Task.AppDir
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor/512x512/apps"
+          cp -R "$app/." "$appdir/usr/bin/"
+          install -m755 target/release/task target/release/fts-files-daemon "$appdir/usr/bin/"
+          icon=apps/web/assets/icon-512.png
+          cp "$icon" "$appdir/task.png"
+          cp "$icon" "$appdir/usr/share/icons/hicolor/512x512/apps/task.png"
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=Task' \
+            'Comment=FastTrackStudio Task' \
+            'Exec=task-app-desktop' \
+            'Icon=task' \
+            'Categories=Office;ProjectManagement;' \
+            'StartupWMClass=task-app-desktop' \
+            "X-AppImage-Version=$V" > "$appdir/task.desktop"
+          cp "$appdir/task.desktop" "$appdir/usr/share/applications/"
+          desktop-file-validate "$appdir/task.desktop"
+          # AppRun: the window, from inside the image. Compositing off by
+          # default, as the nix package does (a white window on some GPUs);
+          # a user's own setting wins. Single quotes on purpose: these lines
+          # expand when AppRun runs, not here.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "$0")")"' \
+            ': "${WEBKIT_DISABLE_COMPOSITING_MODE:=1}"' \
+            'export WEBKIT_DISABLE_COMPOSITING_MODE' \
+            'exec "$HERE/usr/bin/task-app-desktop" "$@"' > "$appdir/AppRun"
+          chmod 755 "$appdir/AppRun"
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          mkdir -p dist
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" dist/Task-linux-x86_64.AppImage
+          # The image starts and reports the release (`--version` opens no window).
+          got="$(dist/Task-linux-x86_64.AppImage --appimage-extract-and-run --version)"
+          [ "$got" = "task-app-desktop $V" ] \
+            || { echo "::error::the AppImage says '$got', not 'task-app-desktop $V'"; exit 1; }
+
+      - name: Manifest + attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          V: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha="$(sha256sum Task-linux-x86_64.AppImage | awk '{print $1}')"
+          printf '{\n  "version": "%s",\n  "appimage": "https://github.com/%s/releases/download/%s/Task-linux-x86_64.AppImage",\n  "sha256": "%s"\n}\n' \
+            "$V" "$GITHUB_REPOSITORY" "$TAG" "$sha" > latest-linux.json
+          cat latest-linux.json
+          # The AppImage first: the manifest is what makes installed apps
+          # move, so it must never name an asset that is not there yet.
+          gh release upload "$TAG" Task-linux-x86_64.AppImage --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" latest-linux.json --clobber --repo "$GITHUB_REPOSITORY"
+          {
+            echo "### Linux desktop attached to $TAG"
+            echo '```'
+            ls -la Task-linux-x86_64.AppImage latest-linux.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
