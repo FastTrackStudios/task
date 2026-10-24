@@ -170,10 +170,14 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/node-binaries.yml
-    # No `secrets: inherit`: the one secret the called workflow needs
-    # (TASK_RELEASE_MINISIGN_KEY, which signs SHA256SUMS) lives in the
-    # `release-signing` environment and is read by its `publish` job
-    # directly, so the repo's other secrets never reach it.
+    # Only the one secret the called workflow needs, by name, never
+    # `secrets: inherit` (the repo's other secrets stay out of it).
+    # TASK_RELEASE_MINISIGN_KEY, which signs SHA256SUMS, lives only in the
+    # `release-signing` environment. GitHub resolves it there, for the
+    # called `publish` job that declares that environment, but ONLY if
+    # the caller names it here; unnamed, it reaches the job as "".
+    secrets:
+      TASK_RELEASE_MINISIGN_KEY: ${{ secrets.TASK_RELEASE_MINISIGN_KEY }}
 
   # The release exists: attach the rest of what the version ships — the
   # web bundle (from the published task-web image) and the Linux desktop
