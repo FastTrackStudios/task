@@ -45,10 +45,11 @@ concurrency:
   # is CANCELLED. task-ios lost that race every time, which is why
   # TestFlight went stale while every run showed "cancelled".
   #
-  # The serialization they wanted is already guaranteed: airlock is a
-  # SINGLE self-hosted runner and runs one job at a time, so two Apple
-  # builds cannot overlap regardless. The shared group added nothing
-  # except mutual cancellation.
+  # The serialization they wanted is already guaranteed: Task's Apple
+  # builds run on airlock's `task-release-mac`, a SINGLE self-hosted runner
+  # that runs one job at a time, so two of them cannot overlap regardless.
+  # (Studio's run on its own `studio-release-mac` runner on the same Mac.)
+  # The shared group added nothing except mutual cancellation.
   #
   # Keeping the group per-workflow preserves the useful half — a newer
   # run of the SAME workflow supersedes an older queued one.
@@ -57,7 +58,7 @@ concurrency:
 
 jobs:
   testflight:
-    runs-on: [self-hosted, macos, airlock]
+    runs-on: [self-hosted, macos, task-release-mac]
     # Fail loudly when the airlock Mac isn't there. Without this a job
     # with no available runner just QUEUES, and is eventually cancelled —
     # which reads as "cancelled", not "failed", so nothing alerts and
