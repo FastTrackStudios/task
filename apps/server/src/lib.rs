@@ -17,6 +17,11 @@
 //! `project-crdt` crates. CRDT now lives only at the per-file
 //! editor layer (future); vault is the sole storage path.
 
+// Proving `AppState: Send + Sync` walks the whole org state (OrgAppState
+// -> LiveHost -> live_docs::Edits -> …), deeper than the nightly trait
+// solver's default 128 allows ("overflow evaluating the requirement
+// `HomeOrgOperator: Sync`" under clippy). Same fix as `finance`.
+#![recursion_limit = "256"]
 // The copy lints, denied here once the crate is clean of them
 // (zero-copy audit S7, `docs/perf/zero-copy-audit.md`). They move into
 // `[workspace.lints.clippy]` once every crate carries this.
@@ -1637,7 +1642,7 @@ pub(crate) async fn build_org_state(
         if let Some(imap) = email.imap() {
             for account in email.imap_account_ids() {
                 let imap = imap.clone();
-                let acct = account.clone();
+                let acct = account;
                 tokio::spawn(async move {
                     if let Err(err) = imap.start_idle(&acct, "INBOX").await {
                         tracing::warn!(account = %acct, ?err, "imap: IDLE watcher not started");

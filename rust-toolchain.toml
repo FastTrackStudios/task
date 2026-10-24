@@ -1,13 +1,18 @@
-# Matches the FastTrackStudio fleet pin, and must match
-# nix/modules/toolchain.nix.
+# A dated nightly, and must match nix/modules/toolchain.nix.
+#
+# Nightly for the parallel compiler front end (`-Zthreads`, set in
+# .cargo/config.toml): rustc's type checking and borrow checking spread
+# over threads instead of one per crate. Dated, never bare `nightly`, so
+# the dev shell, local CI, GitHub's runners and the release builds
+# (rustup reads this file) all compile with the same rustc.
 #
 # rust-overlay is this repo's own input rather than `dioxus-flake`'s, so
-# a compiler release can be taken here without moving nixpkgs or `dx`
-# (which comes from the dedicated `nixpkgs-dx` pin — see
-# nix/modules/dx.nix). Bumping means: `nix flake update rust-overlay`,
-# then this channel and the version in nix/modules/toolchain.nix, which
-# are two halves of one pin and drift silently if only one moves.
+# a compiler can be taken here without moving nixpkgs or `dx` (which
+# comes from the dedicated `nixpkgs-dx` pin — see nix/modules/dx.nix).
+# Bumping means: `nix flake update rust-overlay`, then this channel and
+# the date in nix/modules/toolchain.nix, which are two halves of one pin
+# and drift silently if only one moves.
 [toolchain]
-channel = "1.98.1"
+channel = "nightly-2026-10-23"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = ["wasm32-unknown-unknown"]

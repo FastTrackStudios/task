@@ -6,7 +6,8 @@
 # here from the release tag.
 #
 # Built with the workspace toolchain (fts.rustToolchain), because rail's
-# rust-version (1.98.1) is exactly our pin. The resolve-graph patch this
+# rust-version (1.98.1) is newer than any stable nixpkgs carries. The
+# resolve-graph patch this
 # module used to carry for 0.17.3 is gone: upstream keys graph nodes by
 # exact PackageId and builds edges from cargo's resolved graph since the
 # 0.2x line, which is what the patch did.

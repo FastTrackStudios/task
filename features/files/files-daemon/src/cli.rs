@@ -315,10 +315,8 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::remove_file(remembered);
         println!("clear   coordinator");
     }
-    for (key, slot) in [("FTS_FILES_DAEMON_COORDINATOR", &mut config.coordinator)] {
-        if slot.is_none() && !cleared {
-            *slot = crate::install::configured(&home, key);
-        }
+    if config.coordinator.is_none() && !cleared {
+        config.coordinator = crate::install::configured(&home, "FTS_FILES_DAEMON_COORDINATOR");
     }
     if let Some(kept) = &config.coordinator {
         println!("keep    coordinator {kept}");

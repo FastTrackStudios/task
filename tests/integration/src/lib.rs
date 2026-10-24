@@ -116,6 +116,11 @@
 //! example vault, whose awkward cases were all copied *from* the archive
 //! after that reader got them wrong.
 
+// Proving `Send`/`Sync` for the server's state (task_server::AppState ->
+// OrgAppState -> LiveHost -> …) runs deeper than the nightly trait
+// solver's default 128; apps/server/src/lib.rs carries the same limit.
+#![recursion_limit = "256"]
+
 /// The servers' tracing, for the chapter that booted them — installed
 /// once per process by [`server::Server::start`]. Through the test
 /// writer, so a passing chapter stays quiet and a failing one (nextest

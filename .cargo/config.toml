@@ -14,6 +14,17 @@ xtask = "run --package xtask --release --"
 [net]
 git-fetch-with-cli = true
 
+# The parallel front end (nightly; the toolchain is a dated nightly for
+# this, rust-toolchain.toml): type checking, borrow checking and the rest
+# of rustc's front half run on up to 8 threads per crate instead of one.
+# Under `cfg(all())` so it reaches every target, and because cargo JOINS
+# `target.<cfg>` rustflags with `target.<triple>` ones (the wasm cfg
+# below, CI's mold `CARGO_TARGET_*_RUSTFLAGS`), where `build.rustflags`
+# would be silently replaced by either. 8 is what the compiler team
+# recommends; past it the front end stops scaling.
+[target.'cfg(all())']
+rustflags = ["-Zthreads=8"]
+
 # getrandom 0.3 (transitive via fake -> rand) needs its backend selected
 # explicitly on wasm. Paired with the `wasm_js` feature in apps/web.
 # `dx` sets the same cfg on its own builds; declaring it here makes plain

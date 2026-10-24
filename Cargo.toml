@@ -221,6 +221,8 @@ exclude = [
     # Patched iroh-blobs (see [patch.crates-io] below): a dependency, not
     # a member, so its own tests/examples stay out of workspace builds.
     "vendor/iroh-blobs",
+    # Patched branches (turso_core's; vendor/branches/PATCHED.md).
+    "vendor/branches",
 ]
 
 [workspace.package]
@@ -703,6 +705,10 @@ tao = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.2" }
 # upstream main still builds its own, so this is a patch; in-tree because
 # it is a ~30-line diff over the published crate (vendor/iroh-blobs/PATCHED.md).
 iroh-blobs = { path = "vendor/iroh-blobs" }
+# branches 0.4.6 (turso_core's) with its nightly code path switched off:
+# on a nightly rustc upstream calls `core::intrinsics::abort`, which
+# current nightlies removed (vendor/branches/PATCHED.md).
+branches = { path = "vendor/branches" }
 # The editor's vendored mermaid-rs-renderer fork now lives in the editor
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.
@@ -771,6 +777,13 @@ private_intra_doc_links = "allow"
 redundant_explicit_links = "allow"
 
 [workspace.lints.clippy]
+# The nightly toolchain's clippy (rust-toolchain.toml) lints Dioxus `rsx!`
+# expansions: every `"{x}"` attribute or text node is a `format!` to it, and
+# every `attr: if a { … } else { … }` an oddly formatted else (182 hits,
+# none outside rsx!). Drop these two when clippy stops linting rsx's
+# expansion.
+useless_format = "allow"
+suspicious_else_formatting = "allow"
 field_reassign_with_default = "allow"
 redundant_closure = "allow"
 nonminimal_bool = "allow"

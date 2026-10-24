@@ -424,7 +424,7 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
             }
             wf.assignees.0 = vec![task::workflows_proto::AgentRef::Human {
                 user_id: user.id.to_string(),
-                display_name: user.name.clone(),
+                display_name: user.name,
             }];
             tasks_backend
                 .update(t)

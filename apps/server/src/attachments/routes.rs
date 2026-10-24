@@ -294,6 +294,19 @@ async fn handle_download(
     })
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DownloadQuery {
+    token: String,
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
 /// The parser moved to `architect::http::ranged` (v0.9.12); these pin
 /// the cases this route's `<audio>` seek depends on against the pin.
 #[cfg(test)]
@@ -347,17 +360,4 @@ mod range_tests {
         assert_eq!(parse_byte_range("bytes=0-1,5-9", 1000), ByteRange::Absent);
         assert_eq!(parse_byte_range("bytes=-", 1000), ByteRange::Absent);
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DownloadQuery {
-    token: String,
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
