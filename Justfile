@@ -587,6 +587,53 @@ rail-evidence: css
     untracked="$(git ls-files --others --exclude-standard --ignored examples/studio)"
     [ -z "$untracked" ] || printf 'rail evidence: untracked files under examples/studio (embedded by task-server):\n%s\n' "$untracked" >&2
 
+# Pre-warm THEBATTLESHIP's Task runner pools, so the next merge or release
+# compiles only what it changed instead of starting cold. Use it after
+# anything that leaves a pool cold: a toolchain bump, a lockfile overhaul, a
+# wiped cache. Point REF at the branch that makes the change BEFORE merging
+# it, and the merge itself lands warm.
+#
+#   main     task-main's dev target dirs: a build-only checks.yml run (lint,
+#            the test build, wasm; no tests run, no status posted)
+#   release  task-release's release target dir: a build-only images.yml run
+#            (the release server and the web bundle; nothing pushed)
+#
+#   just pre-warm-ci                        both pools, from main
+#   just pre-warm-ci main ci/nightly-bump   task-main, from a branch
+#   just pre-warm-ci both main fresh        empty task-main's dirs first (a
+#                                           new compiler never reuses the
+#                                           old artifacts; this drops them)
+#
+# The pool builds it, in its own environment and at its own paths: a copy
+# of a local target dir would not do. Local builds differ in flags (mold,
+# CARGO_INCREMENTAL), build scripts bake the target dir's absolute path into
+# their outputs, and a runner checkout older than copied artifacts would
+# trust stale units.
+pre-warm-ci POOL="both" REF="main" FRESH="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ POOL }}" in
+        both | main | release) ;;
+        *) echo "pool: main, release or both (got {{ POOL }})" >&2; exit 2 ;;
+    esac
+    fresh=false
+    [ "{{ FRESH }}" = "fresh" ] && fresh=true
+    n=0
+    if [ "{{ POOL }}" != release ]; then
+        gh workflow run checks.yml --ref "{{ REF }}" -f prewarm=true -f fresh="$fresh"
+        echo "pre-warm: task-main (checks.yml) from {{ REF }} (fresh=$fresh)"
+        n=$((n + 1))
+    fi
+    if [ "{{ POOL }}" != main ]; then
+        gh workflow run images.yml --ref "{{ REF }}" -f prewarm=true
+        echo "pre-warm: task-release (images.yml) from {{ REF }}"
+        n=$((n + 1))
+    fi
+    sleep 5
+    gh run list --event workflow_dispatch --limit "$n" \
+        --json databaseId,workflowName,status,headBranch,url -q '.[] | "\(.databaseId)  \(.workflowName)  \(.status)  \(.headBranch)  \(.url)"'
+    echo "watch: gh run watch <id>"
+
 # ── Aliases ──────────────────────────────────────────────────────────────
 
 alias c := check

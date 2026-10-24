@@ -15,24 +15,39 @@
 #                  passed alone but break together, and its green
 #                  `CI passed` is what `just release-tag` requires.
 #
-# WHERE EACH JOB RUNS: all on GitHub's free hosted runners (the repo is
-# public). Nobody waits on this workflow except `release-tag`, so a slower
-# free runner beats a fast billed one (WarpBuild until 2026-10-23).
+# WHERE EACH JOB RUNS. The builds run on THEBATTLESHIP's `task-main`
+# runner pool (self-hosted; ~/.flake hosts/THEBATTLESHIP/github-runners.nix),
+# whose target dir stays warm from one merge to the next, so a merge
+# compiles what it changed rather than the whole workspace (a cold build
+# is 161 CPU-minutes: 40+ on a free 4-vCPU runner, which is what this
+# workflow cost until 2026-10-24). That runner refuses every job that is not
+# a push to main / release/v* / a v* tag or a dispatch (its job gate: the
+# repo is public), so a hotfix PR's builds run on GitHub's free runners.
 #
 #   plan            ubuntu-latest   rustup + cargo-rail (rust-rail), to narrow only
 #   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for pr.yml
-#   lint            ubuntu-latest   nix .#ci + rust-cache (checks-lint): clippy, docs
-#   tests           ubuntu-latest   nix .#ci + rust-cache (checks-tests): the nextest build
-#   wasm            ubuntu-latest   nix .#ci + rust-cache (checks-wasm): 3 min
+#   lint            task-main       clippy, docs
+#   tests           task-main       the nextest build + rail evidence
+#   wasm            task-main       the wasm32 check
+#
+# A release commit's run is the same dev-profile build as any merge, so it
+# runs on `task-main` too, on the same warm target dirs; it just has a
+# concurrency group of its own that no later merge cancels. (The
+# `task-release` pool holds only release-profile artifacts: images.yml and
+# desktop-cache.yml.) Three instances, so a run's lint, tests and wasm build
+# at once, each on the pool's warm target dir for its kind
+# ($TASK_CACHE_DIR/<kind>).
 #   checks-passed   ubuntu-latest   the aggregator
 #
-# Each build kind restores its dependencies from a rust-cache saved on
-# main (.github/actions/hosted-nix-rust); the workspace's own crates
-# rebuild every run. The runner's unused SDKs are deleted first for disk.
+# (A hotfix PR runs lint/tests/wasm on ubuntu-latest instead, restoring
+# dependencies from a rust-cache saved on main: .github/actions/
+# hosted-nix-rust. On task-main, .github/actions/battleship-nix-rust.)
 #
-# Toolchain comes from the repo flake: every job enters `.#ci` once (rust
-# 1.98 pin, wasm target, clang env for ring, native headers, tailwindcss,
-# cargo-rail) and every later step runs inside it.
+# Toolchain comes from the repo flake: every job enters `.#ci` once (the
+# dated nightly pin, wasm target, clang env for ring, native headers,
+# tailwindcss, cargo-rail) and every later step runs inside it. The
+# parallel front end (`-Zthreads=8`) comes from .cargo/config.toml and
+# joins the mold flag below.
 #
 # CHANGE SELECTION: `cargo rail plan` (the version nix/modules/cargo-rail.nix
 # pins) through cargo's resolved reverse-dependency graph, turned into
@@ -46,7 +61,8 @@
 # changes (.config/rail.toml [plan.work.*]), workspace scope, or any rail
 # failure FAIL OPEN to the full set.
 #
-# CACHE: Swatinem/rust-cache, one entry per build kind (checks-lint,
+# CACHE (hosted runs only; task-main's cache is its own disk):
+# Swatinem/rust-cache, one entry per build kind (checks-lint,
 # checks-tests, checks-wasm), SAVED ONLY ON MAIN. A repo gets 10 GB of
 # Actions cache, evicted LRU across all branches; with main the only
 # writer the budget holds one entry per kind (+ the small rail evidence,
@@ -90,14 +106,37 @@ on:
         description: "Only check crates affected since this ref (e.g. main). Empty = everything."
         required: false
         default: ""
+      # `just pre-warm-ci`: fill a THEBATTLESHIP pool's warm target dirs
+      # ahead of the merges that need them (after a toolchain switch, a
+      # lockfile overhaul or a wiped cache), so no merge pays the cold build.
+      prewarm:
+        description: "Pre-warm only: build lint, tests and wasm into the pool's target dirs; run no tests, post no status."
+        type: boolean
+        default: false
+      fresh:
+        description: "Empty the pool's target dirs first (dead artifacts of the old toolchain go too)."
+        type: boolean
+        default: false
 
-# Nothing on main is ever cancelled by a newer run: every push and
-# dispatch gets its own group (the run id), so each merge's full suite
-# runs to the end and every main commit gets its own `CI passed`. Only a
-# hotfix PR's newer push cancels its older run.
+# WHO CANCELS WHOM:
+#
+#   push to main /      one group per branch, cancel-in-progress: a newer
+#   release/v*          merge cancels the older run, so the runner always
+#                       works on the newest main.
+#   a release commit    (`chore(release): vX.Y.Z`) a group of its OWN, keyed
+#                       by its commit, never cancelled: `just release-tag`
+#                       tags only a commit whose own `CI passed` is green,
+#                       so a merge right behind a release must not cancel
+#                       it. It queues on task-main instead.
+#   hotfix PR           one group per PR; a newer push cancels the older.
+#   dispatch            its own group (the run id): never cancelled.
+#
+# A group holds ONE pending run and a newer arrival replaces it, which is
+# why a release commit never shares a group: it could be dropped while
+# queued even with cancel-in-progress off.
 concurrency:
-  group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore(release):') && format('release-{0}', github.sha) || github.event_name == 'push' && github.ref || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(release):')) }}
 
 env:
   # mold for the host target only -- 326 test binaries get linked on a
@@ -259,7 +298,7 @@ jobs:
   # side, each with its own rust-cache entry.
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
     timeout-minutes: 90
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' }}
@@ -271,8 +310,14 @@ jobs:
           ref: ${{ needs.plan.outputs.ref }}
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
       - uses: ./.github/actions/hosted-nix-rust
+        if: ${{ runner.environment == 'github-hosted' }}
         with:
           kind: lint
+      - uses: ./.github/actions/battleship-nix-rust
+        if: ${{ runner.environment == 'self-hosted' }}
+        with:
+          kind: lint
+          fresh: ${{ inputs.fresh == true }}
       # Every step is a `just ci-*` recipe; the Justfile is the single
       # source of truth, and `just ci` runs the same set locally.
       - name: fmt
@@ -306,7 +351,7 @@ jobs:
 
   tests:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
     # A cold workspace build on 4 vCPUs (dependencies from the rust-cache).
     timeout-minutes: 120
     needs: plan
@@ -315,23 +360,48 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
+          # The last 50 first-parent commits: a pool run plans against the
+          # newest of them whose tests passed (Tests step, below).
+          fetch-depth: 51
       - uses: ./.github/actions/hosted-nix-rust
+        if: ${{ runner.environment == 'github-hosted' }}
         with:
           kind: tests
+      - uses: ./.github/actions/battleship-nix-rust
+        if: ${{ runner.environment == 'self-hosted' }}
+        with:
+          kind: tests
+          fresh: ${{ inputs.fresh == true }}
 
       # Full runs first record rail evidence for this commit: the recorder
       # wraps rustc for one `cargo test --no-run` (units already fresh keep
       # their dep-info, so this compiles nothing nextest wouldn't), and the
       # nextest run after it finds every unit fresh. Best effort: a failure
       # only means later plans against this commit widen.
+      #
+      # On a THEBATTLESHIP pool the evidence also goes to the pool's shared
+      # store ($TASK_CACHE_DIR/rail-evidence/<sha>.json), but only once this
+      # commit's tests PASSED. A merge to main then plans its tests against
+      # the newest first-parent ancestor in that store, the last commit
+      # whose tests passed here (a cancelled or red run leaves no evidence,
+      # so its changes stay in the diff), and runs only the tests the diff
+      # affects; a docs-only merge runs none. Evidence binds to the cargo
+      # environment, which every instance of a pool shares exactly
+      # (CARGO_TARGET_DIR = $TASK_CACHE_DIR/tests). Release commits, hotfix
+      # branches and dispatches still run every test. No evidence, a failed
+      # plan or a CI input in the diff all mean every test.
       - name: Tests
         env:
-          # A hosted runner's 4 vCPUs: more test threads than cores makes the
-          # dial-by-endpoint tests time out under load (STA-369).
-          TASK_CI_TEST_THREADS: "4"
+          # More test threads than the machine can carry makes the
+          # dial-by-endpoint tests time out under load (STA-369): 4 on a
+          # hosted runner's 4 vCPUs, 8 on THEBATTLESHIP's 32 cores (shared
+          # with the run's other jobs and the engineers' own work).
+          TASK_CI_TEST_THREADS: ${{ runner.environment == 'self-hosted' && '8' || '4' }}
           TASK_CI_TEST_LOG: ${{ runner.temp }}/nextest-ci.log
           TASK_CI_TEST_FILTER: ${{ needs.plan.outputs.test_filter }}
           RECORD: ${{ needs.plan.outputs.record }}
+          NARROW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):') }}
+          PREWARM: ${{ inputs.prewarm == true }}
         run: |
           # ~/rail-evidence: the literal path the hosted plan job restores
           # (see its restore step). Emptied first, so a failed recording
@@ -343,6 +413,45 @@ jobs:
           # the recorder's build died at task-app-web after ~18 minutes on
           # every run, recorded nothing, and the test build started over.
           just css
+
+          # Pre-warm (`just pre-warm-ci`): the test build, nothing run, no
+          # evidence (evidence marks a commit whose tests PASSED here).
+          if [ "${PREWARM}" = "true" ]; then
+            cargo nextest run --profile ci --workspace --locked --no-run
+            exit 0
+          fi
+
+          pool=""
+          if [ -n "${TASK_CACHE_DIR:-}" ]; then
+            pool="$TASK_CACHE_DIR/rail-evidence"
+            mkdir -p "$pool"
+          fi
+          if [ -n "$pool" ] && [ "${NARROW}" = "true" ]; then
+            base=""
+            for c in $(git rev-list --first-parent --max-count=50 HEAD^ 2>/dev/null); do
+              if [ -f "$pool/$c.json" ]; then base="$c"; break; fi
+            done
+            plan="${RUNNER_TEMP}/rail-plan.json"
+            if [ -z "$base" ]; then
+              echo "plan: no passing commit in the last 50 has evidence in $pool: every test"
+            elif cargo rail plan --from "$base" --to HEAD --evidence "$pool/$base.json" --json >"$plan" \
+              && gates="$(python3 scripts/ci-rail-plan.py "$plan")"; then
+              cargo rail plan --from "$base" --to HEAD --evidence "$pool/$base.json" --explain-work cargo.test || true
+              full="$(sed -n 's/^full=//p' <<<"$gates")"
+              tests="$(sed -n 's/^tests=//p' <<<"$gates")"
+              if [ "$full" = "true" ]; then
+                TASK_CI_TEST_FILTER=""
+              elif [ "$tests" = "false" ]; then
+                TASK_CI_TEST_FILTER="none()"
+              else
+                TASK_CI_TEST_FILTER="$(sed -n 's/^test_filter=//p' <<<"$gates")"
+              fi
+              echo "plan: against ${base:0:12} (last passing commit): ${TASK_CI_TEST_FILTER:-every test}"
+            else
+              echo "::warning::rail plan against ${base:0:12} failed: every test"
+            fi
+          fi
+
           if [ "${RECORD}" = "true" ]; then
             mkdir -p "${EVIDENCE_DIR}"
             cargo rail plan evidence --work cargo.test \
@@ -350,7 +459,13 @@ jobs:
               -- test --workspace --locked --no-run \
               || echo "::warning::rail evidence not recorded; later plans against this commit widen"
           fi
-          just ci-tests
+          TASK_CI_TEST_FILTER="${TASK_CI_TEST_FILTER}" just ci-tests
+
+          # Green: this commit is the next merge's base.
+          if [ -n "$pool" ] && [ -f "${EVIDENCE_DIR}/cargo.test.json" ]; then
+            cp "${EVIDENCE_DIR}/cargo.test.json" "$pool/$(git rev-parse HEAD).json"
+            find "$pool" -maxdepth 1 -name '*.json' -printf '%T@ %p\n' | sort -rn | tail -n +51 | cut -d' ' -f2- | xargs -r -d '\n' rm -f
+          fi
       - name: Evidence key
         id: evidence
         if: ${{ always() && needs.plan.outputs.record == 'true' }}
@@ -379,7 +494,7 @@ jobs:
 
   wasm:
     name: Wasm
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.skip != 'true' && needs.plan.outputs.wasm == 'true' }}
@@ -390,8 +505,14 @@ jobs:
       # wasm32 target + ring's clang env come from the flake CI shell,
       # entered once for every later step; target dir ./target.
       - uses: ./.github/actions/hosted-nix-rust
+        if: ${{ runner.environment == 'github-hosted' }}
         with:
           kind: wasm
+      - uses: ./.github/actions/battleship-nix-rust
+        if: ${{ runner.environment == 'self-hosted' }}
+        with:
+          kind: wasm
+          fresh: ${{ inputs.fresh == true }}
       #
       # Check via task-app-web, NOT `-p ui -p task-ui-core` directly.
       # getrandom on wasm needs BOTH halves: the `--cfg
@@ -451,7 +572,7 @@ jobs:
       # contributor without the hook, a dirty tree, SKIP=local-ci): a green
       # dispatched FULL run on the branch stands in for it.
       - name: Post Local CI for a green dispatched full run
-        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.base == '' }}
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.base == '' && inputs.prewarm != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

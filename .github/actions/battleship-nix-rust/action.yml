@@ -1,0 +1,61 @@
+# Set up a THEBATTLESHIP `task-main` runner (self-hosted NixOS) for one
+# build kind of checks.yml: the hosted twin is
+# .github/actions/hosted-nix-rust.
+#
+# Nothing to install and nothing to restore: nix is the host's, the nix
+# store is warm, and the pool's shared cache ($TASK_CACHE_DIR, on the dev
+# drive, kept across jobs, restarts and reboots; ~/.flake
+# hosts/THEBATTLESHIP/github-runners.nix) holds one target dir PER BUILD
+# KIND that every run of the pool builds on. A merge therefore compiles only
+# the crates it changed and their dependents, not the whole workspace.
+#
+# Per kind, because lint (check-mode metadata), tests (codegen) and wasm
+# (another target triple) share no artifacts and a run's three jobs build on
+# three instances at once. Two runs on the same kind (a cancelled run still
+# winding down) serialise on cargo's own target-dir lock.
+name: THEBATTLESHIP nix + warm target
+description: Enter .#ci on a THEBATTLESHIP Task runner and point cargo at the pool's warm target dir for this build kind.
+inputs:
+  kind:
+    description: Build kind (lint, tests, wasm, release); names the target dir.
+    required: true
+  fresh:
+    description: Empty the kind's target dir first (`just pre-warm-ci fresh`, after a toolchain switch).
+    required: false
+    default: "false"
+  max-gb:
+    description: Start the kind's target dir over when it outgrows this (toolchain bumps and lockfile churn leave dead artifacts the sweep never sees).
+    required: false
+    default: "100"
+runs:
+  using: composite
+  steps:
+    - name: Warm target dir
+      shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+        FRESH: ${{ inputs.fresh }}
+        MAX_GB: ${{ inputs.max-gb }}
+      run: |
+        set -euo pipefail
+        [ -n "${TASK_CACHE_DIR:-}" ] || { echo "::error::no TASK_CACHE_DIR: not a Task pool runner (~/.flake hosts/THEBATTLESHIP/github-runners.nix)"; exit 1; }
+        dir="$TASK_CACHE_DIR/$KIND"
+        if [ "$FRESH" = "true" ]; then
+          echo "fresh: emptying $dir"
+          rm -rf "$dir"
+        fi
+        mkdir -p "$dir"
+        gb="$(du -s --block-size=1G "$dir" | cut -f1)"
+        if [ "$gb" -gt "$MAX_GB" ]; then
+          echo "::warning::$dir is ${gb} GB (cap ${MAX_GB}): starting it over"
+          rm -rf "$dir" && mkdir -p "$dir"
+          gb=0
+        fi
+        echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+        echo "$KIND: target $dir (${gb} GB warm)"
+        df -h "$TASK_CACHE_DIR" | tail -1
+
+    - name: Enter .#ci
+      uses: nicknovitski/nix-develop@v1
+      with:
+        arguments: --accept-flake-config .#ci
