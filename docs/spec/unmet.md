@@ -611,7 +611,9 @@ run `crdt::docs::DocsDriver`. Verified by `app_docs_e2e` and architect's
   ids;
 - rename and delete while offline: the driver does them online only;
 - sharing a doc beyond its org;
-- device-to-device exchange (`DocPeer`) for app docs;
+- device-to-device sync for app docs inside Task itself: architect 0.9.29's
+  `DocsDriver::host` / `run_peer` provide it, and Studio drives it; Task's
+  own device nodes do not run a driver yet;
 - blobs a doc references (planned: architect's blobs layer);
 - any UI in Task.
 

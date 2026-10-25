@@ -2584,6 +2584,8 @@ pub async fn plant_app_docs(org_root: &org_proto::OrgRoot, slug: &str) -> eyre::
             kind: d.kind.into(),
             name: d.name.into(),
             parent: d.parent.map(app_doc_id).transpose()?,
+            // Planted here once and adopted by every device: one history.
+            lineage: crdt::docs::Lineage::Strict,
         })
         .await
         .map_err(|e| eyre::eyre!("register \"{}\": {e}", d.name))?;
