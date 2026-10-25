@@ -40,41 +40,40 @@ pub fn is_issuer_token(token: &str) -> bool {
     token.split('.').filter(|p| !p.is_empty()).count() == 3
 }
 
-/// What this device calls itself to the account's others.
+/// What this device calls itself to the account's others: the name every
+/// FTS app on it gives (`auth_client::this_device::name`: the Mac's
+/// computer name, the host name, the iPad's or iPhone's name).
 #[must_use]
 pub fn device_name(person: &str) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    let name = auth_client::this_device::name();
+    #[cfg(target_arch = "wasm32")]
+    let name = "Browser".to_owned();
+    with_owner(person, &name)
+}
+
+/// iOS tells an app without the user-assigned-device-name entitlement
+/// only the model ("iPhone", "iPad"): say whose it is.
+fn with_owner(person: &str, name: &str) -> String {
     let first = person.split_whitespace().next().unwrap_or("").trim();
-    let kind = if cfg!(target_os = "ios") {
-        "iPhone".to_owned()
+    let bare_model = matches!(name, "iPhone" | "iPad" | "iPod touch");
+    if bare_model && !first.is_empty() {
+        format!("{first}'s {name}")
     } else {
-        host_name().unwrap_or_else(|| "Computer".to_owned())
-    };
-    if first.is_empty() || !cfg!(target_os = "ios") {
-        kind
-    } else {
-        format!("{first}'s {kind}")
+        name.to_owned()
     }
 }
 
-fn host_name() -> Option<String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::env::var("HOSTNAME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                std::process::Command::new("hostname")
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-                    .filter(|s| !s.is_empty())
-            })
-            .map(|s| s.trim_end_matches(".local").to_owned())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
+#[cfg(test)]
+mod name_tests {
+    use super::with_owner;
+
+    #[test]
+    fn a_bare_model_says_whose_and_a_real_name_stands() {
+        assert_eq!(with_owner("Cody Wright", "iPad"), "Cody's iPad");
+        assert_eq!(with_owner("Cody", "iPhone"), "Cody's iPhone");
+        assert_eq!(with_owner("", "iPad"), "iPad");
+        assert_eq!(with_owner("Cody", "Cody's Mac mini"), "Cody's Mac mini");
     }
 }
 

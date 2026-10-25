@@ -260,13 +260,20 @@ impl NodeHost for Host {
     }
 
     fn account_sync(&self, request: AccountSyncRequest) -> NodeFuture<AccountReport> {
-        use task_server::account_devices::{ThisDevice, device_id, install_id, sync_account};
+        use task_server::account_devices::{
+            ThisDevice, device_id, install_id, previous_install_id, settle_install_id,
+            sync_account,
+        };
         use vox_core::FromVoxLane as _;
         let node = self.node();
         let data_root = self.opts.data_root.clone();
         Box::pin(on_node(async move {
             let node = node.await?;
+            // The platform's install id, the one every FTS app on this
+            // device registers under; the random one an older Task kept
+            // is retired once.
             let install = install_id(&data_root).map_err(|e| format!("install id: {e:#}"))?;
+            let previous = previous_install_id(&data_root, install);
             let me = ThisDevice {
                 device_id: device_id(install, &request.account),
                 account: request
@@ -275,11 +282,16 @@ impl NodeHost for Host {
                     .map_err(|_| format!("the account id is not a uuid: {}", request.account))?,
                 name: request.device_name,
                 platform: request.platform,
+                retire: previous.map(|p| device_id(p, &request.account)),
             };
             let issuer = architect_auth::DeviceServiceClient::from_vox_lane(request.issuer, None);
             let pass = sync_account(&node, &issuer, &request.token, &me)
                 .await
                 .map_err(|e| format!("account sync: {e:#}"))?;
+            if previous.is_some() && pass.retired {
+                settle_install_id(&data_root, install)
+                    .map_err(|e| format!("settle the install id: {e:#}"))?;
+            }
             Ok(AccountReport {
                 slug: pass.slug,
                 joined: pass.joined,

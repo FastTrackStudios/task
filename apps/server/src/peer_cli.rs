@@ -27,7 +27,7 @@ use eyre::{WrapErr as _, eyre};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::account_devices::{ThisDevice, device_id, install_id, sync_account};
+use crate::account_devices::{ThisDevice, device_id, file_install_id, sync_account};
 use crate::local_node::{LocalNode, NodeOptions};
 
 /// The issuer a personal server signs in at unless told otherwise.
@@ -233,7 +233,10 @@ async fn device_sign_in(issuer: &str) -> eyre::Result<PeerAccount> {
 }
 
 fn this_device(root: &Path, account: &PeerAccount) -> eyre::Result<ThisDevice> {
-    let install = install_id(root)?;
+    // The data root's own id, not the machine's: a server's machine id
+    // can be one a container image bakes in for every replica, and no
+    // other FTS app runs here to share a row with.
+    let install = file_install_id(root)?;
     let host = std::env::var("TASK_PEER_NAME")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -253,6 +256,7 @@ fn this_device(root: &Path, account: &PeerAccount) -> eyre::Result<ThisDevice> {
             .user_id
             .parse()
             .map_err(|_| eyre!("the account id is not a uuid: {}", account.user_id))?,
+        retire: None,
     })
 }
 

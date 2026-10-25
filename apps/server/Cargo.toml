@@ -232,6 +232,9 @@ chrono.workspace = true
 # `action-list`: the MCP pilot tools (`actions/`).
 architect = { workspace = true, features = ["server", "local", "release", "action-list"] }
 architect-auth = { workspace = true, features = ["full"] }
+# `this_device`: the install id every FTS app on a device derives alike
+# (`account_devices`), so Task and Studio are one device to the issuer.
+auth-client = { workspace = true }
 architect-permissions.workspace = true
 architect-permissions-proto.workspace = true
 share-proto.workspace = true
