@@ -367,6 +367,17 @@ Deleting an app doc leaves a tombstone in the catalog. A device that was away
 learns of it on reconnect. The id cannot be registered again, and its content
 is no longer served.
 
+### A doc every device makes is one doc
+
+t[offline.app-docs.merge]
+An app doc registered with `Merge` lineage is one that every device makes
+under the same derived id (a rig's library), offline, before any of them has
+synced. When two such copies meet, the org merges them instead of refusing
+the second: both devices' edits survive, entry by entry. The first
+registration sets the policy and a later one cannot change it. A `Strict`
+doc (the default) made twice is refused as another history; the device
+reports it and can take the org's copy.
+
 ### App docs answer the org's members
 
 t[offline.app-docs.access]
@@ -420,6 +431,7 @@ app never claims a change synced that has not.
 | `offline.server-peer` | Unit: `peer_cli` (the issuer's vox lane, the account kept owner-only). The pass itself is `offline.account`'s e2e. Not yet: an e2e of `task-server peer` against an in-process issuer, the session's refresh |
 | `offline.doc.access` | e2e: a document for a path the person can't write is refused and kept local. Today: `offline_doc_e2e::refused_documents_stay_on_the_device` (foreign lineage, unadmitted path); the per-person write refusal itself is `wiki_edits` (`open_collab` refused for a non-Editor) |
 | `offline.app-docs.create`, `offline.app-docs.replica`, `offline.app-docs.tombstone` | e2e: `app_docs_e2e::app_docs_made_and_edited_apart_converge_and_survive_a_restart` (two `DocsDriver` devices over WebSocket; a project and its branch made offline; edits apart converge; a delete reaches both; a second server over the same data root serves both to a new device). Architect: `crdt/tests/docs.rs` (parent-first adoption, a received edit surviving an offline restart) |
+| `offline.app-docs.merge` | e2e: `app_docs_e2e::a_merge_doc_made_on_two_devices_offline_converges_through_the_org` (one id made on two devices offline, each editing its own entry; both converge, nothing refused, the org keeps `Merge`). Architect: `crdt/tests/docs.rs` (Merge converges; Strict refused then `reset`; peers with the hub down) |
 | `offline.app-docs.access` | e2e: `app_docs_e2e::only_members_reach_the_catalog_and_the_content` (enforcing; a member registers, anonymous is refused on list, create, `changes` and `DocSync`) |
 | `offline.outbox` | unit tests over a fake transport; e2e: timer started offline lands on reconnect |
 | `offline.boot`, `offline.visible` | iOS simulator check with the demo server stopped (manual until a UI harness exists) |

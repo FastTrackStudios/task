@@ -128,6 +128,9 @@ pub async fn sync_account(
             name: me.name.clone(),
             platform: me.platform.clone(),
             endpoint_id,
+            // Task's nodes dial each other by endpoint id with address
+            // lookup; they do not pin a relay.
+            relay_url: None,
             offer_org,
         };
     let held_endpoint = |dir: &architect_auth::DeviceDirectory| {

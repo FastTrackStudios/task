@@ -84,6 +84,7 @@ fn project(name: &str) -> CreateDoc {
         kind: "session".into(),
         name: name.into(),
         parent: None,
+        lineage: crdt::docs::Lineage::Strict,
     }
 }
 
@@ -174,6 +175,63 @@ async fn app_docs_made_and_edited_apart_converge_and_survive_a_restart() {
         "the tombstone survives the restart"
     );
     run_fresh.abort();
+}
+
+// t[verify offline.app-docs.merge] — a doc every device makes offline
+// under one derived id, with Merge lineage, converges with both
+// devices' edits instead of being refused
+#[tokio::test(flavor = "multi_thread")]
+async fn a_merge_doc_made_on_two_devices_offline_converges_through_the_org() {
+    let (url, _tmp) = support::boot_ws().await.expect("boot");
+    let (laptop, phone) = (device(), device());
+    let id = Uuid::new_v4(); // stands for the rig's derived (v5) id
+    let rig = || CreateDoc {
+        doc_id: id,
+        kind: "rig".into(),
+        name: "Bass rig".into(),
+        parent: None,
+        lineage: crdt::docs::Lineage::Merge,
+    };
+    let put = |doc: &CrdtDoc, key: &str, value: &str| {
+        doc.loro().get_map("library").insert(key, value).unwrap();
+        doc.loro().commit();
+    };
+    let get = |doc: &CrdtDoc, key: &str| {
+        doc.loro()
+            .get_map("library")
+            .get(key)
+            .and_then(|v| v.into_value().ok())
+            .and_then(|v| v.into_string().ok())
+            .map(|s| s.to_string())
+    };
+    let on_laptop = laptop.create(rig()).await.unwrap();
+    put(&on_laptop, "amp", "laptop");
+    let on_phone = phone.create(rig()).await.unwrap();
+    put(&on_phone, "cab", "phone");
+    let mut refused = phone.sync_events();
+
+    let run_laptop = online(&laptop, lane(&url).await);
+    let run_phone = online(&phone, lane(&url).await);
+    eventually("both copies hold both entries", async || {
+        [&on_laptop, &on_phone].iter().all(|d| {
+            get(d, "amp").as_deref() == Some("laptop") && get(d, "cab").as_deref() == Some("phone")
+        })
+    })
+    .await;
+    while let Ok(ev) = refused.try_recv() {
+        assert!(
+            !matches!(ev, crdt::docs::DocSyncEvent::Refused { .. }),
+            "{ev:?}"
+        );
+    }
+    let docs: DocsClient = client(&url).await;
+    assert_eq!(
+        docs.get(id).await.unwrap().lineage,
+        crdt::docs::Lineage::Merge,
+        "the org keeps the policy"
+    );
+    run_laptop.abort();
+    run_phone.abort();
 }
 
 /// An ENFORCING server with one org, for the access checks.
