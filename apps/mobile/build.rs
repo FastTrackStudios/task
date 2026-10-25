@@ -181,8 +181,14 @@ fn app_intents_metadata(
         .status()
         .expect("run appintentsmetadataprocessor");
     assert!(status.success(), "appintentsmetadataprocessor failed");
-    // OUT_DIR is target/<triple>/<profile>/build/<pkg>-<hash>/out.
-    if let Some(profile_dir) = out.ancestors().nth(3) {
+    // OUT_DIR is target/<triple>/<profile>/build/<pkg>-<hash>/out, or
+    // build/<pkg>/<hash>/out under nightly cargo's new build-dir layout,
+    // so the profile dir is the parent of `build`, not a fixed depth up.
+    let profile_dir = out
+        .ancestors()
+        .find(|p| p.file_name().is_some_and(|n| n == "build"))
+        .and_then(|build| build.parent());
+    if let Some(profile_dir) = profile_dir {
         let dest = profile_dir.join("appintents");
         let _ = std::fs::remove_dir_all(&dest);
         copy_dir(&staged, &dest);
