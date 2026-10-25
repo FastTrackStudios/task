@@ -251,6 +251,13 @@ expect_fail "stamp refuses a non-X.Y.Z" R stamp 26.10
 echo "=== the tag guard (every tag-triggered job, after stamp)"
 expect_ok "tag-guard on stamped v26.10.1" env GITHUB_REF=refs/tags/v26.10.1 bash scripts/release.sh tag-guard
 expect_ok "tag-guard with GH_TOKEN: CI passed green" env GITHUB_REF=refs/tags/v26.10.1 GH_TOKEN=x bash scripts/release.sh tag-guard
+# A tag build's checkout (actions/checkout) rewrites the tag as a plain
+# ref to its commit, while origin's is annotated: the guard's fetch must
+# take origin's rather than refuse to clobber it (v26.10.2's Deploy did).
+eq "  the sandbox's tag is annotated" "$(git cat-file -t refs/tags/v26.10.1)" tag
+git update-ref refs/tags/v26.10.1 "$(git rev-parse 'v26.10.1^{commit}')"
+expect_ok "tag-guard after the checkout made the tag a plain ref" env GITHUB_REF=refs/tags/v26.10.1 bash scripts/release.sh tag-guard
+eq "  ...and origin's annotated tag is back" "$(git cat-file -t refs/tags/v26.10.1)" tag
 SHIM_CHECK="completed failure" expect_fail "tag-guard with GH_TOKEN: red CI passed" env GITHUB_REF=refs/tags/v26.10.1 GH_TOKEN=x bash scripts/release.sh tag-guard
 expect_fail "tag-guard: a branch ref" env GITHUB_REF=refs/heads/main bash scripts/release.sh tag-guard
 expect_fail "tag-guard: the checkout is another tag's" env GITHUB_REF=refs/tags/v26.10.0 bash -c 'bash scripts/release.sh stamp v26.10.0 && bash scripts/release.sh tag-guard'

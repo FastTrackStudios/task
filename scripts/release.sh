@@ -202,8 +202,14 @@ count_between() {
 
 # `git fetch` that FAILS loudly: a guard or a release that cannot see
 # origin must never read that as "nothing there".
+#
+# `--force`: on a tag build, actions/checkout writes the tag as a plain
+# ref to the tagged commit (`+<sha>:refs/tags/vX.Y.Z`), and `just release`
+# pushes an annotated tag, so a plain `--tags` fetch refuses to "clobber"
+# the local copy and fails, which this would report as origin being
+# unreachable. Origin's tags are the truth here: take them.
 fetch() { # <refspec>...
-    git fetch --quiet --tags origin "$@" || die "cannot fetch from origin ($*): network or auth problem; refusing to guess"
+    git fetch --quiet --tags --force origin "$@" || die "cannot fetch from origin ($*): network or auth problem; refusing to guess"
 }
 
 # Every release line on origin: main and the hotfix branches release/v*.
@@ -267,7 +273,7 @@ newest_green() { # <line> [since]
 
 cmd_version() { version_at "$@"; } # [rev]
 cmd_next() {
-    git fetch --quiet --tags origin 2>/dev/null || note "offline: next version from the local tags"
+    git fetch --quiet --tags --force origin 2>/dev/null || note "offline: next version from the local tags"
     next_version
 }
 
@@ -445,7 +451,7 @@ cmd_notes() { # [TAG|REV]
 }
 
 cmd_plan() {
-    git fetch --quiet --tags origin "+refs/heads/$MAIN_BRANCH:refs/remotes/origin/$MAIN_BRANCH" 2>/dev/null \
+    git fetch --quiet --tags --force origin "+refs/heads/$MAIN_BRANCH:refs/remotes/origin/$MAIN_BRANCH" 2>/dev/null \
         || note "offline: planning from the local origin/$MAIN_BRANCH and tags"
     local ref="origin/$MAIN_BRANCH" tag mtag next
     tag="$(latest_tag)"; mtag="$(last_tag "$ref")"; next="$(next_version)"
