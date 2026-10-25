@@ -75,7 +75,10 @@ jobs:
           PREWARM: ${{ inputs.prewarm == true }}
         run: |
           set -euo pipefail
-          git fetch --quiet --tags origin
+          # --force: on a tag push the checkout wrote the tag as a plain
+          # ref to its commit, and origin's is annotated; without it git
+          # refuses to clobber the tag and this step fails (v26.10.3).
+          git fetch --quiet --tags --force origin
           if [ "$PREWARM" = true ]; then
             echo "pre-warm: build $GITHUB_SHA's release artifacts, publish nothing"
             printf 'build=true\nsha=%s\ntag=\ntags=\nprewarm=true\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
