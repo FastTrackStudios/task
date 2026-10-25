@@ -387,7 +387,7 @@ fi
 
 # The app's App Intents metadata (apps/mobile/build.rs): without it the
 # Capture and Timer controls cannot run their intent in the app.
-INTENTS="$(ls -dt "$ROOT"/target/aarch64-apple-ios/*/appintents/Metadata.appintents 2>/dev/null | head -1)"
+INTENTS="$(ls -dt "$ROOT"/target/aarch64-apple-ios/*/appintents/Metadata.appintents 2>/dev/null | head -1 || true)"
 if [ -n "$INTENTS" ]; then
     rm -rf "$APP/Metadata.appintents"
     cp -R "$INTENTS" "$APP/"
