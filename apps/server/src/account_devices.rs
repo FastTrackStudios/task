@@ -37,30 +37,67 @@ use uuid::Uuid;
 use crate::local_node::{JoinSpec, LocalNode, PERSONAL_SLUG};
 
 /// The install's own id, beside `orgs/`: made once, kept with the data.
+/// The id where the platform gives none, and the record of the id an
+/// older Task registered under (see [`previous_install_id`]).
 pub const INSTALL_FILE: &str = "install-id";
 
-/// The install's id, made on first use.
+/// This device's install id: the platform's, which every FastTrackStudio
+/// app on the device derives alike (`auth_client::this_device`), so Task
+/// and Studio on one iPad or Mac are one device to the issuer. Where the
+/// platform gives none, the one made once in `<data root>/install-id`.
 pub fn install_id(data_root: &Path) -> eyre::Result<Uuid> {
-    let path = data_root.join(INSTALL_FILE);
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(id) = text.trim().parse::<Uuid>() {
-            return Ok(id);
-        }
+    match auth_client::this_device::install_id() {
+        Some(id) => Ok(id),
+        None => file_install_id(data_root),
+    }
+}
+
+/// The install id kept in `<data root>/install-id`, made on first use:
+/// one per data root. What a server (`task-server peer`) registers
+/// under, where the machine's id may be one a container image shares.
+pub fn file_install_id(data_root: &Path) -> eyre::Result<Uuid> {
+    if let Some(id) = read_install_file(data_root) {
+        return Ok(id);
     }
     let id = Uuid::new_v4();
-    std::fs::create_dir_all(data_root).wrap_err("create the data root")?;
-    std::fs::write(&path, format!("{id}\n"))
-        .wrap_err_with(|| format!("write {}", path.display()))?;
+    write_install_file(data_root, id)?;
     Ok(id)
+}
+
+/// The install id an older Task registered under, when it is not
+/// `current`: the random one it kept in the file. Its device row is
+/// retired once ([`ThisDevice::retire`]), then [`settle_install_id`]
+/// rewrites the file.
+#[must_use]
+pub fn previous_install_id(data_root: &Path, current: Uuid) -> Option<Uuid> {
+    read_install_file(data_root).filter(|id| *id != current)
+}
+
+/// The file says `current` from now on: its earlier id is retired.
+pub fn settle_install_id(data_root: &Path, current: Uuid) -> eyre::Result<()> {
+    write_install_file(data_root, current)
+}
+
+fn read_install_file(data_root: &Path) -> Option<Uuid> {
+    std::fs::read_to_string(data_root.join(INSTALL_FILE))
+        .ok()
+        .and_then(|text| text.trim().parse::<Uuid>().ok())
+}
+
+fn write_install_file(data_root: &Path, id: Uuid) -> eyre::Result<()> {
+    let path = data_root.join(INSTALL_FILE);
+    std::fs::create_dir_all(data_root).wrap_err("create the data root")?;
+    std::fs::write(&path, format!("{id}\n")).wrap_err_with(|| format!("write {}", path.display()))
 }
 
 /// The id this install registers under for `account` (the issuer's
 /// subject). Per account, so an install signed in as somebody else is a
 /// different device to the issuer — which refuses an id another account
-/// holds.
+/// holds. The same derivation as `auth_client::this_device::device_id`,
+/// which Studio registers under.
 #[must_use]
 pub fn device_id(install: Uuid, account: &str) -> Uuid {
-    Uuid::new_v5(&install, account.as_bytes())
+    auth_client::this_device::device_id(install, account)
 }
 
 /// Who this device is, as it tells the issuer.
@@ -73,11 +110,19 @@ pub struct ThisDevice {
     /// device's own personal org and the shared one, since a device
     /// signed in as somebody is that person's device.
     pub account: Uuid,
+    /// The id this device was registered under before it took the
+    /// platform's install id (an older Task's random one): its row is
+    /// taken off the account by the pass, so the device is listed once.
+    pub retire: Option<Uuid>,
 }
 
 /// What a pass did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountSync {
+    /// The [`ThisDevice::retire`] row is gone from the account (taken off
+    /// by this pass, or never there): the caller can settle the install
+    /// id ([`settle_install_id`]).
+    pub retired: bool,
     /// The shared org's local slug, once this device holds it.
     pub slug: Option<String>,
     /// Whether this pass joined it.
@@ -145,6 +190,16 @@ pub async fn sync_account(
         .register_device(token.to_owned(), register(None, offer(node)))
         .await
         .map_err(|e| eyre::eyre!("register with the issuer: {e:?}"))?;
+    let stale = stale_rows(me, &first.devices);
+    let retired = retire(issuer, token, me, &first).await;
+    // The other devices: never this one under an old row.
+    let others = |devices: &[PeerDevice]| -> Vec<PeerDevice> {
+        devices
+            .iter()
+            .filter(|d| d.device_id != me.device_id && !stale.contains(&d.device_id))
+            .cloned()
+            .collect()
+    };
     // This device's own personal org is the signed-in person's, whatever
     // the account shares (never the demo: its owner is not `personal`).
     if node.owner().org == PERSONAL_SLUG {
@@ -156,7 +211,8 @@ pub async fn sync_account(
         // Nothing to share yet: this node offered nothing (an example
         // studio) and no other device has.
         return Ok(AccountSync {
-            others: others(&first.devices, me.device_id),
+            retired,
+            others: others(&first.devices),
             ..AccountSync::default()
         });
     };
@@ -166,15 +222,14 @@ pub async fn sync_account(
     let slug = match node.slug_of(org.id) {
         Some(slug) => slug,
         None => {
-            let Some(peer) = first
-                .devices
-                .iter()
-                .filter(|d| d.device_id != me.device_id)
-                .find_map(|d| d.endpoint_id.clone())
+            let Some(peer) = others(&first.devices)
+                .into_iter()
+                .find_map(|d| d.endpoint_id)
             else {
                 // The device that set it has not said where it is yet.
                 return Ok(AccountSync {
-                    others: others(&first.devices, me.device_id),
+                    retired,
+                    others: others(&first.devices),
                     ..AccountSync::default()
                 });
             };
@@ -217,13 +272,14 @@ pub async fn sync_account(
         .wrap_err("let the account into its orgs here")?;
 
     // 5. Let the others in.
-    let others = others(&dir.devices, me.device_id);
+    let others = others(&dir.devices);
     let mut admitted = Vec::new();
     for peer in others.iter().filter_map(|d| d.endpoint_id.as_deref()) {
         node.admit_peer(&slug, peer)?;
         admitted.push(peer.to_owned());
     }
     Ok(AccountSync {
+        retired,
         slug: Some(slug),
         joined,
         admitted,
@@ -231,12 +287,49 @@ pub async fn sync_account(
     })
 }
 
-fn others(devices: &[PeerDevice], me: Uuid) -> Vec<PeerDevice> {
+/// The account's other rows that are this device: [`ThisDevice::retire`]
+/// (the id an older Task registered under), and any row with this
+/// device's name and platform under another id (made by an app before
+/// every app took its id from `auth_client::this_device`, or by a
+/// reinstall that lost its install-id file). The same name-and-platform
+/// rule `DeviceRegistration::is_listed` uses to tell an app the device is
+/// already listed.
+fn stale_rows(me: &ThisDevice, devices: &[PeerDevice]) -> Vec<Uuid> {
+    let name = me.name.trim();
     devices
         .iter()
-        .filter(|d| d.device_id != me)
-        .cloned()
+        .filter(|d| d.device_id != me.device_id)
+        .filter(|d| {
+            Some(d.device_id) == me.retire
+                || (d.platform == me.platform && d.name.trim().eq_ignore_ascii_case(name))
+        })
+        .map(|d| d.device_id)
         .collect()
+}
+
+/// Take this device's [`stale_rows`] off the account, once it holds its
+/// own row. `true` when none is left: taken off now, or none there (a
+/// pass after an earlier one whose file write was lost finds nothing).
+/// A refusal is logged and retried on the next pass: it never fails one.
+async fn retire(
+    issuer: &impl DeviceService,
+    token: &str,
+    me: &ThisDevice,
+    dir: &architect_auth::DeviceDirectory,
+) -> bool {
+    let mut all_gone = true;
+    for old in stale_rows(me, &dir.devices) {
+        match issuer.forget_device(token.to_owned(), old).await {
+            Ok(()) => {
+                info!(device = %me.device_id, retired = %old, "account: a stale row of this device is off the account");
+            }
+            Err(e) => {
+                tracing::warn!(retired = %old, error = ?e, "account: a stale row of this device is still listed");
+                all_gone = false;
+            }
+        }
+    }
+    all_gone
 }
 
 fn mine(dir: &architect_auth::DeviceDirectory, me: Uuid) -> Option<String> {
@@ -263,5 +356,68 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = install_id(dir.path()).unwrap();
         assert_eq!(install_id(dir.path()).unwrap(), a);
+        let f = file_install_id(dir.path()).unwrap();
+        assert_eq!(file_install_id(dir.path()).unwrap(), f, "the file's, kept");
+    }
+
+    #[test]
+    fn the_install_id_is_the_platforms_where_there_is_one() {
+        // What every FTS app on this machine derives: Studio's too.
+        if let Some(platform) = auth_client::this_device::install_id() {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(install_id(dir.path()).unwrap(), platform);
+        }
+    }
+
+    fn peer(id: Uuid, name: &str, platform: &str) -> PeerDevice {
+        PeerDevice {
+            device_id: id,
+            name: name.into(),
+            platform: platform.into(),
+            endpoint_id: None,
+            relay_url: None,
+            last_seen_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn this_devices_old_rows_are_its_old_id_and_its_name_on_another_id() {
+        let (me, old, stray, laptop, other_phone) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let this = ThisDevice {
+            device_id: me,
+            name: "Cody's iPhone".into(),
+            platform: "ios".into(),
+            account: Uuid::new_v4(),
+            retire: Some(old),
+        };
+        let listed = [
+            peer(me, "Cody's iPhone", "ios"),
+            peer(old, "iPhone", "ios"),
+            peer(stray, " cody's iphone ", "ios"),
+            peer(laptop, "airlock", "macos"),
+            peer(other_phone, "Cody's iPhone", "android"),
+        ];
+        let mut stale = stale_rows(&this, &listed);
+        stale.sort();
+        let mut want = vec![old, stray];
+        want.sort();
+        assert_eq!(stale, want, "its old id, and its name on this platform");
+    }
+
+    #[test]
+    fn an_older_random_id_is_named_once_then_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = Uuid::new_v4();
+        assert_eq!(previous_install_id(dir.path(), current), None, "no file");
+        let old = file_install_id(dir.path()).unwrap();
+        assert_eq!(previous_install_id(dir.path(), current), Some(old));
+        settle_install_id(dir.path(), current).unwrap();
+        assert_eq!(previous_install_id(dir.path(), current), None, "settled");
     }
 }

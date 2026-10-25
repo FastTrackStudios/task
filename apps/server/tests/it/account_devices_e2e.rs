@@ -15,8 +15,10 @@ use std::time::Duration;
 use architect::{LayerRouter, LocalServer, Scope};
 use architect_auth::proto::AuthServiceClient;
 use architect_auth::transport::vox::AuthVoxService;
-use architect_auth::{DeviceServiceClient, SignInEmailPassword, SignUpEmailPassword};
-use task_server::account_devices::{ThisDevice, sync_account};
+use architect_auth::{
+    DeviceRegistration, DeviceServiceClient, SignInEmailPassword, SignUpEmailPassword,
+};
+use task_server::account_devices::{ThisDevice, device_id, sync_account};
 use task_server::local_node::{LocalNode, NodeOptions, PERSONAL_SLUG};
 use vault_proto::{IfMatch, VaultSyncClient};
 use vox_core::FromVoxLane;
@@ -85,6 +87,7 @@ fn device(name: &str, platform: &str, account: uuid::Uuid) -> ThisDevice {
         name: name.into(),
         platform: platform.into(),
         account,
+        retire: None,
     }
 }
 
@@ -270,4 +273,137 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
         || on_phone.is_file(),
     )
     .await;
+}
+
+// t[verify offline.account] — a device running Task and Studio is listed
+// once: Task moves from its old random install id to the platform's (the
+// one Studio derives), takes its old row off the account, and keeps its
+// endpoint on the shared row Studio registered without one
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_running_task_and_studio_is_listed_once() {
+    let env = crate::support::env_lock().await;
+    let peer_dir = tempfile::tempdir().unwrap();
+    // SAFETY: under the binary's env lock, held while the node binds.
+    unsafe {
+        std::env::set_var("TASK_IROH_PEER_DIR", peer_dir.path());
+        std::env::set_var("TASK_DEVICE_SYNC_SECS", "0");
+    }
+    let issuer =
+        task_server::AuthState::open("sqlite::memory:", "an-issuer-secret-at-least-32-bytes!")
+            .await
+            .expect("issuer");
+    let router = LayerRouter::new()
+        .merge(architect_auth::auth_service_layer(AuthVoxService::new(
+            issuer.auth.clone(),
+        )))
+        .merge(architect_auth::device_service_layer(AuthVoxService::new(
+            issuer.auth,
+        )));
+    let local = LocalServer::serve(router, Scope::new());
+    let accounts: AuthServiceClient = local.establish().await.expect("issuer auth client");
+    let devices: DeviceServiceClient = local.establish().await.expect("issuer device client");
+    let signed_up = accounts
+        .sign_up_email_password(SignUpEmailPassword {
+            email: "once@example.com".into(),
+            password: "correct horse battery staple".into(),
+            name: Some("Cody".into()),
+            username: None,
+            image: None,
+            metadata_json: None,
+            ip_address: None,
+            user_agent: Some("account-devices-e2e".into()),
+        })
+        .await
+        .expect("an account");
+    let (token, account) = (signed_up.token, signed_up.user.id);
+    let root = tempfile::tempdir().unwrap();
+    let mac = LocalNode::open(opts(root.path(), "Cody"))
+        .await
+        .expect("mac");
+
+    // An older Task registered this Mac under a random install id.
+    let old_install = uuid::Uuid::new_v4();
+    let old = ThisDevice {
+        device_id: device_id(old_install, &account.to_string()),
+        ..device("Cody's Mac", "macos", account)
+    };
+    sync_account(&mac, &devices, &token, &old)
+        .await
+        .expect("the old pass");
+
+    // Studio, on the same Mac, registers under the platform's install id
+    // (no node: no endpoint, no org to offer).
+    let shared_install = uuid::Uuid::new_v4(); // stands for this_device::install_id()
+    let shared = device_id(shared_install, &account.to_string());
+    devices
+        .register_device(
+            token.clone(),
+            DeviceRegistration {
+                device_id: shared,
+                name: "Cody's Mac".into(),
+                platform: "macos".into(),
+                endpoint_id: None,
+                relay_url: None,
+                offer_org: None,
+            },
+        )
+        .await
+        .expect("studio registers");
+    // And a stray from a reinstall that lost its install-id file: same
+    // name and platform, another random id.
+    devices
+        .register_device(
+            token.clone(),
+            DeviceRegistration {
+                device_id: uuid::Uuid::new_v4(),
+                name: "Cody's Mac".into(),
+                platform: "macos".into(),
+                endpoint_id: None,
+                relay_url: None,
+                offer_org: None,
+            },
+        )
+        .await
+        .expect("a stray row");
+    assert_eq!(
+        devices
+            .list_devices(token.clone())
+            .await
+            .unwrap()
+            .devices
+            .len(),
+        3,
+        "listed three times, which is the bug"
+    );
+
+    // Task moves to the shared id and retires its old row.
+    let now = ThisDevice {
+        device_id: shared,
+        retire: Some(old.device_id),
+        ..device("Cody's Mac", "macos", account)
+    };
+    let pass = sync_account(&mac, &devices, &token, &now)
+        .await
+        .expect("the moving pass");
+    assert!(pass.retired, "the old row is off the account");
+    assert!(
+        pass.others.is_empty(),
+        "its own old row is never another device"
+    );
+    let listed = devices.list_devices(token.clone()).await.unwrap().devices;
+    assert_eq!(listed.len(), 1, "listed once: {listed:?}");
+    assert_eq!(listed[0].device_id, shared);
+    assert_eq!(
+        listed[0].endpoint_id,
+        mac.endpoint_id(PERSONAL_SLUG),
+        "the shared row carries Task's node"
+    );
+
+    // Nothing left to retire: the next pass says so without asking.
+    let again = sync_account(&mac, &devices, &token, &now)
+        .await
+        .expect("again");
+    assert!(again.retired);
+    assert_eq!(devices.list_devices(token).await.unwrap().devices.len(), 1);
+    drop(env);
 }
