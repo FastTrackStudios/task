@@ -230,8 +230,11 @@ jobs:
         run: cargo build --release --locked -p task-server --target ${{ matrix.target }}
 
       # Builds, checks what the binary needs and its glibc floor, and runs it.
+      # Linux only: the macOS target runs on a self-hosted Mac (airlock),
+      # which the step above builds; this one there would put its target
+      # dir at `/node` (no TASK_CACHE_DIR) and fail on the read-only root.
       - name: Build (THEBATTLESHIP, Nix)
-        if: ${{ runner.environment == 'self-hosted' }}
+        if: ${{ runner.environment == 'self-hosted' && runner.os == 'Linux' }}
         run: |
           CARGO_TARGET_DIR="$TASK_CACHE_DIR/node" OUT_DIR="$PWD/dist" \
             bash scripts/node-binary-linux.sh
