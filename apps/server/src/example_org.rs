@@ -2511,6 +2511,9 @@ pub struct DeclaredAppDoc {
     pub parent: Option<&'static str>,
     /// Song slugs, for a setlist.
     pub songs: &'static [&'static str],
+    /// `Merge` for a doc every device makes under one derived id (a
+    /// rig's library); `Strict` for one made once and adopted.
+    pub lineage: crdt::docs::Lineage,
 }
 
 pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
@@ -2521,6 +2524,7 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         name: "Album Launch Set",
         parent: None,
         songs: &["track-one", "track-two"],
+        lineage: crdt::docs::Lineage::Strict,
     },
     DeclaredAppDoc {
         org: "acme-audio",
@@ -2529,6 +2533,7 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         name: "Track One",
         parent: None,
         songs: &[],
+        lineage: crdt::docs::Lineage::Strict,
     },
     DeclaredAppDoc {
         org: "acme-audio",
@@ -2537,6 +2542,18 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         name: "Track One (acoustic)",
         parent: Some("6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b02"),
         songs: &[],
+        lineage: crdt::docs::Lineage::Strict,
+    },
+    // A rig's library, as Studio keeps it: one id every device derives,
+    // made on each offline and merged when they meet.
+    DeclaredAppDoc {
+        org: "acme-audio",
+        id: "6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b04",
+        kind: "rig",
+        name: "Bass rig",
+        parent: None,
+        songs: &[],
+        lineage: crdt::docs::Lineage::Merge,
     },
 ];
 
@@ -2584,8 +2601,7 @@ pub async fn plant_app_docs(org_root: &org_proto::OrgRoot, slug: &str) -> eyre::
             kind: d.kind.into(),
             name: d.name.into(),
             parent: d.parent.map(app_doc_id).transpose()?,
-            // Planted here once and adopted by every device: one history.
-            lineage: crdt::docs::Lineage::Strict,
+            lineage: d.lineage,
         })
         .await
         .map_err(|e| eyre::eyre!("register \"{}\": {e}", d.name))?;
@@ -3154,6 +3170,14 @@ mod declared_tests {
         assert!(
             doc.loro().get_map("meta").get("title").is_some(),
             "the planted doc holds its starting content"
+        );
+        for d in app_docs_of("acme-audio") {
+            let row = rows.iter().find(|r| r.doc_id.to_string() == d.id).unwrap();
+            assert_eq!(row.lineage, d.lineage, "\"{}\" keeps its lineage", d.name);
+        }
+        assert!(
+            app_docs_of("acme-audio").any(|d| d.lineage == crdt::docs::Lineage::Merge),
+            "the seed shows a Merge doc (a rig's library)"
         );
     }
 
