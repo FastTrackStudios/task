@@ -29,6 +29,11 @@ cd "$SCRIPT_DIR/.."
 TMP_DIRS=()
 cleanup_tmp() { [ ${#TMP_DIRS[@]} -eq 0 ] || rm -rf "${TMP_DIRS[@]}"; }
 trap cleanup_tmp EXIT
+# This run's logs, plists and keys. Task's and studio's release jobs share
+# airlock and this script, so a fixed $SCRATCH/* path let one job read the
+# other's build log (and sign with the other's entitlements).
+SCRATCH="$(mktemp -d)"
+TMP_DIRS+=("$SCRATCH")
 
 # Which product to build+ship. Defaults to the FastTrackStudio app; override
 # for Task (or any dx iOS app in the tree):
@@ -92,13 +97,13 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "Apple Distr
     # Bundle key + cert into a .p12 and import (-A: allow all apps, so
     # codesign uses it without a per-run keychain prompt). OpenSSL 3.x needs
     # -legacy for the encoding `security` reads; LibreSSL defaults to it.
-    openssl x509 -inform DER -in "$DIST_CER" -out /tmp/fts-dist.pem
+    openssl x509 -inform DER -in "$DIST_CER" -out "$SCRATCH/dist.pem"
     if openssl pkcs12 -help 2>&1 | grep -q -- -legacy; then LEG="-legacy"; else LEG=""; fi
     # shellcheck disable=SC2086
-    openssl pkcs12 -export $LEG -inkey "$DIST_KEY" -in /tmp/fts-dist.pem \
-        -name "Apple Distribution" -out /tmp/fts-dist.p12 -passout pass:fts
-    security import /tmp/fts-dist.p12 -k "$KEYCHAIN" -P fts -A -T /usr/bin/codesign
-    rm -f /tmp/fts-dist.pem /tmp/fts-dist.p12
+    openssl pkcs12 -export $LEG -inkey "$DIST_KEY" -in "$SCRATCH/dist.pem" \
+        -name "Apple Distribution" -out "$SCRATCH/dist.p12" -passout pass:fts
+    security import "$SCRATCH/dist.p12" -k "$KEYCHAIN" -P fts -A -T /usr/bin/codesign
+    rm -f "$SCRATCH/dist.pem" "$SCRATCH/dist.p12"
 fi
 SIGN_ID="$(security find-identity -v -p codesigning "$KEYCHAIN" \
     | awk -F'"' '/Apple Distribution/{print $2; exit}')"
@@ -129,6 +134,10 @@ APP_GLOB="$ROOT/target/dx/$DX_PACKAGE/release/ios/"*.app
 if [ "${SKIP_BUILD:-}" = "1" ] && [ -d $APP_GLOB ]; then
     echo "SKIP_BUILD=1 — reusing existing app"
 else
+    # The last release's bundle must not survive a build that fails: the
+    # steps below would sign and upload it under the new version.
+    # shellcheck disable=SC2086
+    rm -rf $APP_GLOB
     # DX_TAILWIND is relative to DX_APP_DIR. Tailwind v4's automatic content
     # detection is rooted at the WORKING DIRECTORY, so the sheet must be
     # built from the input's own directory or it silently loses rules —
@@ -140,26 +149,26 @@ else
          ${DX_TAILWIND:+bash '$ROOT/scripts/architect-ui-link.sh';} \
          ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" \&\& tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css');} \
          dx build --platform ios --device --release $DX_FEATURES" \
-        > /tmp/fts-build.log 2>&1 || true
-    tail -2 /tmp/fts-build.log
+        > "$SCRATCH/build.log" 2>&1 || true
+    tail -2 "$SCRATCH/build.log"
     # A failed cargo build used to surface as two lines of dx summary and
     # then a PlistBuddy error on a stale bundle. Show the compiler's own
     # words and stop here instead.
-    if grep -q 'finished with errors' /tmp/fts-build.log; then
+    if grep -q 'finished with errors' "$SCRATCH/build.log"; then
         echo "=== rustc errors ==="
         # dx indents and prefixes cargo's output, so match anywhere on
         # the line rather than at column 0, and keep the tail as well in
         # case the shape changes again.
-        grep -n -i -E 'error(\[E[0-9]+\])?:|-->' /tmp/fts-build.log | head -120
+        grep -n -i -E 'error(\[E[0-9]+\])?:|-->' "$SCRATCH/build.log" | head -120
         echo "=== build log tail ==="
-        tail -150 /tmp/fts-build.log
+        tail -150 "$SCRATCH/build.log"
         exit 1
     fi
 fi
 # Resolve the actual .app (dx names it from the Dioxus.toml, per package).
 # shellcheck disable=SC2086
 APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
-[ -n "$APP" ] && [ -d "$APP" ] || { echo "ERROR: release build produced no app"; tail -25 /tmp/fts-build.log; exit 1; }
+[ -n "$APP" ] && [ -d "$APP" ] || { echo "ERROR: release build produced no app"; tail -25 "$SCRATCH/build.log"; exit 1; }
 echo "=== app bundle: $APP ==="
 
 BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
@@ -250,9 +259,9 @@ fi
     ACTOOL="$ICON_DEV/usr/bin/actool"; [ -x "$ACTOOL" ] || ACTOOL="$(xcrun --find actool)"
     DEVELOPER_DIR="$ICON_DEV" "$ACTOOL" "$ICONS_DIR" --compile "$APP" --platform iphoneos \
         --minimum-deployment-target 15.0 --app-icon AppIcon \
-        --output-partial-info-plist /tmp/fts-icon.plist >/tmp/fts-actool.log 2>&1 || true
-    if [ -f "$APP/Assets.car" ] && /usr/libexec/PlistBuddy -c "Print :CFBundleIcons" /tmp/fts-icon.plist >/dev/null 2>&1; then
-        /usr/libexec/PlistBuddy -c "Merge /tmp/fts-icon.plist" "$APP/Info.plist"
+        --output-partial-info-plist "$SCRATCH/icon.plist" >"$SCRATCH/actool.log" 2>&1 || true
+    if [ -f "$APP/Assets.car" ] && /usr/libexec/PlistBuddy -c "Print :CFBundleIcons" "$SCRATCH/icon.plist" >/dev/null 2>&1; then
+        /usr/libexec/PlistBuddy -c "Merge $SCRATCH/icon.plist" "$APP/Info.plist"
         # altool also wants a top-level CFBundleIconName (actool only nests it
         # under CFBundleIcons); add it defensively.
         /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist" 2>/dev/null \
@@ -264,7 +273,7 @@ fi
         # several minutes earlier, with a far more legible message.
         echo "ERROR: app-icon compile produced no Assets.car — altool will reject." >&2
         echo "  set ACTOOL_DEVELOPER_DIR to an Xcode whose actool matches this macOS." >&2
-        tail -6 /tmp/fts-actool.log >&2
+        tail -6 "$SCRATCH/actool.log" >&2
         exit 1
     fi
 echo "=== app: $APP ($BUNDLE) build $BUILD_NO ==="
@@ -283,11 +292,11 @@ if [ -n "$WATCH_APP" ]; then
     # derivation …xcodegen…"), which `nix run` alone won't recover from. On the
     # first failure, drop the eval cache and retry once so it re-evaluates fresh.
     run_xcodegen() { ( cd "$WATCH_DIR" && "$NIX" run nixpkgs#xcodegen -- generate ); }
-    if ! run_xcodegen > /tmp/fts-watch-xcodegen.log 2>&1; then
-        echo "xcodegen failed; clearing nix eval cache + retrying" | tee -a /tmp/fts-watch-xcodegen.log
+    if ! run_xcodegen > "$SCRATCH/watch-xcodegen.log" 2>&1; then
+        echo "xcodegen failed; clearing nix eval cache + retrying" | tee -a "$SCRATCH/watch-xcodegen.log"
         rm -rf "$HOME/.cache/nix"
-        run_xcodegen >> /tmp/fts-watch-xcodegen.log 2>&1 \
-            || { echo "ERROR: xcodegen failed"; tail -25 /tmp/fts-watch-xcodegen.log; exit 1; }
+        run_xcodegen >> "$SCRATCH/watch-xcodegen.log" 2>&1 \
+            || { echo "ERROR: xcodegen failed"; tail -25 "$SCRATCH/watch-xcodegen.log"; exit 1; }
     fi
     WATCH_DD="$(mktemp -d)"
     TMP_DIRS+=("$WATCH_DD")
@@ -308,10 +317,10 @@ if [ -n "$WATCH_APP" ]; then
         -derivedDataPath "$WATCH_DD" \
         CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
         MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO" \
-        build > /tmp/fts-watch-build.log 2>&1 \
-        || { echo "ERROR: watch build failed"; tail -30 /tmp/fts-watch-build.log; exit 1; }
+        build > "$SCRATCH/watch-build.log" 2>&1 \
+        || { echo "ERROR: watch build failed"; tail -30 "$SCRATCH/watch-build.log"; exit 1; }
     WATCH_BUILT="$WATCH_DD/Build/Products/Release-watchos/$WATCH_PRODUCT.app"
-    [ -d "$WATCH_BUILT" ] || { echo "ERROR: no watch .app at $WATCH_BUILT"; tail -30 /tmp/fts-watch-build.log; exit 1; }
+    [ -d "$WATCH_BUILT" ] || { echo "ERROR: no watch .app at $WATCH_BUILT"; tail -30 "$SCRATCH/watch-build.log"; exit 1; }
 
     echo "=== watch App Store provisioning profile ==="
     WATCH_PROFILE="$(PROFILE_TYPE=IOS_APP_STORE CERT_TYPE=DISTRIBUTION \
@@ -334,12 +343,12 @@ if [ -n "$WATCH_APP" ]; then
         || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$EMB/Info.plist"
     # Sign inside-out with the WATCH profile's entitlements.
     cp "$WATCH_PROFILE" "$EMB/embedded.mobileprovision"
-    security cms -D -i "$WATCH_PROFILE" > /tmp/fts-watch-prof.plist
-    /usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/fts-watch-prof.plist > /tmp/fts-watch-ent.plist
+    security cms -D -i "$WATCH_PROFILE" > "$SCRATCH/watch-prof.plist"
+    /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$SCRATCH/watch-prof.plist" > "$SCRATCH/watch-ent.plist"
     find "$EMB" \( -name "*.dylib" -o -name "*.framework" \) -print0 \
         | while IFS= read -r -d '' f; do codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" --timestamp "$f"; done
     codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" \
-        --entitlements /tmp/fts-watch-ent.plist --timestamp "$EMB"
+        --entitlements "$SCRATCH/watch-ent.plist" --timestamp "$EMB"
     codesign --verify --strict "$EMB"
     echo "=== embedded + signed watch companion: $EMB ==="
 fi
@@ -353,8 +362,8 @@ WIDGETS_BUNDLE_ID="${WIDGETS_BUNDLE_ID:-$DX_BUNDLE_ID.widgets}"
 if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
     echo "=== building widget extension ($WIDGETS_BUNDLE_ID) ==="
     WIDGETS_DIR="$ROOT/$WIDGETS_APP"
-    ( cd "$WIDGETS_DIR" && "$NIX" run nixpkgs#xcodegen -- generate ) > /tmp/fts-widgets-xcodegen.log 2>&1 \
-        || { echo "ERROR: widgets xcodegen failed"; tail -20 /tmp/fts-widgets-xcodegen.log; exit 1; }
+    ( cd "$WIDGETS_DIR" && "$NIX" run nixpkgs#xcodegen -- generate ) > "$SCRATCH/widgets-xcodegen.log" 2>&1 \
+        || { echo "ERROR: widgets xcodegen failed"; tail -20 "$SCRATCH/widgets-xcodegen.log"; exit 1; }
     WIDGETS_DD="$(mktemp -d)"
     TMP_DIRS+=("$WIDGETS_DD")
     env -u LD -u LDPLUSPLUS -u CC -u CXX -u NIX_LDFLAGS -u NIX_CFLAGS_COMPILE -u SDKROOT \
@@ -364,8 +373,8 @@ if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
         -derivedDataPath "$WIDGETS_DD" \
         CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
         MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO" \
-        build > /tmp/fts-widgets-build.log 2>&1 \
-        || { echo "ERROR: widgets build failed"; tail -30 /tmp/fts-widgets-build.log; exit 1; }
+        build > "$SCRATCH/widgets-build.log" 2>&1 \
+        || { echo "ERROR: widgets build failed"; tail -30 "$SCRATCH/widgets-build.log"; exit 1; }
     WIDGETS_BUILT="$WIDGETS_DD/Build/Products/Release-iphoneos/TaskWidgets.appex"
     WIDGETS_PROFILE="$(PROFILE_TYPE=IOS_APP_STORE CERT_TYPE=DISTRIBUTION \
         ruby "$SCRIPT_DIR/mint-dev-profile.rb" - "$WIDGETS_BUNDLE_ID" "FTS Widgets App Store" \
@@ -377,10 +386,10 @@ if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$WEX/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$WEX/Info.plist"
     cp "$WIDGETS_PROFILE" "$WEX/embedded.mobileprovision"
-    security cms -D -i "$WIDGETS_PROFILE" > /tmp/fts-widgets-prof.plist
-    /usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/fts-widgets-prof.plist > /tmp/fts-widgets-ent.plist
+    security cms -D -i "$WIDGETS_PROFILE" > "$SCRATCH/widgets-prof.plist"
+    /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$SCRATCH/widgets-prof.plist" > "$SCRATCH/widgets-ent.plist"
     codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" \
-        --entitlements /tmp/fts-widgets-ent.plist --timestamp "$WEX"
+        --entitlements "$SCRATCH/widgets-ent.plist" --timestamp "$WEX"
     codesign --verify --strict "$WEX"
     echo "=== embedded + signed widget extension: $WEX ==="
 fi
@@ -412,13 +421,13 @@ done
 
 echo "=== signing (distribution) ==="
 cp "$PROFILE" "$APP/embedded.mobileprovision"
-security cms -D -i "$PROFILE" > /tmp/fts-prof.plist
-/usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/fts-prof.plist > /tmp/fts-ent.plist
+security cms -D -i "$PROFILE" > "$SCRATCH/prof.plist"
+/usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$SCRATCH/prof.plist" > "$SCRATCH/ent.plist"
 # Exclude the Watch/ subtree — it's already sealed; re-signing a nested
 # framework would invalidate the watch app's signature.
 find "$APP" \( -name "*.dylib" -o -name "*.framework" \) -not -path "$APP/Watch/*" -print0 \
     | while IFS= read -r -d '' f; do codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" --timestamp "$f"; done
-codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" --entitlements /tmp/fts-ent.plist --timestamp "$APP"
+codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" --entitlements "$SCRATCH/ent.plist" --timestamp "$APP"
 codesign --verify --deep --strict "$APP"
 
 echo "=== packaging IPA ==="
