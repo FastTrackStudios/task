@@ -261,8 +261,7 @@ impl NodeHost for Host {
 
     fn account_sync(&self, request: AccountSyncRequest) -> NodeFuture<AccountReport> {
         use task_server::account_devices::{
-            ThisDevice, device_id, install_id, previous_install_id, settle_install_id,
-            sync_account,
+            ThisDevice, device_id, install_id, previous_install_id, settle_install_id, sync_account,
         };
         use vox_core::FromVoxLane as _;
         let node = self.node();

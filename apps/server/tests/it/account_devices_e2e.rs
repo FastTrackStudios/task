@@ -317,7 +317,9 @@ async fn a_device_running_task_and_studio_is_listed_once() {
         .expect("an account");
     let (token, account) = (signed_up.token, signed_up.user.id);
     let root = tempfile::tempdir().unwrap();
-    let mac = LocalNode::open(opts(root.path(), "Cody")).await.expect("mac");
+    let mac = LocalNode::open(opts(root.path(), "Cody"))
+        .await
+        .expect("mac");
 
     // An older Task registered this Mac under a random install id.
     let old_install = uuid::Uuid::new_v4();
@@ -364,7 +366,12 @@ async fn a_device_running_task_and_studio_is_listed_once() {
         .await
         .expect("a stray row");
     assert_eq!(
-        devices.list_devices(token.clone()).await.unwrap().devices.len(),
+        devices
+            .list_devices(token.clone())
+            .await
+            .unwrap()
+            .devices
+            .len(),
         3,
         "listed three times, which is the bug"
     );
