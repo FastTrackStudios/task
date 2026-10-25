@@ -299,6 +299,9 @@ async fn a_device_running_task_and_studio_is_listed_once() {
         .merge(architect_auth::device_service_layer(AuthVoxService::new(
             issuer.auth,
         )));
+    // The issuer's database, to age a row: nothing on the wire backdates
+    // `last_seen_at`, and the age is what the rule turns on.
+    let issuer_db = issuer.db.clone();
     let local = LocalServer::serve(router, Scope::new());
     let accounts: AuthServiceClient = local.establish().await.expect("issuer auth client");
     let devices: DeviceServiceClient = local.establish().await.expect("issuer device client");
@@ -349,9 +352,38 @@ async fn a_device_running_task_and_studio_is_listed_once() {
         )
         .await
         .expect("studio registers");
-    // (A same-named stray left by a lost install-id file is retired once
-    // nobody has refreshed it for a day: `stale_rows`' unit tests, since
-    // the issuer cannot be made to backdate a row here.)
+    // Two more rows by this name: a stray a reinstall left behind (nobody
+    // has refreshed it for days), and a second Mac of the same name that
+    // is very much alive.
+    let (stray, twin) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    for id in [stray, twin] {
+        devices
+            .register_device(
+                token.clone(),
+                DeviceRegistration {
+                    device_id: id,
+                    name: "Cody's Mac".into(),
+                    platform: "macos".into(),
+                    endpoint_id: None,
+                    relay_url: None,
+                    offer_org: None,
+                },
+            )
+            .await
+            .expect("a same-named row");
+    }
+    {
+        use sea_orm::ConnectionTrait as _;
+        let aged = chrono::Utc::now() - chrono::Duration::days(3);
+        issuer_db
+            .execute(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE auth_devices SET last_seen_at = ? WHERE id = ?",
+                [aged.into(), stray.into()],
+            ))
+            .await
+            .expect("age the stray");
+    }
     assert_eq!(
         devices
             .list_devices(token.clone())
@@ -359,11 +391,12 @@ async fn a_device_running_task_and_studio_is_listed_once() {
             .unwrap()
             .devices
             .len(),
-        2,
-        "listed twice, which is the bug"
+        4,
+        "this Mac three times, which is the bug, and its twin"
     );
 
-    // Task moves to the shared id and retires its old row.
+    // Task moves to the shared id: its old row and the aged stray go, the
+    // live twin stays.
     let now = ThisDevice {
         device_id: shared,
         retire: Some(old.device_id),
@@ -372,16 +405,21 @@ async fn a_device_running_task_and_studio_is_listed_once() {
     let pass = sync_account(&mac, &devices, &token, &now)
         .await
         .expect("the moving pass");
-    assert!(pass.retired, "the old row is off the account");
-    assert!(
-        pass.others.is_empty(),
-        "its own old row is never another device"
+    assert!(pass.retired, "this Mac's old rows are off the account");
+    assert_eq!(
+        pass.others.iter().map(|d| d.device_id).collect::<Vec<_>>(),
+        vec![twin],
+        "its own old rows are never another device; the twin is"
     );
     let listed = devices.list_devices(token.clone()).await.unwrap().devices;
-    assert_eq!(listed.len(), 1, "listed once: {listed:?}");
-    assert_eq!(listed[0].device_id, shared);
+    let mut ids: Vec<_> = listed.iter().map(|d| d.device_id).collect();
+    ids.sort();
+    let mut want = vec![shared, twin];
+    want.sort();
+    assert_eq!(ids, want, "this Mac once, and its twin: {listed:?}");
+    let mine = listed.iter().find(|d| d.device_id == shared).unwrap();
     assert_eq!(
-        listed[0].endpoint_id,
+        mine.endpoint_id,
         mac.endpoint_id(PERSONAL_SLUG),
         "the shared row carries Task's node"
     );
@@ -391,6 +429,10 @@ async fn a_device_running_task_and_studio_is_listed_once() {
         .await
         .expect("again");
     assert!(again.retired);
-    assert_eq!(devices.list_devices(token).await.unwrap().devices.len(), 1);
+    assert_eq!(
+        devices.list_devices(token).await.unwrap().devices.len(),
+        2,
+        "the twin is never taken off: it is another, live device"
+    );
     drop(env);
 }
