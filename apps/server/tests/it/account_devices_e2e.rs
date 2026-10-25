@@ -349,22 +349,9 @@ async fn a_device_running_task_and_studio_is_listed_once() {
         )
         .await
         .expect("studio registers");
-    // And a stray from a reinstall that lost its install-id file: same
-    // name and platform, another random id.
-    devices
-        .register_device(
-            token.clone(),
-            DeviceRegistration {
-                device_id: uuid::Uuid::new_v4(),
-                name: "Cody's Mac".into(),
-                platform: "macos".into(),
-                endpoint_id: None,
-                relay_url: None,
-                offer_org: None,
-            },
-        )
-        .await
-        .expect("a stray row");
+    // (A same-named stray left by a lost install-id file is retired once
+    // nobody has refreshed it for a day: `stale_rows`' unit tests, since
+    // the issuer cannot be made to backdate a row here.)
     assert_eq!(
         devices
             .list_devices(token.clone())
@@ -372,8 +359,8 @@ async fn a_device_running_task_and_studio_is_listed_once() {
             .unwrap()
             .devices
             .len(),
-        3,
-        "listed three times, which is the bug"
+        2,
+        "listed twice, which is the bug"
     );
 
     // Task moves to the shared id and retires its old row.
