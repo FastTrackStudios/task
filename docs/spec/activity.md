@@ -100,10 +100,13 @@ entry carries the task's title, its project and `/tasks/<id>`.
 
 t[activity.comment]
 Posting a message through `ThreadsService::post_message` records a
-`commented` entry about the thread's anchor (a task or a project), with
-the comment as `body`, the author's label as the byline, and the anchor's
-title, project and route. Threads have no change stream; the server's
-`ThreadsService` mount is the hook.
+`commented` entry about the thread's anchor (a task, a project, or an app
+doc — `entity_type = "doc"`, titled by its face, else its catalog name,
+routed to `/docs/{id}`), with the comment as `body`, the author's label as
+the byline, and the anchor's title, project and route. A thread may name a
+place inside its anchor (`anchor_path`, e.g. `entries/<id>`), and
+`list_threads_at` lists a place and what is under it. Threads have no
+change stream; the server's `ThreadsService` mount is the hook.
 
 ---
 

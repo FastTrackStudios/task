@@ -826,6 +826,7 @@ pub async fn plant_activity(
                         org_id: uuid::Uuid::nil(),
                         entity_type: "task".to_owned(),
                         entity_id: t.id,
+                        anchor_path: None,
                         title: "Comments".to_owned(),
                         kind: String::new(),
                         created_by: user.id,

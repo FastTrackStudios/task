@@ -747,7 +747,7 @@ table!(TIMER, "timer", "timer/**", [
 table!(TIMER_STREAM, "timer-stream", "timer/**", [rd "events"]);
 
 table!(THREADS, "threads", "threads/**", [
-    rd "list_threads", rd "get_thread", cm "create_thread", rd "list_messages",
+    rd "list_threads", rd "list_threads_at", rd "get_thread", cm "create_thread", rd "list_messages",
     cm "post_message", wr "set_resolved", wa "delete_thread", wa "delete_message",
 ]);
 

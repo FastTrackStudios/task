@@ -153,6 +153,7 @@ async fn the_feed_records_what_happened_end_to_end() {
             org_id: Uuid::nil(),
             entity_type: "task".into(),
             entity_id: created.id,
+            anchor_path: None,
             title: "Comments".into(),
             kind: String::new(),
             created_by: Uuid::nil(),
@@ -194,6 +195,87 @@ async fn the_feed_records_what_happened_end_to_end() {
         Some(project),
         "a comment joins its project's feed"
     );
+
+    // ── a comment on an app doc, at a place inside it ──
+    let docs: crdt::docs::DocsClient = local.establish().await.expect("docs");
+    let doc_id = Uuid::new_v4();
+    docs.create(crdt::docs::CreateDoc {
+        doc_id,
+        kind: "app.list".into(),
+        name: "untitled list".into(),
+        parent: None,
+        lineage: crdt::docs::Lineage::Strict,
+    })
+    .await
+    .expect("register doc");
+    let org = state.org("alpha").expect("org");
+    let doc = org.app_docs.registry().doc(doc_id).await.expect("open doc");
+    app_docs_proto::write_face(
+        doc.loro(),
+        &app_docs_proto::DocFace {
+            title: "Sunday 10/26".into(),
+            ..app_docs_proto::DocFace::default()
+        },
+    )
+    .unwrap();
+    doc.loro().commit();
+    let at_entry = threads
+        .create_thread(threads::CreateThreadRequest {
+            org_id: Uuid::nil(),
+            entity_type: "doc".into(),
+            entity_id: doc_id,
+            anchor_path: Some("entries/e1".into()),
+            title: "Comments".into(),
+            kind: String::new(),
+            created_by: Uuid::nil(),
+            source_kind: "native".into(),
+            source_ref: None,
+            source_url: None,
+        })
+        .await
+        .expect("create doc thread");
+    assert_eq!(at_entry.anchor_path.as_deref(), Some("entries/e1"));
+    let placed = threads
+        .list_threads_at("doc".into(), doc_id, "entries/e1".into())
+        .await
+        .expect("list at");
+    assert_eq!(
+        placed.iter().map(|t| t.id).collect::<Vec<_>>(),
+        [at_entry.id]
+    );
+    assert!(
+        threads
+            .list_threads_at("doc".into(), doc_id, "entries/e2".into())
+            .await
+            .expect("list at")
+            .is_empty()
+    );
+    threads
+        .post_message(threads::PostMessageRequest {
+            thread_id: at_entry.id,
+            org_id: Uuid::nil(),
+            author_id: None,
+            author_label: "Sam".into(),
+            body: "Capo 2 for this one.".into(),
+            reply_to: None,
+            source_kind: "native".into(),
+            external_id: None,
+            original_text: None,
+            source_url: None,
+            posted_at: None,
+        })
+        .await
+        .expect("post on doc");
+    let rows = wait_for(&feed, ActivityFilter::entity("doc", doc_id), |r| {
+        has(r, ActivityKind::Commented)
+    })
+    .await;
+    let on_doc = rows
+        .iter()
+        .find(|a| a.kind == ActivityKind::Commented)
+        .unwrap();
+    assert_eq!(on_doc.entity_title, "Sunday 10/26", "titled by its face");
+    assert_eq!(on_doc.href, format!("/docs/{doc_id}"));
 
     // ── capture → process ──
     let inbox: inbox_proto::InboxClient = local.establish().await.expect("inbox");
@@ -270,7 +352,7 @@ async fn the_feed_records_what_happened_end_to_end() {
         })
         .await
         .expect("kinds");
-    assert_eq!(only_comments.len(), 1);
+    assert_eq!(only_comments.len(), 2, "the task's comment and the doc's");
 
     // ── scroll-back: pages of two tile the whole feed ──
     let all = feed.list(ActivityFilter::default()).await.expect("all");

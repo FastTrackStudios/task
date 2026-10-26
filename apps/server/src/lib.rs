@@ -4065,6 +4065,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 tasks: org.tasks.clone(),
                 projects: org.projects.clone(),
                 people: org.people.clone(),
+                docs: org.app_doc_faces.clone(),
             }),
         )
         // Per-user preferences — get-with-defaults / upsert set.
