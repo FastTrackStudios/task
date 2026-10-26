@@ -92,6 +92,13 @@ pub enum Route {
         #[route("/projects/:id")]
         ProjectDetailRoute { id: String },
 
+        // The documents client apps keep in the org (`crate::app_docs`).
+        #[route("/docs")]
+        AppDocsRoute {},
+
+        #[route("/docs/:id")]
+        AppDocRoute { id: String },
+
         #[route("/goals")]
         GoalsRoute {},
 
@@ -363,6 +370,16 @@ fn ProjectsRoute() -> Element {
 #[component]
 fn ProjectDetailRoute(id: String) -> Element {
     rsx! { pages::project_detail::ProjectDetailView { id } }
+}
+
+#[component]
+fn AppDocsRoute() -> Element {
+    rsx! { crate::app_docs::AppDocsPage {} }
+}
+
+#[component]
+fn AppDocRoute(id: String) -> Element {
+    rsx! { crate::app_docs::AppDocPage { id } }
 }
 
 #[component]

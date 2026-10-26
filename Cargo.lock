@@ -21783,6 +21783,7 @@ dependencies = [
  "actions-proto",
  "actions-standalone",
  "agent-proto",
+ "app-docs-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.30)",
  "architect-input",
  "architect-ui",

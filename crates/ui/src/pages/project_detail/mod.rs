@@ -398,6 +398,12 @@ pub fn ProjectDetailView(id: String) -> Element {
                                     project: p.clone(),
                                     slug: forge_slug.clone(),
                                 }
+                                // What client apps attached to it (setlists,
+                                // sessions, …), by the face each keeps.
+                                crate::app_docs::ProjectAppDocs {
+                                    slug: forge_slug.clone(),
+                                    project_id: p.id,
+                                }
                                 // Code projects also carry their issues & PRs.
                                 if kind == ProjectKind::Code && !connected_repos.is_empty() {
                                     div { class: "flex flex-col gap-2",

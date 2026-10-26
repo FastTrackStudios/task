@@ -615,8 +615,8 @@ run `crdt::docs::DocsDriver`. Verified by `app_docs_e2e` and architect's
   `DocsDriver::host` / `run_peer` provide it, and Studio drives it; Task's
   own device nodes do not run a driver yet;
 - blobs a doc references (planned: architect's blobs layer);
-- any UI in Task (the faces are served, `AppDocFaces`, but nothing
-  renders them yet);
+- the UI (`crates/ui/src/app_docs.rs`: a project's Documents section,
+  `/docs` by kind, `/docs/:id` with its comments) has no headless test;
 - a face's history in words (a diff of `face` between versions) and
   named versions.
 

@@ -20,6 +20,7 @@ pub mod account_devices;
 pub mod actions;
 pub mod activity;
 pub mod app;
+pub mod app_docs;
 pub mod app_views;
 pub mod appearance;
 pub mod auth;
