@@ -65,6 +65,11 @@ pub(crate) enum ProjectCmd {
         /// Drives the overview layout. Default `general`.
         #[arg(long = "type")]
         project_type: Option<String>,
+        /// What shape of thing it is — `song` | `single` | `ep` |
+        /// `lp` | `album` | `concert` | `live-set`. Omit for
+        /// unclassified.
+        #[arg(long, value_parser = parse_form)]
+        form: Option<project::Form>,
         /// Comma-separated tag list.
         #[arg(long, value_delimiter = ',')]
         tags: Vec<String>,
@@ -246,6 +251,20 @@ pub(crate) enum ProjectCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Set or clear the project's form — what shape of thing it is:
+    /// `song` | `single` | `ep` | `lp` | `album` | `concert` |
+    /// `live-set`, or `none` to leave it unclassified.
+    SetForm {
+        target: String,
+        form: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        /// Emit the resulting project as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Set or clear the project's cover image.
     ///
     /// Two kinds of value are accepted, and they behave
@@ -362,6 +381,38 @@ pub(crate) enum ProjectCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Attach a setlist to a project (a `project:<path>` →
+    /// `collection:<id>` link). A project may hold many — an album its
+    /// running order, a weekly series one per week. Any kind of
+    /// collection may be attached; attaching it again is a no-op.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    AttachSetlist {
+        /// The project: its path on the Projects tier, page path,
+        /// title or id.
+        project: String,
+        /// The collection's id or exact title (`task collection list`).
+        collection: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Detach a setlist from a project. The setlist itself is
+    /// untouched; a deleted one's link clears by its id.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    DetachSetlist {
+        /// The project: its path on the Projects tier, page path,
+        /// title or id.
+        project: String,
+        /// The collection's id or exact title.
+        collection: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Detach an app document from a project. The doc itself is
     /// untouched.
     DetachDoc {
@@ -448,6 +499,9 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
             println!("  id:       {}", p.id);
             println!("  path:     {}", p.path);
             println!("  priority: {}", p.priority);
+            if let Some(form) = p.form {
+                println!("  form:     {form}");
+            }
             if let Some(parent) = p.parent_id {
                 println!("  parent:   {parent}");
             }
@@ -465,6 +519,7 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
             status,
             priority,
             project_type,
+            form,
             tags,
             verify,
             details,
@@ -487,6 +542,7 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
                 status: status.unwrap_or_else(|| "active".into()),
                 priority: priority.unwrap_or_else(|| "normal".into()),
                 project_type: project_type.unwrap_or_else(|| "general".into()),
+                form,
                 tags: project::model::Tags(tags),
                 parent_id,
                 details,
@@ -984,6 +1040,19 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
         } => {
             mutate_project(target, org, server, json, |p| p.priority = priority).await?;
         }
+        ProjectCmd::SetForm {
+            target,
+            form,
+            org,
+            server,
+            json,
+        } => {
+            let form = match form.trim() {
+                "" | "none" | "clear" => None,
+                f => Some(parse_form(f).map_err(|e| eyre::eyre!(e))?),
+            };
+            mutate_project(target, org, server, json, |p| p.form = form).await?;
+        }
         ProjectCmd::SetImage {
             target,
             image,
@@ -1090,6 +1159,21 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
             org,
             server,
         } => detach_doc(&project, doc_id, org, server).await?,
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        ProjectCmd::AttachSetlist {
+            project,
+            collection,
+            org,
+            server,
+            json,
+        } => attach_setlist(&project, &collection, org, server, json).await?,
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        ProjectCmd::DetachSetlist {
+            project,
+            collection,
+            org,
+            server,
+        } => detach_setlist(&project, &collection, org, server).await?,
         ProjectCmd::AppDocs {
             kind,
             org,
@@ -1109,9 +1193,18 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
 // a doc's `kind`, which is whichever word its app chose. The server's
 // MCP tools do the same over the same stores (`task_server::app_docs`).
 
-/// `project:<path>`, with slashes at either end dropped.
+/// `project:<path>`, with slashes at either end dropped. The project's
+/// page path (`example-album/project.md`, what `project get` prints)
+/// names its directory, the same as the server's `project_node`.
 fn project_node(project: &str) -> eyre::Result<links::NodeRef> {
     let path = project.trim().trim_matches('/');
+    let path = if path == org_proto::PROJECT_PAGE {
+        ""
+    } else {
+        path.strip_suffix(org_proto::PROJECT_PAGE)
+            .and_then(|dir| dir.strip_suffix('/'))
+            .unwrap_or(path)
+    };
     if path.is_empty()
         || path
             .split('/')
@@ -1145,19 +1238,81 @@ async fn attached(
     links: &links_proto::LinksServiceClient,
     project: &links::NodeRef,
 ) -> eyre::Result<Vec<links::TypedLink>> {
-    let held = links
+    held(links, project, links::NodeKind::AppDoc).await
+}
+
+/// Every `Down` link by which `project` holds a local node of `kind`.
+async fn held(
+    links: &links_proto::LinksServiceClient,
+    project: &links::NodeRef,
+    kind: links::NodeKind,
+) -> eyre::Result<Vec<links::TypedLink>> {
+    let all = links
         .links_for(project.clone())
         .await
         .map_err(|e| eyre::eyre!("links of `{}`: {e:?}", project.id))?;
-    Ok(held
+    Ok(all
         .into_iter()
         .filter(|l| {
             l.source == *project
                 && l.relation == links::Relation::Down
-                && l.target.kind == links::NodeKind::AppDoc
+                && l.target.kind == kind
                 && l.target.is_local()
         })
         .collect())
+}
+
+/// `project` holds `target`: the `Down` link, made once — an identical
+/// link already held comes back rather than a second one.
+async fn hold(
+    links: &links_proto::LinksServiceClient,
+    project: &links::NodeRef,
+    target: links::NodeRef,
+) -> eyre::Result<links::TypedLink> {
+    if let Some(link) = held(links, project, target.kind)
+        .await?
+        .into_iter()
+        .find(|l| l.target == target)
+    {
+        return Ok(link);
+    }
+    links
+        .create(links::TypedLink::new(
+            project.clone(),
+            target,
+            links::Relation::Down,
+            links::Confidence::Certain,
+        ))
+        .await
+        .map_err(|e| eyre::eyre!("attach: {e:?}"))
+}
+
+/// `project` no longer holds `target`: every link by which it did goes.
+/// None is an error, naming what was asked.
+async fn release(
+    links: &links_proto::LinksServiceClient,
+    project: &links::NodeRef,
+    target: &links::NodeRef,
+) -> eyre::Result<usize> {
+    let gone: Vec<links::TypedLink> = held(links, project, target.kind)
+        .await?
+        .into_iter()
+        .filter(|l| l.target == *target)
+        .collect();
+    if gone.is_empty() {
+        eyre::bail!(
+            "`{}` is not attached to project `{}`",
+            target.to_token(),
+            project.id
+        );
+    }
+    for l in &gone {
+        links
+            .delete(l.id.clone())
+            .await
+            .map_err(|e| eyre::eyre!("detach: {e:?}"))?;
+    }
+    Ok(gone.len())
 }
 
 fn doc_row_json(d: &crdt::docs::DocMeta) -> serde_json::Value {
@@ -1267,23 +1422,7 @@ async fn attach_doc(
     if meta.deleted {
         eyre::bail!("app doc `{doc_id}` was deleted; a deleted doc cannot be attached");
     }
-    let doc = doc_node(doc_id);
-    let held = attached(&links, &project)
-        .await?
-        .into_iter()
-        .find(|l| l.target == doc);
-    let link = match held {
-        Some(link) => link,
-        None => links
-            .create(links::TypedLink::new(
-                project.clone(),
-                doc,
-                links::Relation::Down,
-                links::Confidence::Certain,
-            ))
-            .await
-            .map_err(|e| eyre::eyre!("attach: {e:?}"))?,
-    };
+    let link = hold(&links, &project, doc_node(doc_id)).await?;
     if json {
         return crate::json_out::print_json(&serde_json::json!({
             "project": project.id,
@@ -1303,26 +1442,135 @@ async fn detach_doc(
 ) -> eyre::Result<()> {
     let project = project_node(project)?;
     let (links, _) = doc_clients(org, server).await?;
-    let doc = doc_node(doc_id);
-    let held: Vec<links::TypedLink> = attached(&links, &project)
-        .await?
-        .into_iter()
-        .filter(|l| l.target == doc)
-        .collect();
-    if held.is_empty() {
-        eyre::bail!(
-            "app doc `{doc_id}` is not attached to project `{}`",
-            project.id
-        );
-    }
-    for l in &held {
-        links
-            .delete(l.id.clone())
-            .await
-            .map_err(|e| eyre::eyre!("detach: {e:?}"))?;
-    }
+    release(&links, &project, &doc_node(doc_id)).await?;
     println!("detached {doc_id} from {}", project.id);
     Ok(())
+}
+
+// ── Setlists ─────────────────────────────────────────────────────────
+//
+// A project holds its setlists the way it holds app docs: a `Down` link,
+// `project:<path>` → `collection:<id>`, through the same `hold` /
+// `release`. The server's `attach_setlist` / `detach_setlist` MCP tools
+// make the same link (`task_server::app_docs::attach_collection`).
+
+/// The project an argument names, as its `project:` node: a title, id or
+/// page path resolves through the project list; anything the list does
+/// not know is taken as a path on the Projects tier.
+#[cfg(feature = "plugin-fasttrackstudio")]
+async fn project_node_for(
+    target: &str,
+    slug: &str,
+    server: Option<String>,
+) -> eyre::Result<links::NodeRef> {
+    let client = connect_project_client(&resolve_org_vox_url(server, slug)).await?;
+    match resolve_project_target(&client, target).await {
+        Ok(p) => project_node(&p.path),
+        Err(_) => project_node(target),
+    }
+}
+
+/// One of the org's collections by id or exact title; a title two share
+/// is refused rather than guessed at.
+#[cfg(feature = "plugin-fasttrackstudio")]
+async fn find_collection(
+    client: &collection_proto::CollectionServiceClient,
+    slug: &str,
+    target: &str,
+) -> eyre::Result<Option<collection_proto::Collection>> {
+    if let Some(c) = client
+        .get(target.to_owned())
+        .await
+        .map_err(|e| eyre::eyre!("get collection: {e:?}"))?
+    {
+        return Ok(Some(c));
+    }
+    let mut named: Vec<collection_proto::Collection> = client
+        .list(slug.to_owned(), None)
+        .await
+        .map_err(|e| eyre::eyre!("list collections: {e:?}"))?
+        .into_iter()
+        .filter(|c| c.title == target)
+        .collect();
+    if named.len() > 1 {
+        eyre::bail!(
+            "{} collections are titled `{target}`; pass one's id instead",
+            named.len()
+        );
+    }
+    Ok(named.pop())
+}
+
+#[cfg(feature = "plugin-fasttrackstudio")]
+async fn attach_setlist(
+    project: &str,
+    collection: &str,
+    org: Option<String>,
+    server: Option<String>,
+    json: bool,
+) -> eyre::Result<()> {
+    let slug = resolve_active_org(org)?;
+    let project = project_node_for(project, &slug, server.clone()).await?;
+    let links: links_proto::LinksServiceClient = establish_client(server.clone(), &slug).await?;
+    let collections: collection_proto::CollectionServiceClient =
+        establish_client(server, &slug).await?;
+    let Some(c) = find_collection(&collections, &slug, collection).await? else {
+        eyre::bail!("no collection `{collection}` in `{slug}` (`task collection list` shows them)");
+    };
+    let target = links::NodeRef::new(links::NodeKind::Collection, c.id.clone());
+    let link = hold(&links, &project, target).await?;
+    if json {
+        return crate::json_out::print_json(&serde_json::json!({
+            "project": project.id,
+            "link_id": link.id,
+            "collection": {
+                "id": c.id,
+                "title": c.title,
+                "kind": c.kind.as_str(),
+                "items": c.items.len(),
+            },
+        }));
+    }
+    println!(
+        "{} ← [{}] {} ({})",
+        project.id,
+        c.kind.as_str(),
+        c.title,
+        c.id
+    );
+    Ok(())
+}
+
+#[cfg(feature = "plugin-fasttrackstudio")]
+async fn detach_setlist(
+    project: &str,
+    collection: &str,
+    org: Option<String>,
+    server: Option<String>,
+) -> eyre::Result<()> {
+    let slug = resolve_active_org(org)?;
+    let project = project_node_for(project, &slug, server.clone()).await?;
+    let links: links_proto::LinksServiceClient = establish_client(server.clone(), &slug).await?;
+    let collections: collection_proto::CollectionServiceClient =
+        establish_client(server, &slug).await?;
+    // A deleted collection's link still clears by the id it had.
+    let id = find_collection(&collections, &slug, collection)
+        .await?
+        .map_or_else(|| collection.to_owned(), |c| c.id);
+    let target = links::NodeRef::new(links::NodeKind::Collection, id.clone());
+    release(&links, &project, &target).await?;
+    println!("detached {id} from {}", project.id);
+    Ok(())
+}
+
+/// A `--form` value: one of the closed vocabulary. Anything else is
+/// refused, naming it — storing "no form" for a typo would read as done.
+fn parse_form(raw: &str) -> Result<project::Form, String> {
+    project::Form::parse(raw).ok_or_else(|| {
+        format!(
+            "`{raw}` is not a project form; one of song, single, ep, lp, album, concert, live-set"
+        )
+    })
 }
 
 pub(crate) async fn connect_project_client(
@@ -1398,4 +1646,31 @@ fn print_project_row(p: &project::ProjectInfo, indent: usize) {
         "{pad}{:<28}  {:<10}  {:<8}{tags}",
         p.title, p.status, p.priority
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_form, project_node};
+
+    /// The page path `project get` prints names the project's
+    /// directory, so it can be handed straight back to attach-*.
+    #[test]
+    fn a_project_page_path_names_its_directory() {
+        assert_eq!(
+            project_node("crescendum-album/project.md").unwrap().id,
+            "crescendum-album"
+        );
+        assert_eq!(project_node("/example-album/").unwrap().id, "example-album");
+        assert_eq!(project_node("myproject.md").unwrap().id, "myproject.md");
+        for bad in ["", "project.md", "a//b", "../x"] {
+            assert!(project_node(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_form_is_the_closed_vocabulary() {
+        assert_eq!(parse_form("Album"), Ok(project::Form::Album));
+        assert_eq!(parse_form("live-set"), Ok(project::Form::LiveSet));
+        assert!(parse_form("recital").is_err());
+    }
 }

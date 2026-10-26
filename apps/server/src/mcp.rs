@@ -556,6 +556,7 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                         "priority": s_("'urgent' | 'high' | 'normal' (default) | 'low'."),
                         "parent_id": s_("UUID of a parent project, for sub-projects."),
                         "details": s_("Markdown body — scope, links, context."),
+                        "form": s_(FORM_ARG),
                     }),
                     &["title"],
                 )
@@ -564,8 +565,8 @@ fn build_tool_catalog() -> Vec<ToolDef> {
         ToolDef {
             name: "update_project",
             plugin: "core",
-            description: "Change a project by id: retitle, set status/priority, or replace its \
-                          markdown body. Only the fields you pass change.",
+            description: "Change a project by id: retitle, set status/priority/form, or replace \
+                          its markdown body. Only the fields you pass change.",
             schema: || {
                 obj(
                     json!({
@@ -574,6 +575,7 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                         "status": s_("New status, e.g. 'active', 'paused', 'done'."),
                         "priority": s_("New priority."),
                         "details": s_("REPLACES the whole markdown body."),
+                        "form": s_(FORM_UPDATE_ARG),
                     }),
                     &["id"],
                 )
@@ -1041,6 +1043,8 @@ fn build_tool_catalog() -> Vec<ToolDef> {
     v.extend(lighting_tool_catalog());
     v.extend(app_doc_tool_catalog());
     #[cfg(feature = "plugin-fasttrackstudio")]
+    v.extend(setlist_tool_catalog());
+    #[cfg(feature = "plugin-fasttrackstudio")]
     v.extend(live_tool_catalog());
     #[cfg(feature = "plugin-wiki")]
     v.extend(wiki_tool_catalog());
@@ -1453,6 +1457,55 @@ fn app_doc_tool_catalog() -> Vec<ToolDef> {
                         "project": s_("The project's path on the Projects tier."),
                     }),
                     &["project"],
+                )
+            },
+        },
+    ]
+}
+
+/// The setlist tools: which project a collection belongs to.
+///
+/// The same `project:<path>` → `<node>` `Down` link the app-doc tools
+/// make, aimed at `collection:<id>` (`crate::app_docs::attach_collection`).
+/// Named for setlists because that is what people attach, but any
+/// collection may be held: its kind is the app's word. Behind the
+/// fasttrackstudio plugin only because the collection store is.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn setlist_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "attach_setlist",
+            plugin: "fasttrackstudio",
+            description: "Say that a setlist (an ordered collection, of any kind the app \
+                          chose) belongs to a project, so the project lists it. A project may \
+                          hold many: an album its running order, a weekly series one setlist \
+                          per week. Idempotent: attaching it again returns the link already \
+                          held. Refused for a collection the org does not hold.",
+            schema: || {
+                obj(
+                    json!({
+                        "project": s_("The project's path on the Projects tier, e.g. \
+                                       'example-album' (its page path 'example-album/project.md' \
+                                       from list_projects works too)."),
+                        "collection": s_("The collection's id, or its exact title."),
+                    }),
+                    &["project", "collection"],
+                )
+            },
+        },
+        ToolDef {
+            name: "detach_setlist",
+            plugin: "fasttrackstudio",
+            description: "Undo attach_setlist: the setlist no longer belongs to the project. \
+                          The setlist itself is untouched. Also clears a link whose collection \
+                          has since been deleted (pass its id).",
+            schema: || {
+                obj(
+                    json!({
+                        "project": s_("The project's path on the Projects tier."),
+                        "collection": s_("The collection's id, or its exact title."),
+                    }),
+                    &["project", "collection"],
                 )
             },
         },
@@ -3960,6 +4013,10 @@ fn call_tool(
                 },
                 details: arg_str(args, "details").unwrap_or_default(),
                 verify_command: arg_str(args, "verify_command").unwrap_or_default(),
+                form: match arg_str(args, "form") {
+                    Some(f) => parse_form(&f)?,
+                    None => None,
+                },
                 ..Default::default()
             };
             let title = draft.title.clone();
@@ -3988,6 +4045,9 @@ fn call_tool(
             }
             if let Some(details) = arg_str(args, "details") {
                 current.details = details;
+            }
+            if let Some(form) = arg_str(args, "form") {
+                current.form = parse_form(&form)?;
             }
             let saved = org
                 .projects
@@ -4755,6 +4815,8 @@ fn call_tool(
         n if LIGHTING_TOOLS.contains(&n) => lighting_tool(org, n, args),
         n if APP_DOC_TOOLS.contains(&n) => app_doc_tool(org, principal, n, args),
         #[cfg(feature = "plugin-fasttrackstudio")]
+        n if SETLIST_TOOLS.contains(&n) => setlist_tool(org, principal, n, args),
+        #[cfg(feature = "plugin-fasttrackstudio")]
         n if LIVE_TOOLS.contains(&n) => live_tool(org, caller, n, args),
 
         #[cfg(feature = "plugin-wiki")]
@@ -5462,6 +5524,61 @@ fn app_doc_tool(
                 })
                 .collect();
             Ok(json!({ "project": project.id, "count": out.len(), "docs": out }))
+        }
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+// ── Setlist tools ────────────────────────────────────────────────
+
+/// The tools [`setlist_tool`] answers; must match
+/// [`setlist_tool_catalog`].
+#[cfg(feature = "plugin-fasttrackstudio")]
+const SETLIST_TOOLS: &[&str] = &["attach_setlist", "detach_setlist"];
+
+/// One setlist tool call, over the org's collection and links stores.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn setlist_tool(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, ToolFailure> {
+    let project = required_str(args, "project")
+        .and_then(|p| crate::app_docs::project_node(&p).map_err(ToolFailure::Message))?;
+    let target = required_str(args, "collection")?;
+    match name {
+        "attach_setlist" => {
+            let (link, c) = crate::app_docs::attach_collection(
+                &org.collections,
+                &org.links,
+                &project,
+                &org.slug,
+                &target,
+                principal.unwrap_or("mcp"),
+            )
+            .map_err(ToolFailure::Message)?;
+            Ok(json!({
+                "project": project.id,
+                "link_id": link.id,
+                "collection": {
+                    "id": c.id,
+                    "title": c.title,
+                    "kind": c.kind.as_str(),
+                    "items": c.items.len(),
+                },
+            }))
+        }
+        "detach_setlist" => {
+            let (id, removed) = crate::app_docs::detach_collection(
+                &org.collections,
+                &org.links,
+                &project,
+                &org.slug,
+                &target,
+            )
+            .map_err(ToolFailure::Message)?;
+            Ok(json!({ "project": project.id, "collection_id": id, "detached": removed }))
         }
         _ => Err(ToolFailure::Unknown),
     }
@@ -6193,6 +6310,30 @@ fn project_json(p: &project::ProjectInfo) -> Value {
         "status": p.status,
         "priority": p.priority,
         "path": p.path,
+        "form": p.form.map(project::Form::as_str),
+    })
+}
+
+/// What `create_project`'s `form` says.
+const FORM_ARG: &str = "What shape of thing the project is: 'song' | 'single' | 'ep' | 'lp' | \
+                        'album' | 'concert' | 'live-set'. Omit for unclassified.";
+/// What `update_project`'s `form` says.
+const FORM_UPDATE_ARG: &str = "New form: 'song' | 'single' | 'ep' | 'lp' | 'album' | 'concert' \
+                               | 'live-set', or 'none' to clear it.";
+
+/// A `form` argument: one of the closed vocabulary, or `none`/empty for
+/// unclassified. Anything else is refused, naming the vocabulary —
+/// quietly storing "no form" for a misspelt one would read as success.
+fn parse_form(raw: &str) -> Result<Option<project::Form>, ToolFailure> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    project::Form::parse(raw).map(Some).ok_or_else(|| {
+        ToolFailure::Message(format!(
+            "`{raw}` is not a project form; one of song, single, ep, lp, album, concert, \
+             live-set (or none)"
+        ))
     })
 }
 
@@ -6724,6 +6865,33 @@ mod tests {
                 "`{tool}` must say it is app-agnostic"
             );
         }
+    }
+
+    /// The setlist tools agree with their dispatch list and reach the
+    /// catalog.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    #[test]
+    fn setlist_tools_match_their_dispatch_list() {
+        let listed: Vec<&str> = setlist_tool_catalog().iter().map(|t| t.name).collect();
+        assert_eq!(listed, SETLIST_TOOLS);
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for tool in SETLIST_TOOLS {
+            assert!(names.contains(tool), "`{tool}` missing from the catalog");
+        }
+    }
+
+    /// A form argument is the closed vocabulary or nothing; a misspelt
+    /// one is refused rather than stored as "unclassified".
+    #[test]
+    fn a_form_argument_is_the_vocabulary_or_none() {
+        assert_eq!(parse_form("album").ok(), Some(Some(project::Form::Album)));
+        assert_eq!(
+            parse_form(" Live-Set ").ok(),
+            Some(Some(project::Form::LiveSet))
+        );
+        assert_eq!(parse_form("none").ok(), Some(None));
+        assert_eq!(parse_form("").ok(), Some(None));
+        assert!(parse_form("albun").is_err());
     }
 
     /// Every asset tool name is distinct across the four lanes — the

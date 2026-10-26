@@ -22,10 +22,18 @@
 //!   [`detach`] and [`project_docs`] are that, with the catalog checked
 //!   on the way in and read on the way out. Nothing here looks at
 //!   `kind`: a project holds whatever docs its apps made.
+//! - A project holds collections the same way: `project:<path>` →
+//!   `collection:<id>` ([`NodeKind::Collection`], `Down`), through
+//!   [`attach_collection`] and [`detach_collection`]. One link shape,
+//!   one code path ([`hold`], [`release`]); only the target's kind and
+//!   the store that vouches for it differ. A series project holds one
+//!   setlist a week this way, an album its running order.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "plugin-fasttrackstudio")]
+use collection::{Collection, CollectionService};
 use crdt::docs::{DocMeta, DocQuery, Docs as _, DocsError, DocsHost};
 use crdt::sync::{DocSync, SyncDown, SyncError};
 use links::{
@@ -93,12 +101,31 @@ pub fn doc_node(doc_id: Uuid) -> NodeRef {
     NodeRef::new(NodeKind::AppDoc, doc_id.to_string())
 }
 
+/// The reference a collection goes by: `collection:<id>`, local.
+#[must_use]
+pub fn collection_node(id: &str) -> NodeRef {
+    NodeRef::new(NodeKind::Collection, id)
+}
+
 /// The reference a project goes by: `project:<path>`, its path on the
 /// Projects tier (`example-album`, `example-album/track-two`). Slashes
 /// at either end are dropped; an empty segment, `.` or `..` is refused,
 /// since the path is the project's address and those name nothing.
+///
+/// The project's page path (`example-album/project.md`, what
+/// `list_projects` reports) is accepted too and names its directory:
+/// handing the page back is the obvious thing to do with a path a tool
+/// just printed, and a link to `project:example-album/project.md` would
+/// be a link no project page ever lists.
 pub fn project_node(project: &str) -> Result<NodeRef, String> {
     let path = project.trim().trim_matches('/');
+    let path = if path == org_proto::PROJECT_PAGE {
+        ""
+    } else {
+        path.strip_suffix(org_proto::PROJECT_PAGE)
+            .and_then(|dir| dir.strip_suffix('/'))
+            .unwrap_or(path)
+    };
     if path.is_empty()
         || path
             .split('/')
@@ -140,20 +167,79 @@ pub async fn list(
     Ok(out)
 }
 
-/// Every link by which `project` holds an app doc.
-fn attached(links: &impl LinksService, project: &NodeRef) -> Result<Vec<TypedLink>, String> {
-    let held = links
+/// Every `Down` link by which `project` holds a local node of `kind`.
+fn held(
+    links: &impl LinksService,
+    project: &NodeRef,
+    kind: NodeKind,
+) -> Result<Vec<TypedLink>, String> {
+    let all = links
         .links_for(project.clone())
         .map_err(|e| format!("couldn't read the links of `{}`: {e}", project.id))?;
-    Ok(held
+    Ok(all
         .into_iter()
         .filter(|l| {
             l.source == *project
                 && l.relation == Relation::Down
-                && l.target.kind == NodeKind::AppDoc
+                && l.target.kind == kind
                 && l.target.is_local()
         })
         .collect())
+}
+
+/// Every link by which `project` holds an app doc.
+fn attached(links: &impl LinksService, project: &NodeRef) -> Result<Vec<TypedLink>, String> {
+    held(links, project, NodeKind::AppDoc)
+}
+
+/// `project` holds `target`: the `Down` link, made once. An identical
+/// link already held is returned rather than duplicated. The caller has
+/// already checked that `target` names something; `by` is who asked,
+/// for the link's provenance.
+fn hold(
+    links: &impl LinksService,
+    project: &NodeRef,
+    target: NodeRef,
+    by: &str,
+) -> Result<TypedLink, String> {
+    if let Some(link) = held(links, project, target.kind)?
+        .into_iter()
+        .find(|l| l.target == target)
+    {
+        return Ok(link);
+    }
+    let what = target.to_token();
+    let mut link = TypedLink::new(project.clone(), target, Relation::Down, Confidence::Certain);
+    link.provenance.created_by = by.to_owned();
+    links
+        .create(link)
+        .map_err(|e| format!("couldn't attach `{what}` to `{}`: {e}", project.id))
+}
+
+/// `project` no longer holds `target`: every link by which it did goes.
+/// Returns how many; none is an error, naming what was asked.
+fn release(
+    links: &impl LinksService,
+    project: &NodeRef,
+    target: &NodeRef,
+) -> Result<usize, String> {
+    let gone: Vec<TypedLink> = held(links, project, target.kind)?
+        .into_iter()
+        .filter(|l| l.target == *target)
+        .collect();
+    if gone.is_empty() {
+        return Err(format!(
+            "`{}` is not attached to project `{}`",
+            target.to_token(),
+            project.id
+        ));
+    }
+    for l in &gone {
+        links
+            .delete(&l.id)
+            .map_err(|e| format!("couldn't detach `{}`: {e}", target.to_token()))?;
+    }
+    Ok(gone.len())
 }
 
 /// Attach a catalogued doc to `project`: the `Down` link, made once. An
@@ -182,19 +268,8 @@ pub async fn attach(
         }
         Err(e) => return Err(format!("couldn't read app doc `{doc_id}`: {e}")),
     };
-    let doc = doc_node(doc_id);
-    if let Some(held) = attached(links, project)?
-        .into_iter()
-        .find(|l| l.target == doc)
-    {
-        return Ok((held, meta));
-    }
-    let mut link = TypedLink::new(project.clone(), doc, Relation::Down, Confidence::Certain);
-    link.provenance.created_by = by.to_owned();
-    let made = links
-        .create(link)
-        .map_err(|e| format!("couldn't attach `{doc_id}` to `{}`: {e}", project.id))?;
-    Ok((made, meta))
+    let link = hold(links, project, doc_node(doc_id), by)?;
+    Ok((link, meta))
 }
 
 /// Detach a doc from `project`: every link by which the project holds
@@ -202,23 +277,77 @@ pub async fn attach(
 /// to a deleted doc can be cleared. Returns how many links went; none is
 /// an error, naming what was asked.
 pub fn detach(links: &impl LinksService, project: &NodeRef, doc_id: Uuid) -> Result<usize, String> {
-    let doc = doc_node(doc_id);
-    let held: Vec<TypedLink> = attached(links, project)?
+    release(links, project, &doc_node(doc_id))
+}
+
+/// One of `org`'s collections, by id or, failing that, by exact title.
+/// A title two collections share is refused rather than guessed at.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn find_collection(
+    collections: &impl CollectionService,
+    org: &str,
+    target: &str,
+) -> Result<Option<Collection>, String> {
+    let target = target.trim();
+    if let Some(c) = collections
+        .get(target)
+        .map_err(|e| format!("couldn't read collection `{target}`: {e}"))?
+    {
+        return Ok(Some(c));
+    }
+    let mut named: Vec<Collection> = collections
+        .list(org.to_owned(), None)
+        .map_err(|e| format!("couldn't list collections: {e}"))?
         .into_iter()
-        .filter(|l| l.target == doc)
+        .filter(|c| c.title == target)
         .collect();
-    if held.is_empty() {
+    match named.len() {
+        0 | 1 => Ok(named.pop()),
+        n => Err(format!(
+            "{n} collections are titled `{target}`; pass one's id instead"
+        )),
+    }
+}
+
+/// Attach one of `org`'s collections to `project` — a set list to the
+/// show, the series or the album it belongs to. `target` is the
+/// collection's id or its exact title. Idempotent, like [`attach`]; a
+/// collection the store does not hold is refused. Any kind of
+/// collection may be held: the kind is the app's word, not Task's.
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub fn attach_collection(
+    collections: &impl CollectionService,
+    links: &impl LinksService,
+    project: &NodeRef,
+    org: &str,
+    target: &str,
+    by: &str,
+) -> Result<(TypedLink, Collection), String> {
+    let Some(collection) = find_collection(collections, org, target)? else {
         return Err(format!(
-            "app doc `{doc_id}` is not attached to project `{}`",
-            project.id
+            "no collection `{target}` in this org (by id or title)"
         ));
-    }
-    for l in &held {
-        links
-            .delete(&l.id)
-            .map_err(|e| format!("couldn't detach `{doc_id}`: {e}"))?;
-    }
-    Ok(held.len())
+    };
+    let link = hold(links, project, collection_node(&collection.id), by)?;
+    Ok((link, collection))
+}
+
+/// Detach a collection from `project`. `target` is its id or title;
+/// an id the store no longer holds still clears its link, so a deleted
+/// collection's entry can be removed. Returns the collection's id and
+/// how many links went.
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub fn detach_collection(
+    collections: &impl CollectionService,
+    links: &impl LinksService,
+    project: &NodeRef,
+    org: &str,
+    target: &str,
+) -> Result<(String, usize), String> {
+    let id = find_collection(collections, org, target)?
+        .map_or_else(|| target.trim().to_owned(), |c| c.id);
+    let gone = release(links, project, &collection_node(&id))?;
+    Ok((id, gone))
 }
 
 /// One doc a project holds, as the catalog has it now.
@@ -295,8 +424,72 @@ mod tests {
             project_node("/example-album/track-two/").unwrap().id,
             "example-album/track-two"
         );
-        for bad in ["", "/", "a//b", "../x", "a/./b"] {
+        for bad in ["", "/", "a//b", "../x", "a/./b", "project.md"] {
             assert!(project_node(bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// The page path `list_projects` prints names the same project as
+    /// its directory, so a tool's output can be handed straight back.
+    #[test]
+    fn a_project_page_path_names_its_directory() {
+        assert_eq!(
+            project_node("crescendum-album/project.md").unwrap(),
+            project_node("crescendum-album").unwrap()
+        );
+        assert_eq!(
+            project_node("example-album/track-two/project.md")
+                .unwrap()
+                .id,
+            "example-album/track-two"
+        );
+        // Only a whole `project.md` segment is the page.
+        assert_eq!(project_node("myproject.md").unwrap().id, "myproject.md");
+    }
+
+    /// A project holds a collection by the one link shape app docs use,
+    /// found by id or title, made once, and cleared by either.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    #[test]
+    fn a_project_holds_a_collection_once_and_lets_it_go() {
+        use collection::{CollectionKind, CollectionService as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let links = links::Store::open(dir.path().join("links.jsonl"));
+        let collections = collection::Store::open(dir.path().join("collections.jsonl"));
+        let set = collections
+            .create(
+                "acme".into(),
+                "Album Launch Set".into(),
+                CollectionKind::new("setlist"),
+            )
+            .unwrap();
+        let album = project_node("example-album").unwrap();
+
+        let (first, c) = attach_collection(
+            &collections,
+            &links,
+            &album,
+            "acme",
+            "Album Launch Set",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(c.id, set.id);
+        assert_eq!(first.target, collection_node(&set.id));
+        assert_eq!(first.relation, Relation::Down);
+        let (again, _) =
+            attach_collection(&collections, &links, &album, "acme", &set.id, "t").unwrap();
+        assert_eq!(again.id, first.id, "attaching twice keeps one link");
+
+        assert!(
+            attach_collection(&collections, &links, &album, "acme", "Nope", "t").is_err(),
+            "a collection the store does not hold is refused"
+        );
+
+        let (id, gone) =
+            detach_collection(&collections, &links, &album, "acme", "Album Launch Set").unwrap();
+        assert_eq!((id.as_str(), gone), (set.id.as_str(), 1));
+        assert!(detach_collection(&collections, &links, &album, "acme", &set.id).is_err());
     }
 }

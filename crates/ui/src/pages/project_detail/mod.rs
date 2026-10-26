@@ -398,6 +398,13 @@ pub fn ProjectDetailView(id: String) -> Element {
                                     project: p.clone(),
                                     slug: forge_slug.clone(),
                                 }
+                                // The setlists it holds — an album's running
+                                // order, a series' one per week. Nothing at all
+                                // when it holds none.
+                                crate::pages::setlists::ProjectSetlists {
+                                    project: p.clone(),
+                                    slug: forge_slug.clone(),
+                                }
                                 // Code projects also carry their issues & PRs.
                                 if kind == ProjectKind::Code && !connected_repos.is_empty() {
                                     div { class: "flex flex-col gap-2",

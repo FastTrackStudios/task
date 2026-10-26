@@ -5,8 +5,8 @@
 
 use architect_ui::lucide_dioxus::{
     Activity as ActivityIcon, BookOpen, BookUser, CalendarDays, CircleCheck, FolderKanban,
-    FolderOpen, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Star, Timer,
-    Users, Waypoints,
+    FolderOpen, Inbox as InboxIcon, Music, Notebook, RefreshCw, Settings as SettingsIcon, Star,
+    Timer, Users, Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -35,6 +35,9 @@ fn icon_contacts() -> Element {
 }
 fn icon_projects() -> Element {
     rsx! { FolderKanban { size: 16 } }
+}
+fn icon_setlists() -> Element {
+    rsx! { Music { size: 16 } }
 }
 fn icon_tasks() -> Element {
     rsx! { CircleCheck { size: 16 } }
@@ -109,6 +112,14 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_projects,
             route: Route::ProjectsRoute {},
+        },
+        // Setlists sit beside Projects because projects hold them. The
+        // collection store they read is the fasttrackstudio plugin's.
+        NavTab {
+            label: "Setlists",
+            plugin: "fasttrackstudio",
+            icon: icon_setlists,
+            route: Route::SetlistsRoute {},
         },
         NavTab {
             label: "Favorites",
@@ -317,6 +328,8 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::PersonRoute { .. } => "Person",
         Route::ProjectsRoute {} => "Projects",
         Route::ProjectDetailRoute { .. } => "Project",
+        Route::SetlistsRoute {} => "Setlists",
+        Route::SetlistDetailRoute { .. } => "Setlist",
         Route::GoalsRoute {} => "Goals",
         Route::TasksRoute {} => "Tasks",
         Route::TaskDetailRoute { .. } => "Task",
@@ -409,6 +422,19 @@ mod tests {
             .expect("an Activity tab");
         assert_eq!(tab.plugin, "core");
         assert_eq!(route_title(&tab.route), "Activity");
+    }
+
+    /// Setlists are offered wherever collections are served, right after
+    /// Projects — the workspace section lists the tabs in this order,
+    /// minus Projects, so they land next to the Projects row.
+    #[test]
+    fn the_setlists_tab_follows_projects() {
+        let tabs = nav_tabs_for(&task_plugin::PluginSet::resolve(None));
+        let at = |label: &str| tabs.iter().position(|t| t.label == label);
+        assert_eq!(at("Setlists"), at("Projects").map(|p| p + 1));
+        let setlists = &tabs[at("Setlists").unwrap()];
+        assert_eq!(setlists.plugin, "fasttrackstudio");
+        assert_eq!(route_title(&setlists.route), "Setlists");
     }
 
     /// And it is gated on the thing it syncs: an org with Files off has

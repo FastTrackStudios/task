@@ -546,6 +546,8 @@ fn side_panel_for(route: &Route) -> SidePanel {
         | Route::DashboardRoute {}
         | Route::InboxRoute {}
         | Route::ProjectsRoute {}
+        | Route::SetlistsRoute {}
+        | Route::SetlistDetailRoute { .. }
         | Route::GoalsRoute {}
         | Route::TasksRoute {}
         | Route::TaskDetailRoute { .. }
@@ -617,6 +619,7 @@ mod tests {
         assert_eq!(side_panel_for(&Route::TasksRoute {}), SidePanel::Work);
         assert_eq!(side_panel_for(&Route::HomeRoute {}), SidePanel::Work);
         assert_eq!(side_panel_for(&Route::ProjectsRoute {}), SidePanel::Work);
+        assert_eq!(side_panel_for(&Route::SetlistsRoute {}), SidePanel::Work);
         assert_eq!(
             side_panel_for(&Route::VaultRoute {
                 path: String::new(),
