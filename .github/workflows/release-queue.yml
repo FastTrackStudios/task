@@ -1,0 +1,73 @@
+# Release queue: a release asked for on a PR ships once main is green.
+#
+# Label a PR `release` (auto-merge on, if you like) and walk away: it
+# merges when its checks pass, checks.yml runs the full suite on main, and
+# when that run passes this workflow tags the commit — `release.sh release
+# --yes <sha>`, exactly `just release <sha>` — as the fts-forge App, so the
+# tag starts Deploy, task-ios and task-macos like a person's would (a tag
+# pushed with GITHUB_TOKEN starts nothing).
+#
+# What counts as asked (`release.sh queued`): any PR with the label merged
+# since the commit's last release. So a labelled PR whose own main run went
+# red is released by the next green commit, a release already cut is not
+# asked again, and two labelled PRs merged together ship as one release.
+# A run on main with no labelled PR since the last tag does nothing; `just
+# release` by hand still works and is unchanged.
+
+name: Release queue
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Re-check main's tip by hand (a label added after its run finished).
+  workflow_dispatch:
+
+# One at a time, in order: two green runs back to back must not race for
+# the same version.
+concurrency:
+  group: release-queue
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release if asked
+    # A green full run of a push to main (not a PR's run, not a red one).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: fts-forge token
+        id: forge
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.FORGE_APP_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: read
+          permission-checks: read
+          permission-actions: read
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.forge.outputs.token }}
+      - name: Release, if a PR since the last one asked
+        env:
+          GH_TOKEN: ${{ steps.forge.outputs.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if asked="$(bash scripts/release.sh queued "$SHA")"; then
+            echo "asked for by $asked: releasing $(git rev-parse --short "$SHA")"
+            bash scripts/release.sh release --yes "$SHA"
+          else
+            echo "no PR merged since the last release asked for one: nothing to do"
+          fi

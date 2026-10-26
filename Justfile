@@ -181,7 +181,9 @@ release-plan:
 # on SHA: a commit of main or a release/v* line, green) and push it. THE
 # TAG SHIPS. `--dry-run` names the commit and prints the notes; `--yes`
 # skips the question. Pushes as whoever you are: a person or the fts-forge
-# App, never a workflow token (that starts no workflow).
+# App, never a workflow token (that starts no workflow). Or label the PR
+# `release`: once its commit is green on main, release-queue.yml runs this
+# as fts-forge, so nobody has to wait for the run.
 release *ARGS:
     bash scripts/release.sh release {{ARGS}}
 

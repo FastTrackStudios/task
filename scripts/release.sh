@@ -71,6 +71,10 @@
 #                                          commit with a green `CI passed` (or
 #                                          on SHA: on main or release/v*, green)
 #                                          and push it: THIS SHIPS
+#   scripts/release.sh queued SHA         CI (release-queue.yml): did a PR merged
+#                                          since SHA's last release ask for one
+#                                          (label `release`)? Prints those PRs;
+#                                          exit 1 when none did
 #   scripts/release.sh hotfix NAME SHA... release/v<latest tag> from the tag
 #                                          (if missing), fix/NAME with SHA...
 #                                          cherry-picked (-x) from main, its PR
@@ -103,6 +107,9 @@ CHANGES_DIR=".changes"
 # The aggregate of checks.yml's full run. A release is tagged, built and
 # uploaded only from a commit where it is green.
 BUILD_CHECK="${BUILD_CHECK:-CI passed}"
+# The PR label that asks for a release once the PR's commit is green on
+# main (release-queue.yml).
+RELEASE_LABEL="${RELEASE_LABEL:-release}"
 # How far back `release` looks on main for a green commit.
 SCAN_MAX="${RELEASE_SCAN_MAX:-60}"
 
@@ -540,6 +547,25 @@ cmd_release() { # [--dry-run] [--yes] [SHA]
     note "pushed v$next at $(git rev-parse --short "$sha") on $line: Deploy, task-ios and task-macos start from the tag"
 }
 
+# Did a PR merged since <sha>'s last release ask for one? A PR asks with
+# the `release` label; its squash commit, or any commit after it up to
+# <sha>, then ships once green — so a labelled PR whose own run went red is
+# still released by the next green commit, and one released already is not
+# asked again. Prints the asking PRs (`#348 #351`); exit 1 when none.
+cmd_queued() { # <sha>
+    local want="${1:-}" sha prev c asked=()
+    [ -n "$want" ] || die "queued needs a commit"
+    sha="$(git rev-parse -q --verify "$want^{commit}")" || die "'$want' is not a commit"
+    prev="$(last_tag "$sha")"
+    for c in $(git rev-list --first-parent "${prev:+$prev..}$sha"); do
+        while IFS= read -r pr; do
+            [ -n "$pr" ] && asked+=("#$pr")
+        done < <(gh api "repos/$REPO/commits/$c/pulls"             --jq ".[] | select(any(.labels[]; .name == \"$RELEASE_LABEL\")) | .number" 2>/dev/null || true)
+    done
+    [ ${#asked[@]} -gt 0 ] || return 1
+    echo "${asked[*]}"
+}
+
 # Write <version> into the working tree's [workspace.package] version and
 # the workspace members' entries in Cargo.lock: the release build's own
 # checkout, never committed. Every crate with `version.workspace = true`
@@ -775,6 +801,7 @@ case "${1:-}" in
     notes) shift; cmd_notes "$@" ;;
     plan) shift; cmd_plan "$@" ;;
     release) shift; cmd_release "$@" ;;
+    queued) shift; cmd_queued "$@" ;;
     hotfix) shift; cmd_hotfix "$@" ;;
     stamp) shift; cmd_stamp "$@" ;;
     image-tag) shift; cmd_image_tag "$@" ;;
