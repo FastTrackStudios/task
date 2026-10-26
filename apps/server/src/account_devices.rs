@@ -190,8 +190,8 @@ pub async fn sync_account(
         .register_device(token.to_owned(), register(None, offer(node)))
         .await
         .map_err(|e| eyre::eyre!("register with the issuer: {e:?}"))?;
-    let stale = stale_rows(me, &first.devices);
-    let retired = retire(issuer, token, me, &first).await;
+    let stale = stale_rows(me, &first.devices, chrono::Utc::now());
+    let retired = retire(issuer, token, me, &stale).await;
     // The other devices: never this one under an old row.
     let others = |devices: &[PeerDevice]| -> Vec<PeerDevice> {
         devices
@@ -287,21 +287,38 @@ pub async fn sync_account(
     })
 }
 
-/// The account's other rows that are this device: [`ThisDevice::retire`]
-/// (the id an older Task registered under), and any row with this
-/// device's name and platform under another id (made by an app before
-/// every app took its id from `auth_client::this_device`, or by a
-/// reinstall that lost its install-id file). The same name-and-platform
-/// rule `DeviceRegistration::is_listed` uses to tell an app the device is
-/// already listed.
-fn stale_rows(me: &ThisDevice, devices: &[PeerDevice]) -> Vec<Uuid> {
+/// How long a row must have gone unrefreshed before a same-named row is
+/// taken for this device's leftover. A live device refreshes its row
+/// every pass (minutes); a leftover is never touched again.
+const STALE_AFTER: chrono::Duration = chrono::Duration::hours(24);
+
+/// The account's other rows that are this device:
+/// - [`ThisDevice::retire`], the id an older Task registered under;
+/// - a row with this device's name and platform under another id that
+///   nobody has refreshed for [`STALE_AFTER`] (made by an app before
+///   every app took its id from `auth_client::this_device`, or by a
+///   reinstall that lost its install-id file).
+///
+/// The age is what tells a leftover from another device that happens to
+/// share the name (two iPads, both "Cody's iPad"): that one refreshes
+/// its row too, and neither ever takes the other off. Servers never
+/// match by name: their names (`TASK_PEER_NAME`, the host name) are
+/// often alike across machines.
+fn stale_rows(
+    me: &ThisDevice,
+    devices: &[PeerDevice],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<Uuid> {
     let name = me.name.trim();
     devices
         .iter()
         .filter(|d| d.device_id != me.device_id)
         .filter(|d| {
             Some(d.device_id) == me.retire
-                || (d.platform == me.platform && d.name.trim().eq_ignore_ascii_case(name))
+                || (me.platform != "server"
+                    && d.platform == me.platform
+                    && d.name.trim().eq_ignore_ascii_case(name)
+                    && now.signed_duration_since(d.last_seen_at) > STALE_AFTER)
         })
         .map(|d| d.device_id)
         .collect()
@@ -311,14 +328,9 @@ fn stale_rows(me: &ThisDevice, devices: &[PeerDevice]) -> Vec<Uuid> {
 /// own row. `true` when none is left: taken off now, or none there (a
 /// pass after an earlier one whose file write was lost finds nothing).
 /// A refusal is logged and retried on the next pass: it never fails one.
-async fn retire(
-    issuer: &impl DeviceService,
-    token: &str,
-    me: &ThisDevice,
-    dir: &architect_auth::DeviceDirectory,
-) -> bool {
+async fn retire(issuer: &impl DeviceService, token: &str, me: &ThisDevice, stale: &[Uuid]) -> bool {
     let mut all_gone = true;
-    for old in stale_rows(me, &dir.devices) {
+    for &old in stale {
         match issuer.forget_device(token.to_owned(), old).await {
             Ok(()) => {
                 info!(device = %me.device_id, retired = %old, "account: a stale row of this device is off the account");
@@ -369,45 +381,85 @@ mod tests {
         }
     }
 
-    fn peer(id: Uuid, name: &str, platform: &str) -> PeerDevice {
+    fn peer(id: Uuid, name: &str, platform: &str, seen_hours_ago: i64) -> PeerDevice {
         PeerDevice {
             device_id: id,
             name: name.into(),
             platform: platform.into(),
             endpoint_id: None,
             relay_url: None,
-            last_seen_at: chrono::Utc::now(),
+            last_seen_at: chrono::Utc::now() - chrono::Duration::hours(seen_hours_ago),
         }
     }
 
+    fn me(name: &str, platform: &str, retire: Option<Uuid>) -> ThisDevice {
+        ThisDevice {
+            device_id: Uuid::new_v4(),
+            name: name.into(),
+            platform: platform.into(),
+            account: Uuid::new_v4(),
+            retire,
+        }
+    }
+
+    fn sorted(mut ids: Vec<Uuid>) -> Vec<Uuid> {
+        ids.sort();
+        ids
+    }
+
     #[test]
-    fn this_devices_old_rows_are_its_old_id_and_its_name_on_another_id() {
-        let (me, old, stray, laptop, other_phone) = (
+    fn this_devices_old_rows_are_its_old_id_and_its_unrefreshed_name() {
+        let (old, stray, twin, laptop, other_phone) = (
             Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
         );
-        let this = ThisDevice {
-            device_id: me,
-            name: "Cody's iPhone".into(),
-            platform: "ios".into(),
-            account: Uuid::new_v4(),
-            retire: Some(old),
-        };
+        let this = me("Cody's iPhone", "ios", Some(old));
         let listed = [
-            peer(me, "Cody's iPhone", "ios"),
-            peer(old, "iPhone", "ios"),
-            peer(stray, " cody's iphone ", "ios"),
-            peer(laptop, "airlock", "macos"),
-            peer(other_phone, "Cody's iPhone", "android"),
+            peer(this.device_id, "Cody's iPhone", "ios", 0),
+            // Its old id: retired however recently seen.
+            peer(old, "iPhone", "ios", 0),
+            // Its name, untouched for days: a leftover.
+            peer(stray, " cody's iphone ", "ios", 72),
+            // Its name, refreshed an hour ago: another phone, kept.
+            peer(twin, "Cody's iPhone", "ios", 1),
+            peer(laptop, "airlock", "macos", 72),
+            peer(other_phone, "Cody's iPhone", "android", 72),
         ];
-        let mut stale = stale_rows(&this, &listed);
-        stale.sort();
-        let mut want = vec![old, stray];
-        want.sort();
-        assert_eq!(stale, want, "its old id, and its name on this platform");
+        assert_eq!(
+            sorted(stale_rows(&this, &listed, chrono::Utc::now())),
+            sorted(vec![old, stray]),
+            "its old id, and its name on this platform when nobody refreshes it"
+        );
+    }
+
+    #[test]
+    fn two_live_devices_with_one_name_never_retire_each_other() {
+        let (a, b) = (
+            me("Cody's iPad", "ios", None),
+            me("Cody's iPad", "ios", None),
+        );
+        let listed = [
+            peer(a.device_id, "Cody's iPad", "ios", 0),
+            peer(b.device_id, "Cody's iPad", "ios", 0),
+        ];
+        assert!(stale_rows(&a, &listed, chrono::Utc::now()).is_empty());
+        assert!(stale_rows(&b, &listed, chrono::Utc::now()).is_empty());
+    }
+
+    #[test]
+    fn a_server_retires_only_its_old_id_never_by_name() {
+        let old = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let this = me("node", "server", Some(old));
+        let listed = [
+            peer(this.device_id, "node", "server", 0),
+            peer(old, "node", "server", 72),
+            peer(other, "node", "server", 72),
+        ];
+        assert_eq!(stale_rows(&this, &listed, chrono::Utc::now()), vec![old]);
     }
 
     #[test]
