@@ -185,6 +185,13 @@ Rules live in `docs/spec/`; coverage is tracked with `t[impl]`/`t[verify]`
 markers and the gaps in `docs/spec/unmet.md`. When you meet a rule, update
 both.
 
+Above the specs sit the charters, `docs/charter/` (index in its README):
+the standing hard-requirement definitions, one per area, numbered by the
+GitHub issues they used to be. They are docs, never issues — the tracker
+holds only work someone will pick up. Cite one by path
+(`docs/charter/03-file-manager.md`), not as `#3`; when a charter's gap
+becomes real work, open an issue for that work and link the charter.
+
 ## Iterating on sync
 
 Two-machine behaviour — the files daemon, replicas, pulls, forks — does
