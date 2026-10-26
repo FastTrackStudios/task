@@ -67,7 +67,7 @@ jobs:
     # THEBATTLESHIP's `task-release` pool: the nix store there is warm (and
     # it is the host whose fleet timer installs this very package), so a
     # release rebuilds only the derivations that changed.
-    runs-on: [self-hosted, task-release]
+    runs-on: [self-hosted, task-release-desktop]
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4

@@ -117,11 +117,11 @@ jobs:
     if: ${{ needs.plan.outputs.build == 'true' }}
     # THEBATTLESHIP's `task-release` pool (~/.flake
     # hosts/THEBATTLESHIP/github-runners.nix): a warm nix store and a warm
-    # release target dir ($TASK_CACHE_DIR/release), so a release recompiles
+    # release target dir per instance ($TASK_CACHE_DIR/release-<runner>), so a release recompiles
     # what changed since the last one instead of the whole server and web
     # bundle. Production rolls once these images are on GHCR, so a release
     # reaches it as fast as this build.
-    runs-on: [self-hosted, task-release]
+    runs-on: [self-hosted, task-release-images]
     timeout-minutes: 180
     permissions:
       contents: read
@@ -167,9 +167,11 @@ jobs:
         id: build
         run: |
           set -euo pipefail
-          # The pool's warm release target dir; a hosted runner's home if
+          # This instance's warm release target dir (per instance: a dir is
+          # warm only for the ~/.cargo and checkout paths that built it;
+          # .github/actions/battleship-nix-rust); a hosted runner's home if
           # this ever runs off the pool.
-          dir="${TASK_CACHE_DIR:-$HOME/cargo-target}/release"
+          dir="${TASK_CACHE_DIR:-$HOME/cargo-target}/release-${RUNNER_NAME}"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           export CARGO_TARGET_DIR="$dir"

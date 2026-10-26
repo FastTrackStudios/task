@@ -26,15 +26,16 @@
 #
 #   plan            ubuntu-latest   rustup + cargo-rail (rust-rail), to narrow only
 #   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for pr.yml
-#   lint            task-main       fmt, the static guards, clippy
-#   tests           task-main       the nextest build + rail evidence
-#   wasm            task-main       the wasm32 check
+#   lint            task-main-lint   fmt, the static guards, clippy
+#   tests           task-main-tests  the nextest build + rail evidence
+#   wasm            task-main-wasm   the wasm32 check
 #
 # The `task-release` pool holds only release-profile artifacts (images.yml
 # and desktop-cache.yml, built from a release tag); every check runs on
-# `task-main`. Three instances, so a run's lint, tests and wasm build
-# at once, each on the pool's warm target dir for its kind
-# ($TASK_CACHE_DIR/<kind>).
+# `task-main`. Three instances, one per kind (the labels above), so a run's
+# lint, tests and wasm build at once, each on the same instance every time
+# and on the target dir it left warm ($TASK_CACHE_DIR/<kind>-<runner name>;
+# .github/actions/battleship-nix-rust says why per instance).
 #   checks-passed   ubuntu-latest   the aggregator
 #
 # (A hotfix PR runs lint/tests/wasm on ubuntu-latest instead, restoring
@@ -269,7 +270,7 @@ jobs:
   # side, each with its own rust-cache entry.
   lint:
     name: Lint
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main-lint"]') }}
     timeout-minutes: 90
     needs: plan
     steps:
@@ -330,7 +331,7 @@ jobs:
 
   tests:
     name: Tests
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main-tests"]') }}
     # A cold workspace build on 4 vCPUs (dependencies from the rust-cache).
     timeout-minutes: 120
     needs: plan
@@ -365,8 +366,9 @@ jobs:
       # whose tests passed here (a cancelled or red run leaves no evidence,
       # so its changes stay in the diff), and runs only the tests the diff
       # affects; a docs-only merge runs none. Evidence binds to the cargo
-      # environment, which every instance of a pool shares exactly
-      # (CARGO_TARGET_DIR = $TASK_CACHE_DIR/tests). Release commits, hotfix
+      # environment (CARGO_TARGET_DIR = $TASK_CACHE_DIR/tests-<runner name>,
+      # and the instance's own ~/.cargo), which holds because Tests is
+      # pinned to one instance (`task-main-tests`). Release commits, hotfix
       # branches and dispatches still run every test. No evidence, a failed
       # plan or a CI input in the diff all mean every test.
       - name: Tests
@@ -480,7 +482,7 @@ jobs:
 
   wasm:
     name: Wasm
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main-wasm"]') }}
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.wasm == 'true' }}

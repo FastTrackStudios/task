@@ -150,12 +150,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # THEBATTLESHIP's `task-release` pool, from the Nix dev shell:
+          # THEBATTLESHIP's `task-release` pool, pinned to the instance
+          # labelled `task-release-node` so it always builds on the target
+          # dir it left warm; from the Nix dev shell:
           # scripts/node-binary-linux.sh links OpenSSL and bzip2 statically
           # and takes the binary off /nix/store (glibc floor: the Nix
           # toolchain's, decision 2026-10-24).
           - asset: task-server-linux-x86_64
-            os: [self-hosted, task-release]
+            os: [self-hosted, task-release-node]
             target: x86_64-unknown-linux-gnu
           - asset: task-server-linux-aarch64
             os: ubuntu-22.04-arm
@@ -236,7 +238,7 @@ jobs:
       - name: Build (THEBATTLESHIP, Nix)
         if: ${{ runner.environment == 'self-hosted' && runner.os == 'Linux' }}
         run: |
-          CARGO_TARGET_DIR="$TASK_CACHE_DIR/node" OUT_DIR="$PWD/dist" \
+          CARGO_TARGET_DIR="$TASK_CACHE_DIR/node-$RUNNER_NAME" OUT_DIR="$PWD/dist" \
             bash scripts/node-binary-linux.sh
 
       # The binary reports the release's version, and links nothing but
