@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use app_docs_proto::{DocCard, DocFace, read_face};
+use app_docs_proto::{AppDocFaces, DocCard, DocFace, FacesError, read_face};
 use crdt::Persistence as _;
 use crdt::docs::{DocMeta, DocQuery, Docs as _, DocsError, DocsHost};
 use crdt::loro;
@@ -320,6 +320,73 @@ impl Faces {
             DocCard::new(meta.doc_id, meta.kind, meta.name, meta.updated_us, face),
             read,
         )
+    }
+}
+
+/// [`AppDocFaces::list_faces`] answers this many when asked for 0.
+pub const FACES_DEFAULT: usize = 200;
+/// …and never more than this, whatever was asked.
+pub const FACES_MAX: usize = 1000;
+
+// t[impl offline.app-docs.face] — the org's docs listed with the face
+// each keeps, read without opening them for good
+impl AppDocFaces for Faces {
+    async fn list_faces(
+        &self,
+        kind: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<DocCard>, FacesError> {
+        let limit = match usize::try_from(limit).unwrap_or(FACES_MAX) {
+            0 => FACES_DEFAULT,
+            n => n.min(FACES_MAX),
+        };
+        if let Some(k) = &kind {
+            architect_telemetry::wide::set("doc.kind", k.clone());
+        }
+        let rows = list(&self.docs, kind, limit)
+            .await
+            .map_err(|e| FacesError::Backend(e.to_string()))?;
+        let mut cards = Vec::with_capacity(rows.len());
+        let mut unreadable = 0_usize;
+        for meta in rows {
+            let (card, read) = self.card(meta).await;
+            if read.is_err() {
+                unreadable += 1;
+            }
+            cards.push(card);
+        }
+        architect_telemetry::wide::set("doc.count", cards.len() as i64);
+        architect_telemetry::wide::set(
+            "doc.faced",
+            cards.iter().filter(|c| c.face.is_some()).count() as i64,
+        );
+        architect_telemetry::wide::set("doc.unreadable", unreadable as i64);
+        Ok(cards)
+    }
+
+    async fn face(&self, doc_id: Uuid) -> Result<DocCard, FacesError> {
+        architect_telemetry::wide::set("doc.id", doc_id.to_string());
+        let meta = match self.docs.get(doc_id).await {
+            Ok(m) if !m.deleted => m,
+            Ok(_) | Err(DocsError::Deleted) => {
+                architect_telemetry::wide::set("doc.outcome", "deleted");
+                return Err(FacesError::Deleted(doc_id.to_string()));
+            }
+            Err(DocsError::NotFound) => {
+                architect_telemetry::wide::set("doc.outcome", "not_found");
+                return Err(FacesError::NotFound(doc_id.to_string()));
+            }
+            Err(e) => return Err(FacesError::Backend(e.to_string())),
+        };
+        architect_telemetry::wide::set("doc.kind", meta.kind.clone());
+        let (card, read) = self.card(meta).await;
+        let outcome = match (&read, &card.face) {
+            (Err(_), _) => "unreadable",
+            (Ok(()), Some(_)) => "faced",
+            (Ok(()), None) => "faceless",
+        };
+        architect_telemetry::wide::set("doc.outcome", outcome);
+        Ok(card)
     }
 }
 

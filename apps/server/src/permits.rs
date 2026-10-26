@@ -268,6 +268,8 @@ table!(APP_DOCS, "app-docs", "app-docs/**", [
     rd "get", rd "list", wr "create", wr "rename", wa "delete",
 ]);
 table!(APP_DOCS_STREAM, "app-docs-stream", "app-docs/**", [rd "changes"]);
+// Each app doc's face (`crate::app_docs::Faces`): reads, for members.
+table!(APP_DOC_FACES, "app-doc-faces", "app-docs/**", [rd "list_faces", rd "face"]);
 
 // ── Agent lane ───────────────────────────────────────────────────────────
 
@@ -1217,6 +1219,11 @@ pub fn mounts() -> Vec<Mount> {
             "core",
             crdt::docs::docs_stream_service_descriptor(),
             APP_DOCS_STREAM,
+        ),
+        m(
+            "core",
+            app_docs_proto::service::app_doc_faces_rpc_service_descriptor(),
+            APP_DOC_FACES,
         ),
         m("core", crdt::peer::doc_peer_service_descriptor(), DOC_PEER),
         m(
