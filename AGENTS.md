@@ -156,7 +156,7 @@ follows `skills/ship-stack.md`. In short:
   (clippy, wasm, the tests the merge affects) runs after every merge to
   `main` on THEBATTLESHIP's self-hosted `task-main` pool, whose target
   dirs stay warm between merges (`task-release` builds only the release
-  artifacts: images and the desktop cache; `~/.flake`
+  artifacts: images, node binaries and the Linux desktop; `~/.flake`
   hosts/THEBATTLESHIP/github-runners.nix).
   A newer merge cancels the older run. After pulling `main`, the
   `post-merge` hook records rail evidence in the background so your next

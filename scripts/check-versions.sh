@@ -95,8 +95,7 @@ grep -c 'MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO"'
 
 # ── Image tag, release tag, node binaries ────────────────────────────────
 # The images are tagged with the release tag's bare version, and every
-# release build stamps the tag's version first. (desktop-cache.yml builds
-# the pure flake at the tag for cachix, so it does not stamp.)
+# release build stamps the tag's version first.
 grep -q 'scripts/release.sh image-tag' .github/workflows/images.yml \
     || bad ".github/workflows/images.yml: the image tag must come from \`scripts/release.sh image-tag\` (the release tag)"
 for wf in images.yml node-binaries.yml release-assets.yml task-ios.yml task-macos.yml deploy.yml; do

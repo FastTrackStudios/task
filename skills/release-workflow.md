@@ -30,7 +30,7 @@ hotfix: release/v26.10.2 (from the tag) <-- cherry-pick -x PR -- CI passed -- ju
 | PR into `main` | `PR` (pr.yml), job **`PR checks`**, the only required check: a minimal free hosted backstop on rustup, no nix (fmt, `cargo rail change check`, rail route cases; the static guards run in `just ci-local`) |
 | PR into `release/v*` (hotfix) | the FULL `CI` |
 | push to `main` or `release/v*` | FULL `CI` on THEBATTLESHIP's self-hosted `task-main` pool (warm dev target dirs; a newer merge cancels the older run, and Tests narrow by the pool's rail evidence) + rail evidence for the commit. `just release` tags only a commit whose `CI passed` is green. Nothing ships |
-| tag `vYY.M.MICRO` | every job checks out the tag and runs `scripts/release.sh stamp` first, then the tag guard (vX.Y.Z on main or `release/v*`, `CI passed` green; the suite is not run again). `deploy`: Images (task-server + task-web `:X.Y.Z`, `sha-<short>`, `latest` for the highest, on the `task-release` pool) and, beside it, the GitHub Release → node binaries, desktop cache, and after the images the web bundle + Linux AppImage; Verify live (informational: waits for production to serve the tag, fails nothing). `task-ios`, `task-macos`: TestFlight, and the macOS app attached to the same release. One `v*` release carries everything the version ships |
+| tag `vYY.M.MICRO` | every job checks out the tag and runs `scripts/release.sh stamp` first, then the tag guard (vX.Y.Z on main or `release/v*`, `CI passed` green; the suite is not run again). `deploy`: Images (task-server + task-web `:X.Y.Z`, `sha-<short>`, `latest` for the highest, on the `task-release` pool) and, beside it, the GitHub Release → node binaries, and after the images the web bundle + Linux AppImage; Verify live (informational: waits for production to serve the tag, fails nothing). `task-ios`, `task-macos`: TestFlight, and the macOS app attached to the same release. One `v*` release carries everything the version ships |
 
 Production is the latest `v*` tag: starcommand's argocd-image-updater
 rolls the `task` app to the highest `X.Y.Z` image on GHCR (the chart,
@@ -127,9 +127,7 @@ listing the hotfixed change files again. `release/*` is never merged back.
   `latest-linux.json` manifests the in-app updater reads) carry the same
   number. `just ci-versions` (`scripts/check-versions.sh`) fails when an
   artifact takes its version from anywhere else, or a release workflow
-  builds without stamping. The one exception is `desktop-cache.yml`: it
-  builds the pure flake at the tag for cachix, so that package reports the
-  version committed there. Every comparison is numeric per component
+  builds without stamping. Every comparison is numeric per component
   (release.sh `sort -V`, `apps/desktop/src/updater.rs`, Apple), so
   `26.10.0 > 0.2.4`.
 - **Build revision**: a stamped checkout is dirty, so Nix has no
