@@ -32,8 +32,9 @@
 # scripts/desktop/linux.sh, which takes every binary off /nix/store and
 # prints the glibc floor (the Nix toolchain's: a recent-distro floor,
 # decision 2026-10-24). The web bundle job only copies files out of the
-# published image (docker), so it stays on a hosted runner. NixOS hosts keep
-# installing the nix package from cachix (desktop-cache.yml).
+# published image (docker), so it stays on a hosted runner. NixOS hosts
+# install this same AppImage (nix-fleet packages/task-desktop wraps it):
+# there is no second, from-scratch Nix build of the desktop.
 
 name: Release assets
 
