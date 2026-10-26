@@ -159,6 +159,17 @@ pub fn subprotocols(bearer: Option<&str>) -> Vec<String> {
 /// # Errors
 ///
 /// An unrepresentable URL, or the connection failing.
+/// The largest vox message a Task link carries, either way: 64 MiB, the
+/// same cap as architect's iroh link (`MAX_FRAME_LEN`).
+///
+/// tungstenite's defaults are 64 MiB for a message but 16 MiB for a
+/// frame, and a vox message goes out as one frame — so anything over
+/// 16 MiB was refused ("Message too long") although the message cap
+/// allowed it. The first sync of a real song's doc is one such message
+/// (Unbreakable, written fresh: 36 MB). The server's vox upgrades and
+/// [`dial_ws_native`] both take this, so the two ends agree.
+pub const VOX_MAX_MESSAGE: usize = 64 << 20;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn dial_ws_native(
     url: &str,
@@ -175,9 +186,13 @@ pub async fn dial_ws_native(
     {
         request.headers_mut().insert("authorization", value);
     }
-    let (stream, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("ws connect `{url}`: {e:?}"))?;
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(VOX_MAX_MESSAGE))
+        .max_frame_size(Some(VOX_MAX_MESSAGE));
+    let (stream, _response) =
+        tokio_tungstenite::connect_async_with_config(request, Some(config), false)
+            .await
+            .map_err(|e| format!("ws connect `{url}`: {e:?}"))?;
     Ok(vox_websocket::WsLink::new(stream))
 }
 
