@@ -21,6 +21,8 @@ use crdt::docs::{
 };
 use crdt::in_memory::InMemoryPersistence;
 use crdt::sync::DocSyncClient;
+use links_proto::{Confidence, LinksServiceClient, NodeKind, NodeRef, Reach, Relation, TypedLink};
+use serde_json::{Value, json};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 use uuid::Uuid;
 
@@ -234,6 +236,167 @@ async fn a_merge_doc_made_on_two_devices_offline_converges_through_the_org() {
     run_phone.abort();
 }
 
+const MCP_TOKEN: &str = "app-docs-mcp-secret";
+
+/// One MCP `tools/call`: the whole JSON-RPC answer.
+async fn mcp(
+    http: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+    name: &str,
+    args: Value,
+) -> Value {
+    let mut req = http.post(url).json(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": name, "arguments": args },
+    }));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    req.send()
+        .await
+        .expect("POST /mcp")
+        .json()
+        .await
+        .expect("json-rpc body")
+}
+
+/// [`mcp`] as the org's agent: whether the tool failed, and its payload.
+async fn tool(http: &reqwest::Client, url: &str, name: &str, args: Value) -> (bool, Value) {
+    let res = mcp(http, url, Some(MCP_TOKEN), name, args).await;
+    let result = &res["result"];
+    assert!(!result.is_null(), "{name}: protocol error {res}");
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    let payload = serde_json::from_str(text).unwrap_or_else(|_| json!(text));
+    (result["isError"].as_bool().unwrap_or(false), payload)
+}
+
+// A project names the app docs that are its own, with Task treating the
+// doc's kind as the app's word: list the catalog, attach (once), list
+// the project's docs from the catalog, keep a deleted one listed as
+// gone, detach, and refuse an id the catalog does not hold. Driven
+// through the MCP tools, beside the vox `Docs` lane an app registers on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_lists_the_app_docs_attached_to_it() {
+    let (ws, _tmp) = support::boot_ws_env(&[("TASK_MCP_TOKEN", MCP_TOKEN)])
+        .await
+        .expect("boot");
+    let origin = ws.trim_end_matches("/vox");
+    let vox = format!("{origin}/org/{}/vox", support::ORG);
+    let url = format!(
+        "{}/org/{}/mcp",
+        origin.replacen("ws://", "http://", 1),
+        support::ORG
+    );
+    let http = reqwest::Client::new();
+
+    // An app registers two docs of its own kinds.
+    let docs: DocsClient = client(&vox).await;
+    let session = docs.create(project("Unbreakable")).await.expect("register");
+    let setlist = docs
+        .create(CreateDoc {
+            kind: "setlist".into(),
+            ..project("Sunday")
+        })
+        .await
+        .expect("register");
+    let id = session.doc_id.to_string();
+
+    // The catalog lists them with their kinds passed through.
+    let (failed, listed) = tool(&http, &url, "list_app_docs", json!({ "kind": "session" })).await;
+    assert!(!failed, "{listed}");
+    let rows = listed["docs"].as_array().expect("docs");
+    assert!(
+        rows.iter()
+            .any(|r| r["id"] == id && r["kind"] == "session" && r["name"] == "Unbreakable"),
+        "{listed}"
+    );
+    assert!(
+        rows.iter().all(|r| r["id"] != setlist.doc_id.to_string()),
+        "`kind` narrows: {listed}"
+    );
+
+    // Attaching is idempotent, and an id the catalog lacks is refused.
+    let args = json!({ "project": "launch-ep", "doc_id": id });
+    let (failed, first) = tool(&http, &url, "attach_doc", args.clone()).await;
+    assert!(!failed, "{first}");
+    let (_, again) = tool(&http, &url, "attach_doc", args.clone()).await;
+    assert_eq!(first["link_id"], again["link_id"], "one link, not two");
+    let (failed, refused) = tool(
+        &http,
+        &url,
+        "attach_doc",
+        json!({ "project": "launch-ep", "doc_id": Uuid::new_v4().to_string() }),
+    )
+    .await;
+    assert!(
+        failed && refused.to_string().contains("catalog"),
+        "{refused}"
+    );
+
+    // The project lists it, enriched from the catalog.
+    let (_, held) = tool(
+        &http,
+        &url,
+        "project_docs",
+        json!({ "project": "launch-ep" }),
+    )
+    .await;
+    assert_eq!(held["count"], 1, "{held}");
+    assert_eq!(held["docs"][0]["id"], id);
+    assert_eq!(held["docs"][0]["kind"], "session");
+    assert_eq!(held["docs"][0]["name"], "Unbreakable");
+    assert!(held["docs"][0]["gone"].is_null(), "{held}");
+
+    // A local `doc:` reference resolves against the catalog.
+    let links: LinksServiceClient = client(&vox).await;
+    let missing = NodeRef::new(NodeKind::AppDoc, Uuid::new_v4().to_string());
+    let answers = links
+        .resolve_nodes(vec![NodeRef::new(NodeKind::AppDoc, id.clone()), missing])
+        .await
+        .expect("resolve_nodes");
+    assert_eq!(answers[0].reach, Reach::Local);
+    assert_eq!(answers[1].reach, Reach::NotFound);
+
+    // Deleted in the app: still listed, as gone, until detached.
+    docs.delete(session.doc_id).await.expect("delete");
+    let (_, held) = tool(
+        &http,
+        &url,
+        "project_docs",
+        json!({ "project": "launch-ep" }),
+    )
+    .await;
+    assert_eq!(held["docs"][0]["gone"], "deleted", "{held}");
+    let (failed, out) = tool(&http, &url, "detach_doc", args.clone()).await;
+    assert!(!failed && out["detached"] == 1, "{out}");
+    let (_, held) = tool(
+        &http,
+        &url,
+        "project_docs",
+        json!({ "project": "launch-ep" }),
+    )
+    .await;
+    assert_eq!(held["count"], 0, "{held}");
+    let (failed, _) = tool(&http, &url, "detach_doc", args).await;
+    assert!(failed, "detaching what is not attached says so");
+
+    // Not a member: refused before any tool runs.
+    for token in [None, Some("not-the-token")] {
+        let res = mcp(
+            &http,
+            &url,
+            token,
+            "project_docs",
+            json!({ "project": "launch-ep" }),
+        )
+        .await;
+        assert!(!res["error"].is_null(), "{token:?}: {res}");
+    }
+}
+
 /// An ENFORCING server with one org, for the access checks.
 async fn boot_enforcing() -> eyre::Result<(String, AuthState, tempfile::TempDir)> {
     const ORG: &str = "app-docs-access";
@@ -336,5 +499,38 @@ async fn only_members_reach_the_catalog_and_the_content() -> eyre::Result<()> {
         .await
     );
     assert!(refused.contains("permission denied"), "sync: {refused}");
+
+    // Nor may it attach the doc to a project, or read what is attached.
+    let project_ref = NodeRef::new(NodeKind::Project, "rig-project");
+    let doc_ref = NodeRef::new(NodeKind::AppDoc, req.doc_id.to_string());
+    let links: LinksServiceClient = dial(&url, None).await?;
+    let refused = format!(
+        "{:?}",
+        links
+            .create(TypedLink::new(
+                project_ref.clone(),
+                doc_ref.clone(),
+                Relation::Down,
+                Confidence::Certain,
+            ))
+            .await
+    );
+    assert!(refused.contains("permission denied"), "attach: {refused}");
+    let refused = format!("{:?}", links.links_for(project_ref.clone()).await);
+    assert!(
+        refused.contains("permission denied"),
+        "project docs: {refused}"
+    );
+    // The member may.
+    let member_links: LinksServiceClient = dial(&url, Some(&token)).await?;
+    member_links
+        .create(TypedLink::new(
+            project_ref,
+            doc_ref,
+            Relation::Down,
+            Confidence::Certain,
+        ))
+        .await
+        .map_err(|e| eyre::eyre!("a member attaches: {e:?}"))?;
     Ok(())
 }

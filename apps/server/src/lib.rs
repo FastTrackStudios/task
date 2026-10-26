@@ -1913,12 +1913,13 @@ pub(crate) async fn build_org_state(
         // Typed-link store (user-asserted verse/note/wiki links, plus
         // the derived links the vault and sermon syncs mint). Opened
         // before scripture: the reader's backlinks read it.
-        let links = links::Store::open(org_root.path().join("links.jsonl"));
         // A reference naming another org resolves through the reader's
         // own subscriptions (ADR 0003) — the store cannot answer that,
         // so the server hands it a resolver that can.
+        #[cfg(not(feature = "plugin-wiki"))]
+        let homes: std::sync::Arc<dyn links::NodeHomes> = std::sync::Arc::new(links::NoFederation);
         #[cfg(feature = "plugin-wiki")]
-        let links = {
+        let homes: std::sync::Arc<dyn links::NodeHomes> = {
             // `<data_root>/orgs/<slug>` → `<data_root>`: the resolver
             // reads sibling orgs, so it needs the root above this one.
             let orgs_dir = org_root
@@ -1927,13 +1928,21 @@ pub(crate) async fn build_org_state(
                 .unwrap_or(org_root.path())
                 .to_path_buf();
             let root = orgs_dir.parent().unwrap_or(&orgs_dir).to_path_buf();
-            links.with_homes(std::sync::Arc::new(node_homes::LocalHomes::new(
+            std::sync::Arc::new(node_homes::LocalHomes::new(
                 root,
                 wiki_domains(&orgs_dir, config.wiki_domains.as_deref()),
                 org_root.slug(),
                 org_root.path().to_path_buf(),
-            )))
+            ))
         };
+        // …and a local `doc:<uuid>` resolves against the org's own
+        // app-docs catalog, which only the server holds.
+        let links = links::Store::open(org_root.path().join("links.jsonl")).with_homes(
+            std::sync::Arc::new(app_docs::CatalogHomes {
+                docs: app_docs.clone(),
+                rest: homes,
+            }),
+        );
         // Scripture — read-only Bible spine loaded from the resource
         // library (`<org>/resources/bible/<TX>/`). A missing root yields
         // an empty store, so orgs without an installed corpus just show

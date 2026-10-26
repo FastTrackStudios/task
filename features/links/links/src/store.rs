@@ -28,6 +28,15 @@ pub trait NodeHomes: Send + Sync + 'static {
     /// Resolve one reference that names another org. Called only for
     /// references carrying a domain; a local one never reaches here.
     fn resolve(&self, node: &NodeRef) -> ResolvedNode;
+
+    /// Resolve one reference in the reader's own org. The default is the
+    /// reference itself ([`Reach::Local`]): the caller is already inside
+    /// the org that holds it. A resolver overrides this only for a kind
+    /// whose home is something the store cannot see, such as an app doc
+    /// in the org's catalog, which may have been deleted.
+    fn resolve_local(&self, node: &NodeRef) -> ResolvedNode {
+        ResolvedNode::refused(node.clone(), Reach::Local)
+    }
 }
 
 /// The default: this deployment knows of no org but the caller's own, so
@@ -161,13 +170,14 @@ impl LinksService for Store {
 
     fn resolve_nodes(&self, nodes: Vec<NodeRef>) -> Result<Vec<ResolvedNode>, LinksError> {
         // Local references never leave this process: the caller is
-        // already inside the org that holds them, so the answer is the
-        // reference itself. Only a domain sends the question outward.
+        // already inside the org that holds them, so the answer is
+        // usually the reference itself (`NodeHomes::resolve_local`).
+        // Only a domain sends the question outward.
         Ok(nodes
             .into_iter()
             .map(|node| {
                 if node.is_local() {
-                    ResolvedNode::refused(node, Reach::Local)
+                    self.homes.resolve_local(&node)
                 } else {
                     self.homes.resolve(&node)
                 }
