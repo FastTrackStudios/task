@@ -72,7 +72,7 @@ pub async fn cli(args: &[String]) -> eyre::Result<()> {
     // has to be chosen before the first TLS dial.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let target = Target {
-        current: crate::node_cli::VERSION,
+        current: crate::node_cli::version(),
         exe: &exe,
         key: RELEASE_SIGNING_KEY,
     };

@@ -140,6 +140,8 @@ org-proto = { workspace = true }
 # Plugin vocabulary: mount ownership (`permits::Mount::plugin`) + the
 # per-org enabled-set resolution from `OrgManifest.disabled_plugins`.
 task-plugin = { workspace = true }
+# The release version, recorded by main (crates/release-version).
+task-release-version.workspace = true
 # Server-native git snapshots over the data root — the engine
 # behind the `SnapshotService` verbs + `POST /server/snapshot`.
 org-snapshot = { workspace = true }

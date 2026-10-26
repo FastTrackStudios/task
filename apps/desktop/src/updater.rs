@@ -457,9 +457,9 @@ mod imp {
             .filter(|p| p.is_file())
     }
 
-    /// The running build's version (`[workspace.package]`, the release's).
+    /// The running build's version (the release's; crates/release-version).
     fn current_version() -> &'static str {
-        env!("CARGO_PKG_VERSION")
+        task_release_version::get()
     }
 
     fn cache_dir() -> PathBuf {

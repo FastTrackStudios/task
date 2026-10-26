@@ -37,7 +37,7 @@ use task_plugin_ui::{Claim, LinkTarget, PluginApp, PluginNav};
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
     id: "scripture",
-    version: env!("CARGO_PKG_VERSION"),
+    version: task_plugin_ui::SHIPS_WITH_TASK,
     nav: &[PluginNav {
         label: "Scripture",
         icon,

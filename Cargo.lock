@@ -6777,6 +6777,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "task-release-version",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -19771,6 +19772,7 @@ dependencies = [
  "task-node-host",
  "task-plugin-ui",
  "task-plugins",
+ "task-release-version",
  "task-ui-core",
  "tracing",
  "ui",
@@ -19795,6 +19797,7 @@ dependencies = [
  "rustls",
  "task-node-host",
  "task-plugins",
+ "task-release-version",
  "task-ui-core",
  "tracing",
  "ui",
@@ -19807,6 +19810,7 @@ dependencies = [
  "dioxus",
  "getrandom 0.3.4",
  "task-plugins",
+ "task-release-version",
  "task-ui-core",
  "ui",
 ]
@@ -19886,6 +19890,7 @@ dependencies = [
  "task",
  "task-client",
  "task-plugin",
+ "task-release-version",
  "task-server",
  "tempfile",
  "threads",
@@ -20107,6 +20112,7 @@ dependencies = [
  "architect-ui",
  "base64 0.22.1",
  "dioxus",
+ "task-release-version",
  "task-widgets",
 ]
 
@@ -20148,6 +20154,10 @@ dependencies = [
  "vox-types",
  "workflows-proto",
 ]
+
+[[package]]
+name = "task-release-version"
+version = "26.10.1"
 
 [[package]]
 name = "task-server"
@@ -20264,6 +20274,7 @@ dependencies = [
  "task-client",
  "task-dial",
  "task-plugin",
+ "task-release-version",
  "tempfile",
  "thiserror 2.0.20",
  "threads",
@@ -20335,6 +20346,7 @@ dependencies = [
  "serde_json",
  "task-dial",
  "task-plugin",
+ "task-release-version",
  "tokio",
  "tokio-tungstenite",
  "tracing",

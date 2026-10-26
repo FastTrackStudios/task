@@ -252,7 +252,7 @@ pub fn server() -> &'static architect_mcp::Server {
     static SERVER: OnceLock<architect_mcp::Server> = OnceLock::new();
     SERVER.get_or_init(|| {
         TOOLS.iter().fold(
-            architect_mcp::Server::new("task", env!("CARGO_PKG_VERSION"), list().clone())
+            architect_mcp::Server::new("task", task_release_version::get(), list().clone())
                 .with_tools(architect_mcp::Tools::Named),
             |server, t| server.with_tool_name(t.id, t.tool),
         )

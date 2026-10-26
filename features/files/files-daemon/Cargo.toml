@@ -31,6 +31,8 @@ daemon-bin = [
 ]
 
 [dependencies]
+# The release version, recorded by main (crates/release-version).
+task-release-version.workspace = true
 architect = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 facet = { workspace = true }

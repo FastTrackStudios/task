@@ -27,6 +27,8 @@ const APPLE_TOUCH_ICON: Asset = asset!(
 );
 
 fn main() {
+    // The release's version (crates/release-version), before anything reports it.
+    task_release_version::set(task_release_version::of_this_build!());
     // Quiet the browser console: vox-core emits a flood of per-request
     // DEBUG tracing on wasm. Cap at INFO so our own info/warn/error and
     // genuine problems still surface, but the request-loop chatter

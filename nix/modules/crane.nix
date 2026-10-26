@@ -99,11 +99,10 @@
       # Only the cheap wrapper layers depend on it — the expensive
       # cargo/wasm derivations stay rev-free and cached.
       #
-      # A release build stamps the tag's version into its checkout
-      # (scripts/release.sh stamp), so the tree is dirty and self.rev is
-      # gone; those jobs pass the tagged commit as FTS_BUILD_REV with
-      # `--impure`. Pure evaluation reads getEnv as "", so every other build
-      # is unchanged.
+      # A release build's checkout may not give the flake a self.rev (a
+      # stamped checkout used to be dirty), so those jobs pass the tagged
+      # commit as FTS_BUILD_REV with `--impure`. Pure evaluation reads
+      # getEnv as "", so every other build is unchanged.
       fts.buildRev =
         let
           fromEnv = builtins.getEnv "FTS_BUILD_REV";

@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Task's release version, for apps that ship with it (`SHIPS_WITH_TASK`).
+task-release-version.workspace = true
 dioxus.workspace = true
 architect-ui.workspace = true
 # Note widgets: how an app's notes render inside the editor. This is

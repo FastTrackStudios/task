@@ -345,7 +345,9 @@ pub struct PluginApp {
     /// its screens do not resolve.
     pub id: &'static str,
     /// What this build of the app calls itself — `env!("CARGO_PKG_VERSION")`
-    /// in nearly every case.
+    /// for an app from its own repository, [`SHIPS_WITH_TASK`] for one that
+    /// releases with Task (the in-tree plugins), which then reports Task's
+    /// release version. Read it through [`PluginApp::version`].
     ///
     /// Apps release on their own schedules, from their own repositories,
     /// so "which Session is this?" is a real question with no other way
@@ -490,9 +492,26 @@ impl PluginApp {
     /// afterwards.
     #[must_use]
     pub fn stamp(&self) -> String {
-        format!("{}@{}", self.id, self.version)
+        format!("{}@{}", self.id, self.version())
+    }
+
+    /// The version to report: its own, or Task's release version when it
+    /// [`SHIPS_WITH_TASK`].
+    #[must_use]
+    pub fn version(&self) -> &'static str {
+        if self.version == SHIPS_WITH_TASK {
+            task_release_version::get()
+        } else {
+            self.version
+        }
     }
 }
+
+/// [`PluginApp::version`] for an app that releases with Task itself: it then
+/// reports Task's release version. An in-tree plugin can't read that at
+/// build time without recompiling on every release (crates/release-version),
+/// so it says this instead and the version is looked up when asked.
+pub const SHIPS_WITH_TASK: &str = "";
 
 /// Everything registered so far.
 ///
@@ -624,7 +643,7 @@ pub fn installed() -> Vec<(&'static str, &'static str)> {
         .read()
         .expect("plugin registry poisoned")
         .iter()
-        .map(|a| (a.id, a.version))
+        .map(|a| (a.id, a.version()))
         .collect()
 }
 

@@ -68,7 +68,14 @@
       fts.imageLabels = {
         "org.opencontainers.image.source" = "https://github.com/FastTrackStudios/task";
         "org.opencontainers.image.revision" = config.fts.buildRev;
-        "org.opencontainers.image.version" = (lib.importTOML ../../../Cargo.toml).workspace.package.version;
+        # A release's image (images.yml, `--impure` after `release.sh stamp`)
+        # is the tag's version, which no longer lives in Cargo.toml; a pure
+        # build reads getEnv as "" and gets the committed workspace version.
+        "org.opencontainers.image.version" =
+          let
+            stamped = builtins.getEnv "TASK_RELEASE_VERSION";
+          in
+          if stamped != "" then stamped else (lib.importTOML ../../../Cargo.toml).workspace.package.version;
       };
       packages = { inherit task-server; }
       // lib.optionalAttrs pkgs.stdenv.isLinux {
