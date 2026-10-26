@@ -26,7 +26,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use app_docs_proto::{DocCard, DocFace, read_face};
+use crdt::Persistence as _;
 use crdt::docs::{DocMeta, DocQuery, Docs as _, DocsError, DocsHost};
+use crdt::loro;
 use crdt::sync::{DocSync, SyncDown, SyncError};
 use links::{
     Confidence, LinksService, NodeHomes, NodeKind, NodeRef, Reach, Relation, ResolvedNode,
@@ -254,6 +257,72 @@ pub async fn project_docs(
     Ok(out)
 }
 
+// ── Faces ────────────────────────────────────────────────────────────
+
+/// What each doc shows of itself: its `face` map
+/// ([`app_docs_proto::read_face`]), the one part of an app's content
+/// Task reads. A doc the host has open is read where it is; any other
+/// is read from its stored bytes into a throwaway `LoroDoc`, so listing
+/// an org's docs does not open (and keep resident) every one of them.
+#[derive(Clone)]
+pub struct Faces {
+    pub docs: DocsHost,
+    bytes: crdt_seaorm::SeaOrmPersistence,
+}
+
+impl Faces {
+    /// The faces of `docs`, whose bytes are in `db` (the connection
+    /// [`open`] was given).
+    #[must_use]
+    pub const fn new(docs: DocsHost, db: sea_orm::DatabaseConnection) -> Self {
+        Self {
+            docs,
+            bytes: crdt_seaorm::SeaOrmPersistence::new(db),
+        }
+    }
+
+    /// `doc_id`'s face, `None` when it keeps none. Errors only when the
+    /// stored bytes cannot be read or imported; what the app wrote in
+    /// the face never fails the read.
+    pub async fn read(&self, doc_id: Uuid) -> Result<Option<DocFace>, String> {
+        let registry = self.docs.registry();
+        if registry.is_open(doc_id).await
+            && let Ok(doc) = registry.doc(doc_id).await
+        {
+            return Ok(read_face(doc.loro()));
+        }
+        let doc = loro::LoroDoc::new();
+        let snapshot = self
+            .bytes
+            .load_snapshot(doc_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let updates = self
+            .bytes
+            .load_updates(doc_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        for bytes in snapshot.iter().chain(&updates) {
+            doc.import(bytes).map_err(|e| format!("import: {e}"))?;
+        }
+        Ok(read_face(&doc))
+    }
+
+    /// `meta` with its face. A face that cannot be read leaves the card
+    /// faceless (titled by the catalog's name) rather than failing a
+    /// list over one bad doc; `Err` carries why, for the caller's span.
+    pub async fn card(&self, meta: DocMeta) -> (DocCard, Result<(), String>) {
+        let (face, read) = match self.read(meta.doc_id).await {
+            Ok(face) => (face, Ok(())),
+            Err(e) => (None, Err(e)),
+        };
+        (
+            DocCard::new(meta.doc_id, meta.kind, meta.name, meta.updated_us, face),
+            read,
+        )
+    }
+}
+
 /// Answers a local `doc:<uuid>` from the org's catalog and hands every
 /// other reference to `rest` (the federated resolver, or none).
 ///
@@ -288,6 +357,82 @@ impl NodeHomes for CatalogHomes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_docs_proto::{FaceProp, FacePropType, FaceValue, write_face};
+    use crdt::docs::{CreateDoc, Lineage};
+    use sea_orm_migration::MigratorTrait as _;
+
+    async fn host(dir: &std::path::Path) -> (DocsHost, sea_orm::DatabaseConnection) {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.join("app_docs.sqlite").display()
+        );
+        let db = sea_orm::Database::connect(url).await.unwrap();
+        crdt_seaorm::Migrator::up(&db, None).await.unwrap();
+        (open(db.clone()).await.unwrap(), db)
+    }
+
+    fn face() -> DocFace {
+        DocFace {
+            title: "Sunday 10/26".into(),
+            subtitle: Some("The Barn".into()),
+            colour: None,
+            props: vec![FaceProp {
+                key: "entries".into(),
+                label: "Entries".into(),
+                ty: FacePropType::Number,
+                value: FaceValue::Integer(12),
+            }],
+            links: vec![],
+        }
+    }
+
+    async fn register(docs: &DocsHost, kind: &str, name: &str) -> Uuid {
+        let doc_id = Uuid::new_v4();
+        docs.create(CreateDoc {
+            doc_id,
+            kind: kind.into(),
+            name: name.into(),
+            parent: None,
+            lineage: Lineage::Strict,
+        })
+        .await
+        .unwrap();
+        doc_id
+    }
+
+    #[tokio::test]
+    async fn a_face_reads_from_an_open_doc_and_from_stored_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docs, db) = host(tmp.path()).await;
+        let id = register(&docs, "app.list", "untitled").await;
+        let doc = docs.registry().doc(id).await.unwrap();
+        write_face(doc.loro(), &face()).unwrap();
+        doc.loro().commit();
+        doc.compact(id).await.unwrap();
+
+        let faces = Faces::new(docs, db.clone());
+        assert_eq!(faces.read(id).await.unwrap(), Some(face()), "open");
+
+        // A second host over the same file has nothing open: the read
+        // goes to the stored bytes and leaves the doc closed.
+        let cold = Faces::new(open(db.clone()).await.unwrap(), db);
+        assert_eq!(cold.read(id).await.unwrap(), Some(face()), "stored");
+        assert!(!cold.docs.registry().is_open(id).await, "not kept resident");
+    }
+
+    #[tokio::test]
+    async fn a_doc_without_a_face_is_titled_by_its_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docs, db) = host(tmp.path()).await;
+        let id = register(&docs, "app.list", "Bare").await;
+        let faces = Faces::new(docs.clone(), db);
+        let meta = docs.get(id).await.unwrap();
+        let (card, read) = faces.card(meta).await;
+        assert!(read.is_ok());
+        assert_eq!(card.face, None);
+        assert_eq!(card.title, "Bare");
+        assert_eq!(card.kind, "app.list");
+    }
 
     #[test]
     fn a_project_path_is_trimmed_and_must_name_something() {

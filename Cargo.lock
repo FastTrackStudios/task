@@ -403,6 +403,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "app-docs-proto"
+version = "26.10.1"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.30)",
+ "facet",
+ "loro",
+ "serde",
+ "thiserror 2.0.20",
+ "uuid",
+ "vox",
+ "vox-types",
+]
+
+[[package]]
 name = "append-only-bytes"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -20159,6 +20173,7 @@ dependencies = [
  "agent-proto",
  "agent-runners",
  "agent-tasks",
+ "app-docs-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.30)",
  "architect-auth",
  "architect-mcp",

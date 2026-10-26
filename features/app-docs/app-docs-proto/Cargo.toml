@@ -1,0 +1,31 @@
+[package]
+name = "app-docs-proto"
+description = "Wire contract for reading an app document's `face`: the self-describing map (title, subtitle, colour, typed props, links to other docs) any app keeps at the root of a doc it registers in an org's app-docs catalog. Plain types (`DocFace`, `FaceProp`, `FaceValue`, `FaceLink`, `DocCard`), the `AppDocFaces` RPC, and under `loro` the tolerant reader and a writer. Generic: Task knows nothing of the app that made a doc."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+loro = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# The face reader (`read_face`) and writer (`write_face`) over a
+# `loro::LoroDoc`: the server's decoder, and what an app calls to keep
+# its face current.
+loro = ["dep:loro"]
+
+[lints]
+workspace = true

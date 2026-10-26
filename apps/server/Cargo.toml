@@ -156,6 +156,9 @@ timer = { workspace = true }
 threads = { workspace = true, features = ["server", "vox"] }
 prefs-proto = { workspace = true, features = ["server", "vox"] }
 prefs = { workspace = true }
+# App docs' faces: the reader over a doc's `face` map and the
+# `AppDocFaces` RPC (`app_docs::Faces`).
+app-docs-proto = { workspace = true, features = ["vox", "loro"] }
 # Identity locker: the home org's per-user encrypted linked-server
 # tokens, exposed as the server-level `IdentityService` RPC.
 identity-proto = { workspace = true, features = ["vox"] }
