@@ -2,8 +2,8 @@
 
 What a project is, how projects nest, what a project can *do*, and what it
 produces. Answers to charters
-[#13 The Ideal Project Organization](https://github.com/FastTrackStudios/task/issues/13)
-and [#18 Project Domain Hierarchy](https://github.com/FastTrackStudios/task/issues/18);
+[#13 The Ideal Project Organization](../../../docs/charter/13-project-organization.md)
+and [#18 Project Domain Hierarchy](../../../docs/charter/18-project-domain-hierarchy.md);
 the storage layer beneath it is [`../../files/spec/files.md`](../../files/spec/files.md).
 
 Four ideas, deliberately not collapsed into one `project_type`:
@@ -380,7 +380,7 @@ who may be resident on another server, and their access derives from a grant on
 the content rather than from being a member of whichever org happens to hold it.
 Cross-org collaboration is expressed as grants, never by duplicating a project
 per org or by nesting it under an org directory. The federation model itself is
-charter [#22](https://github.com/FastTrackStudios/task/issues/22).
+charter [#22](../../../docs/charter/22-self-host-federation-p2p.md).
 
 ---
 

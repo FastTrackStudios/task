@@ -1,6 +1,6 @@
 # Files Spec
 
-The testable form of charter [#3 The Ideal File Manager](https://github.com/FastTrackStudios/task/issues/3),
+The testable form of charter [#3 The Ideal File Manager](../../../docs/charter/03-file-manager.md),
 which maps these requirements at one line each. Design of record:
 [`../docs/nextcloud-parity.md`](../docs/nextcloud-parity.md).
 
@@ -260,7 +260,7 @@ content and local history are untouched.
 
 The federation model — identity, addressing, and who grants trust between
 servers — belongs to charter
-[#22](https://github.com/FastTrackStudios/task/issues/22); this rule is what
+[#22](../../../docs/charter/22-self-host-federation-p2p.md); this rule is what
 Files does once that boundary exists.
 
 ---
@@ -389,7 +389,7 @@ content-addressed, so a peer can hold, verify, replicate and serve chunks it
 cannot decrypt, and only the key distribution is genuinely new work.
 
 It is **not** specified, because charter
-[#3](https://github.com/FastTrackStudios/task/issues/3) lists server-side and
+[#3](../../../docs/charter/03-file-manager.md) lists server-side and
 end-to-end encryption under Non-goals, and reversing that is a decision about
 what the product is rather than a detail of peering. Until it is made, a peer
 is trusted with what it holds, and the honest reading of `files.peering.backup`
@@ -470,7 +470,7 @@ re-listing of the tree.
 ## Findability
 
 The query surface belongs to charter
-[#17](https://github.com/FastTrackStudios/task/issues/17). These are what Files
+[#17](../../../docs/charter/17-search.md). These are what Files
 owes it.
 
 ### Content is extracted, not just filenames
@@ -578,7 +578,7 @@ original.
 The guest lane. Everywhere else the caller is a member of the org and the
 backend carries their identity; here the caller is anonymous and the link *is*
 the authorisation. The client-facing experience above this belongs to charter
-[#14](https://github.com/FastTrackStudios/task/issues/14); these are what Files
+[#14](../../../docs/charter/14-deliverable-preview.md); these are what Files
 owes it.
 
 ### A link authorises one review and nothing else

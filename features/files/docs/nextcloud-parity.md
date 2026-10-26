@@ -5,7 +5,7 @@ what Nextcloud Files does, not a client for a Nextcloud server. Markdown
 edits through our Editor; previews and real playback UIs for every file
 type; Collabora (or similar) embedded later, not now.
 
-Charter: [#3 The Ideal File Manager](https://github.com/FastTrackStudios/task/issues/3).
+Charter: [#3 The Ideal File Manager](../../../docs/charter/03-file-manager.md).
 
 This document has three parts: the **design** (settled), the **parity
 matrix** (where we are), and the **phased list** (what to build).
@@ -150,7 +150,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · 🚫 deliberately not doing
 | Guest lane | ✅ | anonymous vox scoped to a review |
 | **Internal user/group sharing** | ❌ | link-only today |
 | Reshare rules | 🚫 | Nextcloud's `SHARE` bit is unpredictable |
-| Federated sharing | 🚫 | Phase 3, see charter #22 |
+| Federated sharing | 🚫 | Phase 3, see [charter #22](../../../docs/charter/22-self-host-federation-p2p.md) |
 | Share by email | ❌ | |
 
 ### Previews and viewers
@@ -228,7 +228,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · 🚫 deliberately not doing
 
 7. **Tags**, as views rather than folders.
 8. **Search** — names and metadata first, then contents. See charter
-   [#17 Searchable - Anywhere - Anything](https://github.com/FastTrackStudios/task/issues/17).
+   [#17 Searchable - Anywhere - Anything](../../../docs/charter/17-search.md).
 9. **Trash lens** over history, with one-click restore.
 
 ### Phase 4 — people

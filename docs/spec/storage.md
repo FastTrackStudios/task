@@ -14,8 +14,8 @@ fact is:
 | **Derived** | we computed it | a database, rebuildable |
 
 Answers to charters
-[#2 A Single Trusted System](https://github.com/FastTrackStudios/task/issues/2)
-and [#8 The Ideal Vault (PKM)](https://github.com/FastTrackStudios/task/issues/8).
+[#2 A Single Trusted System](../charter/02-single-trusted-system.md)
+and [#8 The Ideal Vault (PKM)](../charter/08-vault.md).
 
 ---
 
