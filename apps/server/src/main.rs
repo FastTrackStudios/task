@@ -20,6 +20,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    // The release's version (crates/release-version), before anything reports it.
+    task_release_version::set(task_release_version::of_this_build!());
     // `--version`, `--help`, `service …`, `self-update …` — and a refusal
     // for anything unknown. First of all: a question about the binary
     // must never open its data or bind a port (see node_cli.rs).

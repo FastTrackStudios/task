@@ -18,7 +18,7 @@ use task_plugin_ui::{PluginApp, PluginNav};
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
     id: "home",
-    version: env!("CARGO_PKG_VERSION"),
+    version: task_plugin_ui::SHIPS_WITH_TASK,
     // Inventory only: a place is a kind of vault note, not a section.
     nav: &[PluginNav {
         label: "Inventory",

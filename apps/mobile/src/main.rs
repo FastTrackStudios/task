@@ -10,6 +10,8 @@ mod watch_sync;
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
+    // The release's version (crates/release-version), before anything reports it.
+    task_release_version::set(task_release_version::of_this_build!());
     // Before anything can open a TLS socket: the graph carries both rustls
     // backends, so it cannot pick one itself, and a TLS dial without one
     // panics (on the main thread, where it aborts). Err = already set.

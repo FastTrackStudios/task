@@ -6,6 +6,8 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# The release version, recorded by main (crates/release-version).
+task-release-version.workspace = true
 # Workspace dioxus dep with no platform features; this crate's
 # `default = ["web"]` toggles `dioxus/web` + `dioxus/launch` on so
 # `dx serve` builds it correctly. Lifted from dioxus-flake's

@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The release version the boot trace reports (crates/release-version).
+task-release-version.workspace = true
 # The shared phase components (`states`) and the badge-variant mapping
 # for the status ladder (`format::status_variant`).
 dioxus.workspace = true

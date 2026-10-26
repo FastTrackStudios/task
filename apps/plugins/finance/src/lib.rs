@@ -22,7 +22,7 @@ use task_plugin_ui::{PluginApp, PluginNav};
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
     id: "finance",
-    version: env!("CARGO_PKG_VERSION"),
+    version: task_plugin_ui::SHIPS_WITH_TASK,
     // One tab: the overview, invoices and ledger are a strip inside it
     // (`FinanceTabs`), not three entries in the sidebar.
     nav: &[PluginNav {

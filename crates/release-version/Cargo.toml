@@ -1,0 +1,14 @@
+[package]
+name = "task-release-version"
+description = "The version this build of Task ships, without stamping it into Cargo.toml: the release sets TASK_RELEASE_VERSION, only the binaries read it at build time, and every library asks at runtime. A release therefore rebuilds the binaries, not the ~190 workspace crates a changed package version would."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

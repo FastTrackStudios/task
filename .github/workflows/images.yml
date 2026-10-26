@@ -202,9 +202,10 @@ jobs:
           TASK_PREBUILT_SERVER_BIN: ${{ steps.build.outputs.server }}
           TASK_PREBUILT_WEB_ROOT: ${{ steps.build.outputs.web }}
           TAGS: ${{ needs.plan.outputs.tags }}
-          # The stamped checkout is dirty, so the flake has no self.rev: the
-          # images' revision label and TASK_BUILD_REV come from here
-          # (nix/modules/crane.nix; the build is --impure).
+          # The images' revision label and TASK_BUILD_REV come from here,
+          # and their version label from TASK_RELEASE_VERSION (`stamp`
+          # exported it), as nix/modules/crane.nix and task-server.nix read
+          # them; the build is --impure.
           FTS_BUILD_REV: ${{ needs.plan.outputs.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

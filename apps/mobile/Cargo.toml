@@ -6,6 +6,8 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# The release version, recorded by main (crates/release-version).
+task-release-version.workspace = true
 # A process-level rustls CryptoProvider, installed first thing in `main`:
 # the graph unifies both `ring` and `aws-lc-rs`, so rustls cannot infer
 # one and the first TLS dial (the issuer, after a FastTrackStudio
