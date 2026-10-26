@@ -1591,7 +1591,7 @@ pub async fn share_guest_vox_handler(
             media_proto::AttachmentMediaDispatcher::new(media),
         );
     let router = crate::snapshot::GatedRouter::new(router, state.write_gate.clone());
-    ws.protocols([crate::VOX_SUBPROTOCOL])
+    crate::vox_upgrade(ws)
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
 }
 
@@ -1645,7 +1645,7 @@ async fn live_guest(
             crdt::sync::DocPresenceDispatcher::new(only),
         );
     let router = crate::snapshot::GatedRouter::new(router, state.write_gate.clone());
-    ws.protocols([crate::VOX_SUBPROTOCOL])
+    crate::vox_upgrade(ws)
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
 }
 

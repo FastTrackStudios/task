@@ -3512,6 +3512,16 @@ async fn per_org_api_handler(
     axum::Json(body).into_response()
 }
 
+/// A vox WebSocket upgrade: the subprotocol echoed (a browser that
+/// offered it gets no connection otherwise) and messages up to
+/// [`task_dial::VOX_MAX_MESSAGE`] taken — axum's 16 MiB frame default
+/// refused a song doc's first sync, which arrives as one frame.
+pub(crate) fn vox_upgrade(ws: WebSocketUpgrade) -> WebSocketUpgrade {
+    ws.protocols([VOX_SUBPROTOCOL])
+        .max_message_size(task_dial::VOX_MAX_MESSAGE)
+        .max_frame_size(task_dial::VOX_MAX_MESSAGE)
+}
+
 /// `/org/<slug>/vox` — per-org vox WebSocket. Looks up the
 /// slug in the AppState's org map; rejects with 404 if the
 /// org isn't hosted.
@@ -3550,7 +3560,7 @@ async fn server_vox_handler(
     // ARGUMENT (the identity locker validates it itself), so there is no
     // gate to feed here — but the subprotocol must still be echoed, or a
     // browser that offered one gets no connection at all.
-    ws.protocols([VOX_SUBPROTOCOL])
+    vox_upgrade(ws)
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
         .into_response()
 }
@@ -4868,7 +4878,7 @@ fn serve_org_vox(
     headers: &axum::http::HeaderMap,
 ) -> axum::response::Response {
     let router = org_router_guarded(org, gate, upgrade_bearer(headers));
-    ws.protocols([VOX_SUBPROTOCOL])
+    vox_upgrade(ws)
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
         .into_response()
 }

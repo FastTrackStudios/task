@@ -182,6 +182,58 @@ async fn app_docs_made_and_edited_apart_converge_and_survive_a_restart() {
 // t[verify offline.app-docs.merge] — a doc every device makes offline
 // under one derived id, with Merge lineage, converges with both
 // devices' edits instead of being refused
+/// A device's lane through the dial Studio uses (`task_dial`), whose
+/// limits are the link's, not the WebSocket library's defaults.
+async fn dialed_lane(url: &str) -> DocsLane {
+    DocsLane {
+        docs: task_dial::establish_at(url, None).await.expect("docs"),
+        changes: task_dial::establish_at(url, None).await.expect("changes"),
+        sync: task_dial::establish_at(url, None).await.expect("sync"),
+    }
+}
+
+// A song doc's first sync is one vox message, larger than the 16 MiB a
+// WebSocket frame was allowed: it reaches the org and the next device.
+// Ignored by default (20 MiB through a debug build is slow): run it with
+// `cargo nextest run -p task-server --test it --run-ignored only -E
+// 'test(over_16_mib)'` when the link's limits change.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow: 20 MiB through the link; run with --run-ignored when the link's limits change"]
+async fn a_doc_whose_first_sync_is_over_16_mib_reaches_the_org_and_the_next_device() {
+    let (url, _tmp) = support::boot_ws().await.expect("boot");
+    let (desk, ipad) = (device(), device());
+    let req = project("Unbreakable");
+    let id = req.doc_id;
+    let on_desk = desk.create(req).await.unwrap();
+    // 20 MiB that does not compress: a real song's items do not either.
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let words: String = (0..20 << 20)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            char::from(b'a' + (seed % 26) as u8)
+        })
+        .collect();
+    write(&on_desk, &words);
+
+    let _desk = online(&desk, dialed_lane(&url).await);
+    let _ipad = online(&ipad, dialed_lane(&url).await);
+    // Tens of MB through a debug build: longer than `eventually` allows.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while !ipad
+        .open(id)
+        .await
+        .is_ok_and(|d| read(&d).len() == words.len())
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the iPad never held the whole song"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_merge_doc_made_on_two_devices_offline_converges_through_the_org() {
     let (url, _tmp) = support::boot_ws().await.expect("boot");
