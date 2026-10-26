@@ -595,6 +595,10 @@ rail-evidence: css
 #   release  task-release's release target dir: a build-only images.yml run
 #            (the release server and the web bundle; nothing pushed)
 #
+# Each kind is pinned to one runner instance and builds in that instance's
+# own target dir (.github/actions/battleship-nix-rust), so a pre-warm fills
+# exactly the dir the next real run uses.
+#
 #   just pre-warm-ci                        both pools, from main
 #   just pre-warm-ci main ci/nightly-bump   task-main, from a branch
 #   just pre-warm-ci both main fresh        empty task-main's dirs first (a
