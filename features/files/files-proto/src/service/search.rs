@@ -1,6 +1,7 @@
 //! Finding things by what is in them — `files.index.*`.
 //!
-//! The query surface across everything belongs to charter #17. This lane
+//! The query surface across everything belongs to charter #17
+//! (`docs/charter/17-search.md`). This lane
 //! is what Files owes it: content extracted as bytes arrive, results that
 //! address regions rather than files, and indexes that are ordinary
 //! portable files.
