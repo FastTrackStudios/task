@@ -21775,6 +21775,7 @@ dependencies = [
  "auth-client",
  "auth-proto",
  "chrono",
+ "collection-proto",
  "contacts-proto",
  "cookbook-proto",
  "crdt",
