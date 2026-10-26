@@ -149,9 +149,31 @@ pub enum NodeKind {
     /// (`CollectionKind` is a string the caller picks — ADR 0004 decision
     /// 2), and this kind names the primitive, not its consumers.
     ///
+    /// Declared after every kind before it so each keeps its
+    /// discriminant on the wire.
+    Collection,
+    /// An app document — `id` is the doc's UUID (`0f8c…`), chosen by the
+    /// client app that made it. The token prefix is `doc`.
+    ///
+    /// # Why a kind, and why Task never reads one
+    ///
+    /// An app doc lives in the org's app-docs catalog (architect's
+    /// `crdt::docs`, `<org>/app_docs.sqlite`), not on a tier: there is no
+    /// directory under `resources/`, `assets/` or `projects/` to resolve
+    /// it into. Its catalog row carries an opaque `kind` the app chose,
+    /// a name and an optional parent, and its bytes are a Loro doc Task
+    /// relays and never opens. So the reference names the catalog row and
+    /// nothing else; what the doc *is* stays the app's business.
+    ///
+    /// Giving it a kind is what lets the rest of Task hold one without
+    /// learning anything about the app: a project names the docs that
+    /// belong to it with an ordinary `project:<path> → doc:<uuid>` link,
+    /// and a page, the CLI or an agent lists them and builds a link to
+    /// each.
+    ///
     /// Declared **last** so every existing kind keeps its discriminant on
     /// the wire.
-    Collection,
+    AppDoc,
 }
 
 impl NodeKind {
@@ -174,6 +196,7 @@ impl NodeKind {
             Self::Lighting => "lighting",
             Self::Project => "project",
             Self::Collection => "collection",
+            Self::AppDoc => "doc",
         }
     }
 
@@ -196,6 +219,7 @@ impl NodeKind {
             "lighting" => Self::Lighting,
             "project" => Self::Project,
             "collection" => Self::Collection,
+            "doc" => Self::AppDoc,
             _ => return None,
         })
     }
@@ -678,6 +702,18 @@ mod tests {
         assert_eq!(parse_timecode("nope"), None);
         assert_eq!(format_timecode(263), "4:23");
         assert_eq!(format_timecode(3863), "1:04:23");
+    }
+
+    /// An app doc is `doc:<uuid>`, and the kind reads back from its word.
+    #[test]
+    fn app_doc_kind_round_trips() {
+        assert_eq!(NodeKind::AppDoc.as_str(), "doc");
+        assert_eq!(NodeKind::parse("doc"), Some(NodeKind::AppDoc));
+        let token = "doc:0f8c1e2a-3b4d-4c5e-8f60-718293a4b5c6";
+        let n = NodeRef::parse(token).unwrap();
+        assert_eq!(n.kind, NodeKind::AppDoc);
+        assert_eq!(n.id, "0f8c1e2a-3b4d-4c5e-8f60-718293a4b5c6");
+        assert_eq!(n.to_token(), token);
     }
 
     #[test]

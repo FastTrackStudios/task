@@ -113,6 +113,9 @@ pub fn library_of(kind: NodeKind) -> Option<&'static str> {
         // one: it is an org's own arrangement of references, the way a
         // note is its own writing.
         | NodeKind::Collection
+        // An app doc is not library material: it lives in the org's
+        // app-docs catalog, not in a directory anyone subscribes to.
+        | NodeKind::AppDoc
         | NodeKind::External => return None,
     })
 }
@@ -432,7 +435,12 @@ mod tests {
         assert_eq!(library_of(NodeKind::Patch), Some("patches"));
         assert_eq!(library_of(NodeKind::Sample), Some("samples"));
         assert_eq!(library_of(NodeKind::Lighting), Some("lighting"));
-        for kind in [NodeKind::Note, NodeKind::Block, NodeKind::Wiki] {
+        for kind in [
+            NodeKind::Note,
+            NodeKind::Block,
+            NodeKind::Wiki,
+            NodeKind::AppDoc,
+        ] {
             assert_eq!(library_of(kind), None);
         }
         assert_eq!(

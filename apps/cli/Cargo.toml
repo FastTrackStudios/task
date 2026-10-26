@@ -150,6 +150,11 @@ media-proto = { workspace = true, features = ["vox"] }
 # `task-cli wiki context --links` — overlay typed-link-store
 # edges onto the context subgraph.
 links.workspace = true
+# `task project docs|attach-doc|detach-doc` — the `LinksService` client
+# (`project:<path>` → `doc:<uuid>` links), and `task project app-docs`
+# — the org's app-docs catalog (`crdt::docs::DocsClient`).
+links-proto = { workspace = true, features = ["vox"] }
+crdt = { workspace = true, features = ["vox"] }
 # `task-cli resources sermons sync` — the sermon sync's wire types and
 # the json3 caption parser (cues with durations, as the transcript
 # sidecar stores them).

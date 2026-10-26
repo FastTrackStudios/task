@@ -1039,6 +1039,7 @@ fn build_tool_catalog() -> Vec<ToolDef> {
     v.extend(patch_tool_catalog());
     v.extend(sample_tool_catalog());
     v.extend(lighting_tool_catalog());
+    v.extend(app_doc_tool_catalog());
     #[cfg(feature = "plugin-fasttrackstudio")]
     v.extend(live_tool_catalog());
     #[cfg(feature = "plugin-wiki")]
@@ -1371,6 +1372,87 @@ fn lighting_tool_catalog() -> Vec<ToolDef> {
                         "content_id": s_("Optional pin: the content address a Files upload reported for exactly these bytes."),
                     }),
                     &["title", "body", "scope"],
+                )
+            },
+        },
+    ]
+}
+
+/// The app-doc tools: the org's catalog of documents client apps made
+/// (`crate::app_docs`), and which of them belong to which project.
+///
+/// App-agnostic on purpose. A doc's `kind` is the word its app chose,
+/// passed through and never interpreted, and belonging is an ordinary
+/// `project:<path>` → `doc:<uuid>` link. So the descriptions name no
+/// app: an agent learns what a doc is from its `kind` and `name`.
+fn app_doc_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_app_docs",
+            plugin: "core",
+            description: "List the org's app documents: the catalog client apps register \
+                          their docs in. Each row is {id, kind, name, parent, updated}; \
+                          `kind` is whatever the app chose and is passed through as is, \
+                          `parent` the doc it was forked from. Deleted docs are left out. \
+                          Call this FIRST: attach_doc takes an `id` from here.",
+            schema: || {
+                obj(
+                    json!({
+                        "kind": s_("Only docs of this kind (the app's own word)."),
+                        "limit": i_("Max rows (default 50, max 200)."),
+                    }),
+                    &[],
+                )
+            },
+        },
+        ToolDef {
+            name: "attach_doc",
+            plugin: "core",
+            description: "Say that an app document belongs to a project, so the project \
+                          lists it (project_docs) and can link to it. Works for a doc of any \
+                          kind, from any app. Idempotent: attaching it again returns the \
+                          link already held. Refused for an id the catalog does not hold \
+                          or holds as deleted.",
+            schema: || {
+                obj(
+                    json!({
+                        "project": s_("The project's path on the Projects tier, e.g. \
+                                       'example-album' or 'example-album/track-two'."),
+                        "doc_id": s_("Doc UUID, from list_app_docs."),
+                    }),
+                    &["project", "doc_id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "detach_doc",
+            plugin: "core",
+            description: "Undo attach_doc: the app document no longer belongs to the \
+                          project. The doc itself is untouched. Also clears a link whose doc \
+                          has since been deleted.",
+            schema: || {
+                obj(
+                    json!({
+                        "project": s_("The project's path on the Projects tier."),
+                        "doc_id": s_("Doc UUID, from project_docs."),
+                    }),
+                    &["project", "doc_id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "project_docs",
+            plugin: "core",
+            description: "List the app documents attached to a project, each with its \
+                          catalog row {id, kind, name, parent}. App-agnostic: `kind` is the \
+                          app's own word. A doc deleted or missing since it was attached is \
+                          still listed, with `gone` saying which, so it can be detached.",
+            schema: || {
+                obj(
+                    json!({
+                        "project": s_("The project's path on the Projects tier."),
+                    }),
+                    &["project"],
                 )
             },
         },
@@ -4671,6 +4753,7 @@ fn call_tool(
         n if PATCH_TOOLS.contains(&n) => patch_tool(org, n, args),
         n if SAMPLE_TOOLS.contains(&n) => sample_tool(org, n, args),
         n if LIGHTING_TOOLS.contains(&n) => lighting_tool(org, n, args),
+        n if APP_DOC_TOOLS.contains(&n) => app_doc_tool(org, principal, n, args),
         #[cfg(feature = "plugin-fasttrackstudio")]
         n if LIVE_TOOLS.contains(&n) => live_tool(org, caller, n, args),
 
@@ -5277,6 +5360,109 @@ fn lighting_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<V
             }))
         }
 
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+// ── App-doc tools ────────────────────────────────────────────────
+
+/// The tools [`app_doc_tool`] answers; must match
+/// [`app_doc_tool_catalog`].
+const APP_DOC_TOOLS: &[&str] = &["list_app_docs", "attach_doc", "detach_doc", "project_docs"];
+
+/// A catalog row as the tools show it. `kind` is the app's word,
+/// passed through.
+fn app_doc_json(d: &crdt::docs::DocMeta) -> Value {
+    json!({
+        "id": d.doc_id.to_string(),
+        "kind": d.kind,
+        "name": d.name,
+        "parent": d.parent.map(|p| p.to_string()),
+        "updated": chrono::DateTime::from_timestamp_micros(d.updated_us).map(|t| t.to_rfc3339()),
+    })
+}
+
+/// One app-doc tool call, over the org's catalog and links store
+/// (`crate::app_docs`). The catalog is async; like every tool this runs
+/// on the blocking pool, so it waits on it there.
+fn app_doc_tool(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, ToolFailure> {
+    let rt = tokio::runtime::Handle::current();
+    let project = || {
+        required_str(args, "project")
+            .and_then(|p| crate::app_docs::project_node(&p).map_err(ToolFailure::Message))
+    };
+    let doc_id = || required_str(args, "doc_id").and_then(|d| parse_uuid(&d, "app doc"));
+    match name {
+        "list_app_docs" => {
+            let rows = rt
+                .block_on(crate::app_docs::list(
+                    &org.app_docs,
+                    arg_str(args, "kind"),
+                    arg_limit(args),
+                ))
+                .map_err(|e| ToolFailure::Message(format!("couldn't list app docs: {e}")))?;
+            let out: Vec<Value> = rows.iter().map(app_doc_json).collect();
+            Ok(json!({ "count": out.len(), "docs": out }))
+        }
+        "attach_doc" => {
+            let (project, doc_id) = (project()?, doc_id()?);
+            let (link, meta) = rt
+                .block_on(crate::app_docs::attach(
+                    &org.app_docs,
+                    &org.links,
+                    &project,
+                    doc_id,
+                    principal.unwrap_or("mcp"),
+                ))
+                .map_err(ToolFailure::Message)?;
+            Ok(json!({
+                "project": project.id,
+                "link_id": link.id,
+                "doc": app_doc_json(&meta),
+            }))
+        }
+        "detach_doc" => {
+            let (project, doc_id) = (project()?, doc_id()?);
+            let removed = crate::app_docs::detach(&org.links, &project, doc_id)
+                .map_err(ToolFailure::Message)?;
+            Ok(json!({
+                "project": project.id,
+                "doc_id": doc_id.to_string(),
+                "detached": removed,
+            }))
+        }
+        "project_docs" => {
+            let project = project()?;
+            let held = rt
+                .block_on(crate::app_docs::project_docs(
+                    &org.app_docs,
+                    &org.links,
+                    &project,
+                ))
+                .map_err(ToolFailure::Message)?;
+            let out: Vec<Value> = held
+                .iter()
+                .map(|d| {
+                    let mut row = match &d.meta {
+                        Some(m) => app_doc_json(m),
+                        None => json!({ "id": d.link.target.id }),
+                    };
+                    row["link_id"] = json!(d.link.id);
+                    match &d.meta {
+                        Some(m) if m.deleted => row["gone"] = json!("deleted"),
+                        None => row["gone"] = json!("not in the catalog"),
+                        Some(_) => {}
+                    }
+                    row
+                })
+                .collect();
+            Ok(json!({ "project": project.id, "count": out.len(), "docs": out }))
+        }
         _ => Err(ToolFailure::Unknown),
     }
 }
@@ -6513,6 +6699,30 @@ mod tests {
             for tool in dispatch {
                 assert!(names.contains(tool), "`{tool}` missing from the catalog");
             }
+        }
+    }
+
+    /// The app-doc tools agree with their dispatch list, ride no plugin,
+    /// and say they are app-agnostic, so a model never reads a doc's
+    /// `kind` as something Task knows the meaning of.
+    #[test]
+    fn app_doc_tools_match_their_dispatch_list() {
+        let catalog = app_doc_tool_catalog();
+        let listed: Vec<&str> = catalog.iter().map(|t| t.name).collect();
+        assert_eq!(listed, APP_DOC_TOOLS);
+        assert!(catalog.iter().all(|t| t.plugin == "core"));
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for tool in APP_DOC_TOOLS {
+            assert!(names.contains(tool), "`{tool}` missing from the catalog");
+        }
+        for tool in ["list_app_docs", "attach_doc", "project_docs"] {
+            let def = catalog.iter().find(|t| t.name == tool).unwrap();
+            assert!(
+                def.description.contains("any kind")
+                    || def.description.contains("app's own word")
+                    || def.description.contains("whatever the app chose"),
+                "`{tool}` must say it is app-agnostic"
+            );
         }
     }
 

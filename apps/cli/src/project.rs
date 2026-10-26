@@ -333,6 +333,60 @@ pub(crate) enum ProjectCmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// List the app documents attached to a project, each with its
+    /// catalog row (kind, name, parent). A doc deleted or missing since
+    /// it was attached is listed as gone, so it can be detached.
+    Docs {
+        /// The project's path on the Projects tier
+        /// (`example-album`, `example-album/track-two`).
+        project: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Attach an app document to a project (a `project:<path>` →
+    /// `doc:<uuid>` link). Any kind of doc, from any app. Attaching it
+    /// again is a no-op; an id the catalog does not hold is refused.
+    AttachDoc {
+        /// The project's path on the Projects tier.
+        project: String,
+        /// Doc UUID, from `task project app-docs`.
+        doc_id: uuid::Uuid,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Detach an app document from a project. The doc itself is
+    /// untouched.
+    DetachDoc {
+        /// The project's path on the Projects tier.
+        project: String,
+        /// Doc UUID, from `task project docs`.
+        doc_id: uuid::Uuid,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// List the org's app-docs catalog: the documents client apps
+    /// registered. `kind` is the app's own word, shown as is.
+    AppDocs {
+        /// Only docs of this kind.
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
@@ -1017,7 +1071,257 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
                 .map_err(|e| eyre::eyre!("delete: {e:?}"))?;
             println!("deleted {}", p.path);
         }
+        ProjectCmd::Docs {
+            project,
+            org,
+            server,
+            json,
+        } => project_docs(&project, org, server, json).await?,
+        ProjectCmd::AttachDoc {
+            project,
+            doc_id,
+            org,
+            server,
+            json,
+        } => attach_doc(&project, doc_id, org, server, json).await?,
+        ProjectCmd::DetachDoc {
+            project,
+            doc_id,
+            org,
+            server,
+        } => detach_doc(&project, doc_id, org, server).await?,
+        ProjectCmd::AppDocs {
+            kind,
+            org,
+            server,
+            json,
+        } => app_docs(kind, org, server, json).await?,
     }
+    Ok(())
+}
+
+// ── App documents ────────────────────────────────────────────────────
+//
+// A project holds the app docs that belong to it as links in the org's
+// links store, `project:<path>` → `doc:<uuid>` (relation `Down`), and the
+// docs themselves are rows in the org's app-docs catalog. Both are plain
+// vox services (`LinksService`, `crdt::docs::Docs`); nothing here reads
+// a doc's `kind`, which is whichever word its app chose. The server's
+// MCP tools do the same over the same stores (`task_server::app_docs`).
+
+/// `project:<path>`, with slashes at either end dropped.
+fn project_node(project: &str) -> eyre::Result<links::NodeRef> {
+    let path = project.trim().trim_matches('/');
+    if path.is_empty()
+        || path
+            .split('/')
+            .any(|s| s.is_empty() || s == "." || s == "..")
+    {
+        eyre::bail!(
+            "`{project}` is not a project path (its path on the Projects tier, \
+             e.g. `example-album` or `example-album/track-two`)"
+        );
+    }
+    Ok(links::NodeRef::new(links::NodeKind::Project, path))
+}
+
+fn doc_node(doc_id: uuid::Uuid) -> links::NodeRef {
+    links::NodeRef::new(links::NodeKind::AppDoc, doc_id.to_string())
+}
+
+/// The org's links and app-docs clients.
+async fn doc_clients(
+    org: Option<String>,
+    server: Option<String>,
+) -> eyre::Result<(links_proto::LinksServiceClient, crdt::docs::DocsClient)> {
+    let slug = resolve_active_org(org)?;
+    let links = establish_client(server.clone(), &slug).await?;
+    let docs = establish_client(server, &slug).await?;
+    Ok((links, docs))
+}
+
+/// Every link by which `project` holds an app doc.
+async fn attached(
+    links: &links_proto::LinksServiceClient,
+    project: &links::NodeRef,
+) -> eyre::Result<Vec<links::TypedLink>> {
+    let held = links
+        .links_for(project.clone())
+        .await
+        .map_err(|e| eyre::eyre!("links of `{}`: {e:?}", project.id))?;
+    Ok(held
+        .into_iter()
+        .filter(|l| {
+            l.source == *project
+                && l.relation == links::Relation::Down
+                && l.target.kind == links::NodeKind::AppDoc
+                && l.target.is_local()
+        })
+        .collect())
+}
+
+fn doc_row_json(d: &crdt::docs::DocMeta) -> serde_json::Value {
+    serde_json::json!({
+        "id": d.doc_id.to_string(),
+        "kind": d.kind,
+        "name": d.name,
+        "parent": d.parent.map(|p| p.to_string()),
+        "updated": chrono::DateTime::from_timestamp_micros(d.updated_us).map(|t| t.to_rfc3339()),
+    })
+}
+
+async fn app_docs(
+    kind: Option<String>,
+    org: Option<String>,
+    server: Option<String>,
+    json: bool,
+) -> eyre::Result<()> {
+    let (_, docs) = doc_clients(org, server).await?;
+    let mut rows = Vec::new();
+    let mut since_rev = 0;
+    loop {
+        let page = docs
+            .list(crdt::docs::DocQuery {
+                kind: kind.clone(),
+                since_rev,
+                include_deleted: false,
+                limit: 256,
+            })
+            .await
+            .map_err(|e| eyre::eyre!("list app docs: {e:?}"))?;
+        rows.extend(page.docs.into_iter().filter(|d| !d.deleted));
+        if !page.more {
+            break;
+        }
+        since_rev = page.cursor;
+    }
+    if json {
+        let out: Vec<serde_json::Value> = rows.iter().map(doc_row_json).collect();
+        return crate::json_out::print_json(&out);
+    }
+    println!("{} app docs\n", rows.len());
+    for d in &rows {
+        println!("  {}  [{}]  {}", d.doc_id, d.kind, d.name);
+    }
+    Ok(())
+}
+
+async fn project_docs(
+    project: &str,
+    org: Option<String>,
+    server: Option<String>,
+    json: bool,
+) -> eyre::Result<()> {
+    let project = project_node(project)?;
+    let (links, docs) = doc_clients(org, server).await?;
+    let mut out = Vec::new();
+    for link in attached(&links, &project).await? {
+        let meta = match uuid::Uuid::parse_str(&link.target.id) {
+            Ok(id) => docs.get(id).await.ok(),
+            Err(_) => None,
+        };
+        let mut row = match &meta {
+            Some(m) => doc_row_json(m),
+            None => serde_json::json!({ "id": link.target.id }),
+        };
+        row["link_id"] = serde_json::json!(link.id);
+        match &meta {
+            Some(m) if m.deleted => row["gone"] = serde_json::json!("deleted"),
+            None => row["gone"] = serde_json::json!("not in the catalog"),
+            Some(_) => {}
+        }
+        out.push(row);
+    }
+    if json {
+        return crate::json_out::print_json(&out);
+    }
+    println!("{}: {} app docs\n", project.id, out.len());
+    for row in &out {
+        let id = row["id"].as_str().unwrap_or_default();
+        match row["gone"].as_str() {
+            Some(gone) => println!("  {id}  ({gone})"),
+            None => println!(
+                "  {id}  [{}]  {}",
+                row["kind"].as_str().unwrap_or_default(),
+                row["name"].as_str().unwrap_or_default()
+            ),
+        }
+    }
+    Ok(())
+}
+
+async fn attach_doc(
+    project: &str,
+    doc_id: uuid::Uuid,
+    org: Option<String>,
+    server: Option<String>,
+    json: bool,
+) -> eyre::Result<()> {
+    let project = project_node(project)?;
+    let (links, docs) = doc_clients(org, server).await?;
+    let meta = docs.get(doc_id).await.map_err(|e| {
+        eyre::eyre!(
+            "no app doc `{doc_id}` in this org's catalog (`task project app-docs` lists them): {e:?}"
+        )
+    })?;
+    if meta.deleted {
+        eyre::bail!("app doc `{doc_id}` was deleted; a deleted doc cannot be attached");
+    }
+    let doc = doc_node(doc_id);
+    let held = attached(&links, &project)
+        .await?
+        .into_iter()
+        .find(|l| l.target == doc);
+    let link = match held {
+        Some(link) => link,
+        None => links
+            .create(links::TypedLink::new(
+                project.clone(),
+                doc,
+                links::Relation::Down,
+                links::Confidence::Certain,
+            ))
+            .await
+            .map_err(|e| eyre::eyre!("attach: {e:?}"))?,
+    };
+    if json {
+        return crate::json_out::print_json(&serde_json::json!({
+            "project": project.id,
+            "link_id": link.id,
+            "doc": doc_row_json(&meta),
+        }));
+    }
+    println!("{} ← [{}] {} ({doc_id})", project.id, meta.kind, meta.name);
+    Ok(())
+}
+
+async fn detach_doc(
+    project: &str,
+    doc_id: uuid::Uuid,
+    org: Option<String>,
+    server: Option<String>,
+) -> eyre::Result<()> {
+    let project = project_node(project)?;
+    let (links, _) = doc_clients(org, server).await?;
+    let doc = doc_node(doc_id);
+    let held: Vec<links::TypedLink> = attached(&links, &project)
+        .await?
+        .into_iter()
+        .filter(|l| l.target == doc)
+        .collect();
+    if held.is_empty() {
+        eyre::bail!(
+            "app doc `{doc_id}` is not attached to project `{}`",
+            project.id
+        );
+    }
+    for l in &held {
+        links
+            .delete(l.id.clone())
+            .await
+            .map_err(|e| eyre::eyre!("detach: {e:?}"))?;
+    }
+    println!("detached {doc_id} from {}", project.id);
     Ok(())
 }
 

@@ -2514,6 +2514,10 @@ pub struct DeclaredAppDoc {
     /// `Merge` for a doc every device makes under one derived id (a
     /// rig's library); `Strict` for one made once and adopted.
     pub lineage: crdt::docs::Lineage,
+    /// The project it belongs to, by its path on the Projects tier
+    /// ([`project_rel`]): planted as the `project:` → `doc:` link a
+    /// project page lists (`crate::app_docs::attach`).
+    pub project: Option<&'static str>,
 }
 
 pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
@@ -2525,6 +2529,7 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         parent: None,
         songs: &["track-one", "track-two"],
         lineage: crdt::docs::Lineage::Strict,
+        project: Some("example-album"),
     },
     DeclaredAppDoc {
         org: "acme-audio",
@@ -2534,6 +2539,7 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         parent: None,
         songs: &[],
         lineage: crdt::docs::Lineage::Strict,
+        project: Some("example-album"),
     },
     DeclaredAppDoc {
         org: "acme-audio",
@@ -2543,6 +2549,7 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         parent: Some("6f1d3a52-6e0b-4f6e-9a51-1c0e7d2a9b02"),
         songs: &[],
         lineage: crdt::docs::Lineage::Strict,
+        project: Some("example-album"),
     },
     // A rig's library, as Studio keeps it: one id every device derives,
     // made on each offline and merged when they meet.
@@ -2554,6 +2561,7 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         parent: None,
         songs: &[],
         lineage: crdt::docs::Lineage::Merge,
+        project: None,
     },
 ];
 
@@ -2567,8 +2575,9 @@ fn app_doc_id(id: &str) -> eyre::Result<uuid::Uuid> {
 }
 
 /// Plant `slug`'s declared app docs into `<org>/app_docs.sqlite`: each
-/// registered (parents first, as the list is ordered), and an empty
-/// doc given its starting content.
+/// registered (parents first, as the list is ordered), attached to its
+/// project (a link in `<org>/links.jsonl`), and an empty doc given its
+/// starting content.
 ///
 /// Idempotent: registering is idempotent on the fixed id, and a doc that
 /// already holds history is left alone.
@@ -2593,6 +2602,7 @@ pub async fn plant_app_docs(org_root: &org_proto::OrgRoot, slug: &str) -> eyre::
         .await
         .map_err(|e| eyre::eyre!("migrate app docs: {e}"))?;
     let host = crate::app_docs::open(db).await?;
+    let links = links::Store::open(org_root.path().join("links.jsonl"));
     let mut planted = 0;
     for d in declared {
         let doc_id = app_doc_id(d.id)?;
@@ -2605,6 +2615,13 @@ pub async fn plant_app_docs(org_root: &org_proto::OrgRoot, slug: &str) -> eyre::
         })
         .await
         .map_err(|e| eyre::eyre!("register \"{}\": {e}", d.name))?;
+        // Its project's link; attaching again returns the one held.
+        if let Some(project) = d.project {
+            let project = crate::app_docs::project_node(project).map_err(|e| eyre::eyre!(e))?;
+            crate::app_docs::attach(&host, &links, &project, doc_id, "seed")
+                .await
+                .map_err(|e| eyre::eyre!("attach \"{}\": {e}", d.name))?;
+        }
         let doc = host
             .registry()
             .doc(doc_id)
@@ -3178,6 +3195,35 @@ mod declared_tests {
         assert!(
             app_docs_of("acme-audio").any(|d| d.lineage == crdt::docs::Lineage::Merge),
             "the seed shows a Merge doc (a rig's library)"
+        );
+
+        // Each doc that names a project is attached to a declared one,
+        // once, however often the plant runs.
+        let links = links::Store::open(org.path().join("links.jsonl"));
+        for d in DECLARED_APP_DOCS {
+            let Some(project) = d.project else { continue };
+            assert!(
+                declared_of(d.org).any(|p| project_rel(p.dir) == project),
+                "\"{}\" names `{project}`, which {} does not declare",
+                d.name,
+                d.org
+            );
+        }
+        let album = crate::app_docs::project_node("example-album").unwrap();
+        let held = crate::app_docs::project_docs(&host, &links, &album)
+            .await
+            .unwrap();
+        let mut ids: Vec<String> = held.iter().map(|h| h.link.target.id.clone()).collect();
+        ids.sort();
+        let mut want: Vec<String> = app_docs_of("acme-audio")
+            .filter(|d| d.project == Some("example-album"))
+            .map(|d| d.id.to_owned())
+            .collect();
+        want.sort();
+        assert_eq!(ids, want, "one link per attached doc");
+        assert!(
+            held.iter().all(|h| h.meta.is_some()),
+            "every one in the catalog"
         );
     }
 
