@@ -3,10 +3,10 @@
 # `vX.Y.Z` is pushed (a push to main builds nothing). The macOS mirror of
 # task-ios.yml; testers' Macs then auto-update via the TestFlight app.
 #
-# Runs on the SAME self-hosted airlock Mac as the iOS workflows and shares
-# their `ios-testflight` concurrency group, so the single Mac never runs two
-# Apple builds at once (they queue behind each other and don't fight over
-# target/ or the keychain).
+# Runs on airlock's `task-release-mac` pool, the same three runners as the
+# iOS workflow and the macOS node binary, so a release's Apple builds run
+# side by side instead of queueing behind each other. Each runner has its
+# own work folder (its own target/), and the build keychain is only read.
 #
 # The build script is apps/desktop/macos/deploy-testflight-macos.sh
 # (keychain unlock → ASC-API provisioning profile → dx build → App-Sandbox
@@ -51,8 +51,7 @@ on:
         required: false
         default: ""
 
-# Serialize with the iOS builds — one Apple build at a time on the single
-# Mac. Shared group name across the workflows; queue, never cancel.
+# One run per workflow at a time; queue, never cancel.
 concurrency:
   # Per-WORKFLOW, not shared across the three Apple workflows.
   #
@@ -64,11 +63,12 @@ concurrency:
   # is CANCELLED. task-ios lost that race every time, which is why
   # TestFlight went stale while every run showed "cancelled".
   #
-  # The serialization they wanted is already guaranteed: Task's Apple
-  # builds run on airlock's `task-release-mac`, a SINGLE self-hosted runner
-  # that runs one job at a time, so two of them cannot overlap regardless.
-  # (Studio's run on its own `studio-release-mac` runner on the same Mac.)
-  # The shared group added nothing except mutual cancellation.
+  # Nor is that serialization wanted any more: `task-release-mac` is a pool
+  # of three runners on airlock (airlock-task-release, -2, -3), so iOS,
+  # macOS and the macOS node binary build at once. With one runner they
+  # queued, and a release's Deploy waited 30+ minutes for the node binary
+  # behind both TestFlight builds. (Studio has its own `studio-release-mac`
+  # pool on the same Mac.)
   #
   # Keeping the group per-workflow preserves the useful half — a newer
   # run of the SAME workflow supersedes an older queued one.

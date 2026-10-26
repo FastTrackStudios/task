@@ -160,7 +160,7 @@ jobs:
           - asset: task-server-linux-aarch64
             os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-          # airlock's `task-release-mac` runner (as Studio's macOS release
+          # airlock's `task-release-mac` pool (as Studio's macOS release
           # builds): Homebrew's OpenSSL static + rust-toolchain.toml's rustup
           # toolchain, so the binary links only the OS (checked below).
           - asset: task-server-macos-aarch64
