@@ -4608,7 +4608,12 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // catalog (`app_docs::Faces`), generic over any app's kinds.
         .with(
             app_docs_proto::service::app_doc_faces_rpc_service_descriptor(),
-            app_docs_proto::service::serve(org.app_doc_faces.clone()),
+            app_docs_proto::service::serve(app_docs::FacesService {
+                faces: org.app_doc_faces.clone(),
+                links: org.links.clone(),
+                projects: org.projects.clone(),
+                threads: org.threads.clone(),
+            }),
         )
         // The same documents for the org's other nodes (`offline.peers`):
         // listed and exchanged by path, gated on `docs/replica` — the

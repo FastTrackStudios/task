@@ -117,6 +117,9 @@ pub struct FaceLink {
     pub doc: Uuid,
 }
 
+/// The prop key an app sets to name its kind for people ("Setlist").
+pub const KIND_LABEL: &str = "kind_label";
+
 /// A catalog row with its face: what a list of an org's docs shows.
 #[derive(Debug, Clone, PartialEq, Facet, Serialize, Deserialize)]
 pub struct DocCard {
@@ -133,6 +136,9 @@ pub struct DocCard {
     /// The face, when the doc keeps one; `None` when it has none (or its
     /// content could not be read, which the span records).
     pub face: Option<DocFace>,
+    /// Comments on the doc: messages in the threads anchored on it
+    /// (`entity_type = "doc"`). 0 from [`Self::new`]; the server fills it.
+    pub comments: u32,
 }
 
 impl DocCard {
@@ -157,7 +163,24 @@ impl DocCard {
             title,
             updated_us,
             face,
+            comments: 0,
         }
+    }
+
+    /// A prop of the face by key.
+    #[must_use]
+    pub fn prop(&self, key: &str) -> Option<&FaceProp> {
+        self.face.as_ref()?.props.iter().find(|p| p.key == key)
+    }
+
+    /// What a kind is called in a list: the face's `kind_label` prop when
+    /// the app sets one, else the kind itself. Task never names a kind.
+    #[must_use]
+    pub fn kind_label(&self) -> String {
+        self.prop(KIND_LABEL)
+            .map(|p| p.value.display())
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| self.kind.clone())
     }
 }
 
@@ -186,6 +209,27 @@ mod tests {
             DocCard::new(id, "k".into(), "untitled".into(), 0, None).title,
             "untitled"
         );
+    }
+
+    #[test]
+    fn a_kind_is_named_by_the_face_else_its_word() {
+        let mut face = DocFace::default();
+        let card = DocCard::new(
+            Uuid::nil(),
+            "app.list".into(),
+            "x".into(),
+            0,
+            Some(face.clone()),
+        );
+        assert_eq!(card.kind_label(), "app.list");
+        face.props.push(FaceProp {
+            key: KIND_LABEL.into(),
+            label: "Kind".into(),
+            ty: FacePropType::Text,
+            value: FaceValue::Text("List".into()),
+        });
+        let card = DocCard::new(Uuid::nil(), "app.list".into(), "x".into(), 0, Some(face));
+        assert_eq!(card.kind_label(), "List");
     }
 
     #[test]

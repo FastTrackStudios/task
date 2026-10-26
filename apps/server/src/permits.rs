@@ -269,7 +269,9 @@ table!(APP_DOCS, "app-docs", "app-docs/**", [
 ]);
 table!(APP_DOCS_STREAM, "app-docs-stream", "app-docs/**", [rd "changes"]);
 // Each app doc's face (`crate::app_docs::Faces`): reads, for members.
-table!(APP_DOC_FACES, "app-doc-faces", "app-docs/**", [rd "list_faces", rd "face"]);
+table!(APP_DOC_FACES, "app-doc-faces", "app-docs/**", [
+    rd "list_faces", rd "face", rd "project_faces",
+]);
 
 // ── Agent lane ───────────────────────────────────────────────────────────
 

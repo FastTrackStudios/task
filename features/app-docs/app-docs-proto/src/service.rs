@@ -24,4 +24,10 @@ pub trait AppDocFaces {
 
     /// One doc with its face. A deleted doc is [`FacesError::Deleted`].
     async fn face(&self, doc_id: Uuid) -> Result<DocCard, FacesError>;
+
+    /// The live docs a project holds (its `project:` → `doc:` links),
+    /// each with its face, in the order they were attached. A doc
+    /// deleted since is left out. An unknown project is
+    /// [`FacesError::NotFound`].
+    async fn project_faces(&self, project_id: Uuid) -> Result<Vec<DocCard>, FacesError>;
 }

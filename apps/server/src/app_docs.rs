@@ -328,9 +328,103 @@ pub const FACES_DEFAULT: usize = 200;
 /// …and never more than this, whatever was asked.
 pub const FACES_MAX: usize = 1000;
 
+/// The `AppDocFaces` RPC over one org: the faces ([`Faces`]), with each
+/// card's comment count from the org's threads (anchored on `"doc"`),
+/// and a project's docs through its links.
+#[derive(Clone)]
+pub struct FacesService {
+    pub faces: Faces,
+    pub links: links::Store,
+    pub projects: project::ProjectBackend,
+    pub threads: threads::Store,
+}
+
+impl FacesService {
+    /// Cards for `rows`, each with its face and comment count, recording
+    /// the list's shape on the span.
+    async fn cards(&self, rows: Vec<DocMeta>) -> Vec<DocCard> {
+        let mut cards = Vec::with_capacity(rows.len());
+        let mut unreadable = 0_i64;
+        for meta in rows {
+            let (card, read) = self.faces.card(meta).await;
+            if read.is_err() {
+                unreadable += 1;
+            }
+            cards.push(card);
+        }
+        match comment_counts(&self.threads, cards.iter().map(|c| c.doc_id).collect()).await {
+            Ok(counts) => {
+                for c in &mut cards {
+                    c.comments = counts.get(&c.doc_id).copied().unwrap_or(0);
+                }
+            }
+            Err(e) => architect_telemetry::wide::set("doc.comments_error", e),
+        }
+        let faced = cards.iter().filter(|c| c.face.is_some()).count();
+        architect_telemetry::wide::set("doc.count", i64::try_from(cards.len()).unwrap_or(i64::MAX));
+        architect_telemetry::wide::set("doc.faced", i64::try_from(faced).unwrap_or(i64::MAX));
+        architect_telemetry::wide::set("doc.unreadable", unreadable);
+        cards
+    }
+}
+
+/// How many comments (messages) each doc's threads hold, for `docs`.
+async fn comment_counts(
+    threads: &threads::Store,
+    docs: Vec<Uuid>,
+) -> Result<std::collections::HashMap<Uuid, u32>, String> {
+    use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, QuerySelect as _};
+    use threads::entity::{MessageColumn, MessageEntity, ThreadColumn, ThreadEntity};
+
+    let mut out = std::collections::HashMap::new();
+    if docs.is_empty() {
+        return Ok(out);
+    }
+    let held: Vec<(Uuid, Uuid)> = ThreadEntity::find()
+        .select_only()
+        .column(ThreadColumn::Id)
+        .column(ThreadColumn::EntityId)
+        .filter(ThreadColumn::EntityType.eq(DOC_ENTITY))
+        .filter(ThreadColumn::EntityId.is_in(docs))
+        .into_tuple()
+        .all(threads.conn())
+        .await
+        .map_err(|e| e.to_string())?;
+    if held.is_empty() {
+        return Ok(out);
+    }
+    let doc_of: std::collections::HashMap<Uuid, Uuid> = held.into_iter().collect();
+    let posted: Vec<Uuid> = MessageEntity::find()
+        .select_only()
+        .column(MessageColumn::ThreadId)
+        .filter(MessageColumn::ThreadId.is_in(doc_of.keys().copied()))
+        .into_tuple()
+        .all(threads.conn())
+        .await
+        .map_err(|e| e.to_string())?;
+    for thread in posted {
+        if let Some(doc) = doc_of.get(&thread) {
+            *out.entry(*doc).or_insert(0) += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// The `entity_type` a thread on an app doc anchors with.
+pub const DOC_ENTITY: &str = "doc";
+
+/// A project's path on the Projects tier, from its page's vault path
+/// (`example-album/project.md` → `example-album`).
+#[must_use]
+pub fn project_tier_path(page: &str) -> &str {
+    page.strip_suffix(org_proto::PROJECT_PAGE)
+        .unwrap_or(page)
+        .trim_end_matches('/')
+}
+
 // t[impl offline.app-docs.face] — the org's docs listed with the face
 // each keeps, read without opening them for good
-impl AppDocFaces for Faces {
+impl AppDocFaces for FacesService {
     async fn list_faces(
         &self,
         kind: Option<String>,
@@ -343,30 +437,15 @@ impl AppDocFaces for Faces {
         if let Some(k) = &kind {
             architect_telemetry::wide::set("doc.kind", k.clone());
         }
-        let rows = list(&self.docs, kind, limit)
+        let rows = list(&self.faces.docs, kind, limit)
             .await
             .map_err(|e| FacesError::Backend(e.to_string()))?;
-        let mut cards = Vec::with_capacity(rows.len());
-        let mut unreadable = 0_usize;
-        for meta in rows {
-            let (card, read) = self.card(meta).await;
-            if read.is_err() {
-                unreadable += 1;
-            }
-            cards.push(card);
-        }
-        architect_telemetry::wide::set("doc.count", cards.len() as i64);
-        architect_telemetry::wide::set(
-            "doc.faced",
-            cards.iter().filter(|c| c.face.is_some()).count() as i64,
-        );
-        architect_telemetry::wide::set("doc.unreadable", unreadable as i64);
-        Ok(cards)
+        Ok(self.cards(rows).await)
     }
 
     async fn face(&self, doc_id: Uuid) -> Result<DocCard, FacesError> {
         architect_telemetry::wide::set("doc.id", doc_id.to_string());
-        let meta = match self.docs.get(doc_id).await {
+        let meta = match self.faces.docs.get(doc_id).await {
             Ok(m) if !m.deleted => m,
             Ok(_) | Err(DocsError::Deleted) => {
                 architect_telemetry::wide::set("doc.outcome", "deleted");
@@ -379,14 +458,41 @@ impl AppDocFaces for Faces {
             Err(e) => return Err(FacesError::Backend(e.to_string())),
         };
         architect_telemetry::wide::set("doc.kind", meta.kind.clone());
-        let (card, read) = self.card(meta).await;
-        let outcome = match (&read, &card.face) {
-            (Err(_), _) => "unreadable",
-            (Ok(()), Some(_)) => "faced",
-            (Ok(()), None) => "faceless",
+        let mut cards = self.cards(vec![meta]).await;
+        let card = cards
+            .pop()
+            .ok_or_else(|| FacesError::Backend("no card".into()))?;
+        let outcome = if card.face.is_some() {
+            "faced"
+        } else {
+            "faceless"
         };
         architect_telemetry::wide::set("doc.outcome", outcome);
         Ok(card)
+    }
+
+    async fn project_faces(&self, project_id: Uuid) -> Result<Vec<DocCard>, FacesError> {
+        architect_telemetry::wide::set("project.id", project_id.to_string());
+        let projects = self.projects.clone();
+        let page = tokio::task::spawn_blocking(move || {
+            use project::ProjectService as _;
+            projects.get(project_id)
+        })
+        .await
+        .map_err(|e| FacesError::Backend(e.to_string()))?
+        .map_err(|_| FacesError::NotFound(project_id.to_string()))?
+        .path;
+        let node = project_node(project_tier_path(&page)).map_err(FacesError::Backend)?;
+        let held = project_docs(&self.faces.docs, &self.links, &node)
+            .await
+            .map_err(FacesError::Backend)?;
+        // A doc deleted since it was attached is left out here; the MCP
+        // `project_docs` tool lists it as gone, for clearing.
+        let rows = held
+            .into_iter()
+            .filter_map(|d| d.meta.filter(|m| !m.deleted))
+            .collect();
+        Ok(self.cards(rows).await)
     }
 }
 

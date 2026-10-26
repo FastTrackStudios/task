@@ -386,7 +386,8 @@ and colour, typed properties that each carry their own label and type
 (`text`, `number`, `duration`, `date`, `enum`, `tags`, `bool`), and links to
 other docs as `doc:<uuid>`. It is the only part of an app's content the org
 reads, with no schema registered for the kind. The org lists its docs with
-their faces (narrowed by kind) and shows one doc's face; a doc with no face
+their faces (narrowed by kind), a project's attached docs with theirs, and
+one doc's face, each with the count of comments on it; a doc with no face
 is titled by its catalog name, and an entry of the wrong shape or an unknown
 type is skipped rather than failing the read. Listing reads stored bytes
 without keeping each doc open.

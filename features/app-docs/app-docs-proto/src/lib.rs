@@ -39,7 +39,7 @@ pub mod loro_face;
 pub mod service;
 
 pub use error::FacesError;
-pub use face::{DocCard, DocFace, FaceLink, FaceProp, FacePropType, FaceValue};
+pub use face::{DocCard, DocFace, FaceLink, FaceProp, FacePropType, FaceValue, KIND_LABEL};
 #[cfg(feature = "loro")]
 pub use loro_face::{FACE, read_face, write_face};
 pub use service::AppDocFaces;

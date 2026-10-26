@@ -365,6 +365,69 @@ async fn the_org_lists_its_docs_by_the_face_each_keeps() {
     );
     assert_eq!(faces.list_faces(None, 1).await.unwrap().len(), 1, "limit");
 
+    // A project holds the list (its `project:` → `doc:` link); its
+    // faces carry the comments on each doc.
+    let projects: project::ProjectServiceClient = client(&url).await;
+    let recital = projects
+        .create(project::ProjectInfo {
+            title: "Senior Recital".into(),
+            project_type: "general".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("create project");
+    let tier = task_server::app_docs::project_tier_path(&recital.path).to_owned();
+    let links: LinksServiceClient = client(&url).await;
+    links
+        .create(TypedLink::new(
+            NodeRef::new(NodeKind::Project, tier),
+            NodeRef::new(NodeKind::AppDoc, id.to_string()),
+            Relation::Down,
+            Confidence::Certain,
+        ))
+        .await
+        .expect("attach");
+    let threads: threads::ThreadsServiceClient = client(&url).await;
+    let thread = threads
+        .create_thread(threads::CreateThreadRequest {
+            org_id: Uuid::nil(),
+            entity_type: "doc".into(),
+            entity_id: id,
+            anchor_path: None,
+            title: "Comments".into(),
+            kind: String::new(),
+            created_by: Uuid::nil(),
+            source_kind: String::new(),
+            source_ref: None,
+            source_url: None,
+        })
+        .await
+        .expect("thread");
+    for body in ["Open with the Bach?", "Yes."] {
+        threads
+            .post_message(threads::PostMessageRequest {
+                thread_id: thread.id,
+                org_id: Uuid::nil(),
+                author_id: None,
+                author_label: "Sam".into(),
+                body: body.into(),
+                reply_to: None,
+                source_kind: String::new(),
+                external_id: None,
+                original_text: None,
+                source_url: None,
+                posted_at: None,
+            })
+            .await
+            .expect("post");
+    }
+    let held = faces.project_faces(recital.id).await.unwrap();
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].doc_id, id);
+    assert_eq!(held[0].face.as_ref(), Some(&face));
+    assert_eq!(held[0].comments, 2, "the doc's comments are counted");
+    assert!(faces.project_faces(Uuid::new_v4()).await.is_err());
+
     // Deleted: refused by name; an id the catalog lacks, likewise.
     let docs: DocsClient = client(&url).await;
     docs.delete(bare).await.unwrap();
