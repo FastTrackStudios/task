@@ -233,17 +233,15 @@ expect_out "draft with only a none change file: no user-visible changes" "$S/nn.
 
 echo "=== stamp: the release version into a build's checkout (uncommitted)"
 git switch -q --detach v26.10.1
-expect_ok "stamp v26.10.1" R stamp v26.10.1
-eq "  ...the workspace version" "$(R version)" 26.10.1
-eq "  ...task-server in Cargo.lock" "$(grep -A1 '^name = "task-server"$' Cargo.lock | tail -1)" 'version = "26.10.1"'
-eq "  ...task-app-desktop in Cargo.lock" "$(grep -A1 '^name = "task-app-desktop"$' Cargo.lock | tail -1)" 'version = "26.10.1"'
-eq "  ...files-store (its own version) did not move" "$(grep -A1 '^name = "files-store"$' Cargo.lock | tail -1)" 'version = "0.1.0"'
-eq "  ...serde (a registry crate at the same number) did not move" "$(grep -A1 '^name = "serde"$' Cargo.lock | tail -1)" 'version = "26.9.4"'
-eq "  ...the inventory member (named like a registry crate)" "$(grep -A2 '^name = "inventory"$' Cargo.lock | grep -A1 -v source | grep '^version' | paste -sd' ' -)" 'version = "0.3.0" version = "26.10.1"'
-eq "  ...its \"name version\" reference in a dependency list" "$(grep -c '^ "inventory 26.10.1",$' Cargo.lock)" 1
-eq "  ...but not the registry crate's" "$(grep -c '^ "inventory 0.3.0",$' Cargo.lock)" 1
-eq "  ...and no reference at the old version is left" "$(grep -c '"inventory 26.9.4"' Cargo.lock)" 0
-eq "  ...only Cargo.toml and Cargo.lock changed, uncommitted" "$(git status --porcelain | awk '{ print $2 }' | paste -sd' ' -)" "Cargo.lock Cargo.toml"
+: > "$S/github-env"
+expect_ok "stamp v26.10.1" env GITHUB_ENV="$S/github-env" bash scripts/release.sh stamp v26.10.1
+eq "  ...the version this checkout builds as" "$(R version)" 26.10.1
+eq "  ...exported to the job's later steps" "$(cat "$S/github-env")" "TASK_RELEASE_VERSION=26.10.1"
+# A changed package version rebuilds every workspace crate (Cargo hashes it
+# into every unit), so the stamp must leave the manifests alone.
+eq "  ...Cargo.toml still says the committed version" "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" 26.9.4
+eq "  ...task-server in Cargo.lock did not move" "$(grep -A1 '^name = "task-server"$' Cargo.lock | tail -1)" 'version = "26.9.4"'
+eq "  ...only .release-version is new, uncommitted" "$(git status --porcelain --untracked-files=all | awk '{ print $2 }' | paste -sd' ' -)" ".release-version"
 eq "  ...HEAD still carries the committed version" "$(R version HEAD)" 26.9.4
 expect_ok "stamp again: a no-op" R stamp 26.10.1
 expect_fail "stamp refuses a non-X.Y.Z" R stamp 26.10
@@ -261,7 +259,7 @@ eq "  ...and origin's annotated tag is back" "$(git cat-file -t refs/tags/v26.10
 SHIM_CHECK="completed failure" expect_fail "tag-guard with GH_TOKEN: red CI passed" env GITHUB_REF=refs/tags/v26.10.1 GH_TOKEN=x bash scripts/release.sh tag-guard
 expect_fail "tag-guard: a branch ref" env GITHUB_REF=refs/heads/main bash scripts/release.sh tag-guard
 expect_fail "tag-guard: the checkout is another tag's" env GITHUB_REF=refs/tags/v26.10.0 bash -c 'bash scripts/release.sh stamp v26.10.0 && bash scripts/release.sh tag-guard'
-git checkout -q -- Cargo.toml Cargo.lock
+rm -f .release-version
 expect_fail "tag-guard: not stamped (the committed version)" env GITHUB_REF=refs/tags/v26.10.1 bash scripts/release.sh tag-guard
 grep -q "run 'release.sh stamp v26.10.1' first" "$S/last.out" && ok "  ...asking for the stamp" || bad "  ...message"
 # a tag on a commit no release line has (the feature branch)

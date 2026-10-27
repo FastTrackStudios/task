@@ -3,16 +3,28 @@
 # .github/actions/hosted-nix-rust.
 #
 # Nothing to install and nothing to restore: nix is the host's, the nix
-# store is warm, and the pool's shared cache ($TASK_CACHE_DIR, on the dev
-# drive, kept across jobs, restarts and reboots; ~/.flake
+# store is warm, and the pool's cache ($TASK_CACHE_DIR, on the dev drive,
+# kept across jobs, restarts and reboots; ~/.flake
 # hosts/THEBATTLESHIP/github-runners.nix) holds one target dir PER BUILD
-# KIND that every run of the pool builds on. A merge therefore compiles only
-# the crates it changed and their dependents, not the whole workspace.
+# KIND PER RUNNER INSTANCE. A merge therefore compiles only the crates it
+# changed and their dependents, not the whole workspace.
 #
 # Per kind, because lint (check-mode metadata), tests (codegen) and wasm
-# (another target triple) share no artifacts and a run's three jobs build on
-# three instances at once. Two runs on the same kind (a cancelled run still
-# winding down) serialise on cargo's own target-dir lock.
+# (another target triple) share no artifacts.
+#
+# Per instance, because a target dir is only warm for the paths that built
+# it. Each instance has its own HOME (so its own ~/.cargo registry) and its
+# own checkout, and cargo marks a unit dirty when its source path changes.
+# One dir shared by the pool's three instances made every job that landed
+# on a different instance than the last build recompile the whole graph
+# (1,385 dependencies and 190 workspace crates, ~8 minutes, for a ~70 s test
+# run), and two overlapping runs waited on each other's target-dir lock
+# and then rebuilt each other's work (22-27 minute Tests jobs).
+#
+# And each kind is pinned to one instance (checks.yml's runs-on labels
+# task-main-tests / -lint / -wasm; ~/.flake hosts/THEBATTLESHIP/
+# github-runners.nix), so the same runner builds it every time, on the dir
+# it left warm. Two runs of one kind queue for that runner.
 name: THEBATTLESHIP nix + warm target
 description: Enter .#ci on a THEBATTLESHIP Task runner and point cargo at the pool's warm target dir for this build kind.
 inputs:
@@ -39,7 +51,7 @@ runs:
       run: |
         set -euo pipefail
         [ -n "${TASK_CACHE_DIR:-}" ] || { echo "::error::no TASK_CACHE_DIR: not a Task pool runner (~/.flake hosts/THEBATTLESHIP/github-runners.nix)"; exit 1; }
-        dir="$TASK_CACHE_DIR/$KIND"
+        dir="$TASK_CACHE_DIR/$KIND-$RUNNER_NAME"
         if [ "$FRESH" = "true" ]; then
           echo "fresh: emptying $dir"
           rm -rf "$dir"

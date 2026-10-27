@@ -14,11 +14,13 @@ mod updater;
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
-    // `--version`: the release's version (`[workspace.package]`), without
-    // opening a window, telemetry or the node — what a fleet checks after
-    // an update (`Task --version` = the release it pinned).
+    // The release's version (crates/release-version), before anything reports it.
+    task_release_version::set(task_release_version::of_this_build!());
+    // `--version`: the release's version, without opening a window,
+    // telemetry or the node — what a fleet checks after an update
+    // (`Task --version` = the release it pinned).
     if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
-        println!("task-app-desktop {}", env!("CARGO_PKG_VERSION"));
+        println!("task-app-desktop {}", task_release_version::get());
         return;
     }
     // Before anything can open a TLS socket: the graph carries both rustls

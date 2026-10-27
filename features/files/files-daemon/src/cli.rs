@@ -224,10 +224,10 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
             println!("{USAGE}");
             Some(Ok(()))
         }
-        // The release's version (`[workspace.package]`), the same one the
+        // The release's version (crates/release-version), the same one the
         // app, the CLI and task-server report.
         Some("-V" | "--version" | "version") => {
-            println!("fts-files-daemon {}", env!("CARGO_PKG_VERSION"));
+            println!("fts-files-daemon {}", task_release_version::get());
             Some(Ok(()))
         }
         Some(other) => {

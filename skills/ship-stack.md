@@ -13,7 +13,7 @@ the hook posts the **`Local CI`** commit status, with how long it took.
 **GitHub** runs one free job on a PR, then the full suite once per merge
 to main. PR jobs run on GitHub's free hosted runners; everything that runs
 after code is on main (the post-merge suite) or on a release tag (images,
-the desktop cache) runs on THEBATTLESHIP's self-hosted pools, `task-main` and
+node binaries, the Linux desktop) runs on THEBATTLESHIP's self-hosted pools, `task-main` and
 `task-release`, whose target dirs stay warm. Their job gate refuses any
 PR job: the repo is public.
 

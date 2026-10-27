@@ -34,7 +34,7 @@ use task_plugin_ui::dioxus::prelude::*;
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
     id: resources_ui::APP_ID,
-    version: env!("CARGO_PKG_VERSION"),
+    version: task_plugin_ui::SHIPS_WITH_TASK,
     // No sidebar entry: reached from where it belongs (see the crate
     // docs), not as a section of its own.
     nav: &[],

@@ -35,14 +35,14 @@
 # Production is the latest `v*` tag.
 #
 # THE VERSION IS THE TAG. Releases commit no version: every release build
-# runs `release.sh stamp X.Y.Z` first, which writes the tag's version into
-# its own checkout's `[workspace.package] version` and Cargo.lock's
-# workspace members (uncommitted), so task-server, the web bundle, the
-# desktop app and the TestFlight builds (MARKETING_VER = `release.sh
-# version`) all report the release. The version committed on main is
-# whatever it last was (26.10.1, the last release commit): it is NOT the
-# released version. scripts/check-versions.sh holds every artifact to the
-# (stamped) workspace version.
+# runs `release.sh stamp X.Y.Z` first, which makes its own checkout build
+# as the tag's version WITHOUT touching Cargo.toml (`.release-version` and
+# TASK_RELEASE_VERSION; see cmd_stamp for why), so task-server, the web
+# bundle, the desktop app and the TestFlight builds (MARKETING_VER =
+# `release.sh version`) all report the release. The version committed on
+# main is whatever it last was (26.10.1, the last release commit): it is
+# NOT the released version. scripts/check-versions.sh holds every artifact
+# to the stamped version.
 #
 # Versions are CalVer YY.M.MICRO (no leading zeros: Cargo, Apple and the
 # cluster's image-updater filter all need that). The NEXT version is
@@ -81,10 +81,10 @@
 #   scripts/release.sh notes [TAG|REV]    the release notes of a tag, or the
 #                                          draft for REV (default origin/main)
 #   scripts/release.sh stamp X.Y.Z        CI, first step of every release build:
-#                                          write X.Y.Z into this checkout's
-#                                          [workspace.package] version and the
-#                                          workspace members' Cargo.lock
-#                                          entries (uncommitted)
+#                                          this checkout builds as X.Y.Z:
+#                                          .release-version, and
+#                                          TASK_RELEASE_VERSION in $GITHUB_ENV
+#                                          (Cargo.toml untouched)
 #   scripts/release.sh image-tag TAG      the image tag of a release tag: the
 #                                          bare CalVer (v26.10.2 -> 26.10.2);
 #                                          refuses anything else
@@ -116,10 +116,16 @@ SCAN_MAX="${RELEASE_SCAN_MAX:-60}"
 die() { echo "release: $*" >&2; exit 1; }
 note() { echo "release: $*" >&2; }
 
-# `[workspace.package] version` of Cargo.toml at a revision (default: the
-# working tree, which a release build has stamped).
+# The version a release build of this checkout is (`stamp` wrote it to
+# RELEASE_VERSION_FILE), else `[workspace.package] version` of Cargo.toml;
+# with a revision, that revision's committed Cargo.toml version.
+RELEASE_VERSION_FILE=".release-version"
 version_at() {
     local src
+    if [ -z "${1:-}" ] && [ -s "$RELEASE_VERSION_FILE" ]; then
+        head -1 "$RELEASE_VERSION_FILE"
+        return
+    fi
     if [ -n "${1:-}" ]; then src="$(git show "$1:Cargo.toml")"; else src="$(cat Cargo.toml)"; fi
     printf '%s\n' "$src" \
         | sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' \
@@ -566,62 +572,33 @@ cmd_queued() { # <sha>
     echo "${asked[*]}"
 }
 
-# Write <version> into the working tree's [workspace.package] version and
-# the workspace members' entries in Cargo.lock: the release build's own
-# checkout, never committed. Every crate with `version.workspace = true`
-# then builds as the release, so CARGO_PKG_VERSION, the TestFlight
-# marketing version, the desktop app's version and the update check all
-# agree with the tag. A member is a [[package]] with no `source` line whose
-# version is the old workspace version. Where a member shares its name with
-# another crate in the graph (inventory, notify), Cargo names it in
-# dependency lists as `"inventory <version>"`; those references move too,
-# or `cargo --locked` refuses the lockfile. Nothing else in the lockfile
-# moves (no cargo re-lock, which would re-resolve registry picks).
+# Make this checkout build as release <version>, without touching Cargo.toml
+# or Cargo.lock: never committed, and never a changed package version.
+# Cargo hashes a package's version into every unit and every dependent's,
+# so writing it into `[workspace.package]` (as this once did) rebuilt all
+# ~190 workspace crates on every release, however warm the cache. Instead:
+#
+#   - RELEASE_VERSION_FILE (`.release-version`, git-ignored) holds it, so
+#     `release.sh version`, and through it the TestFlight marketing version,
+#     the Linux packages, the node binaries' tag and the tag guard, report it;
+#   - TASK_RELEASE_VERSION carries it to the build: exported into
+#     $GITHUB_ENV for the job's later steps. Only the binaries read it, at
+#     build time (crates/release-version), so only they recompile; every
+#     library asks them at runtime.
+#
 # Idempotent.
 cmd_stamp() { # <X.Y.Z | vX.Y.Z>
-    local v="${1:-}" cur lock
+    local v="${1:-}"
     v="${v#v}"
     is_semver "$v" || die "usage: release.sh stamp X.Y.Z (got '${1:-}')"
-    cur="$(version_at)"
-    [ -n "$cur" ] || die "Cargo.toml has no [workspace.package] version"
-    if [ "$cur" = "$v" ]; then
-        note "stamp: the checkout is already $v"
-        return 0
+    printf '%s\n' "$v" > "$RELEASE_VERSION_FILE"
+    [ "$(version_at)" = "$v" ] || die "stamp: failed to write $RELEASE_VERSION_FILE"
+    if [ -n "${GITHUB_ENV:-}" ]; then
+        echo "TASK_RELEASE_VERSION=$v" >> "$GITHUB_ENV"
     fi
-    sed "/^\[workspace\.package\]/,/^\[/s/^version *= *\"$cur\"/version = \"$v\"/" Cargo.toml > Cargo.toml.stamp \
-        && mv Cargo.toml.stamp Cargo.toml
-    [ "$(version_at)" = "$v" ] || die "stamp: failed to rewrite [workspace.package] version"
-    lock="$(mktemp)"
-    # Two passes over Cargo.lock: the first collects the members' names, the
-    # second rewrites their versions and the `"<member> <old>"` references.
-    awk -v cur="$cur" -v nv="$v" '
-        function header(l) { return l ~ /^\[\[package\]\]$/ || l ~ /^\[\[patch\.unused\]\]$/ || l ~ /^\[metadata\]$/ }
-        function note_member() { if (pkg && name != "" && !src && ver == cur) member[name] = 1 }
-        function flush(   i, ref, sp) {
-            for (i = 1; i <= n; i++) {
-                if (pkg && !src && buf[i] == "version = \"" cur "\"") buf[i] = "version = \"" nv "\""
-                else if (buf[i] ~ /^ "[^" ]+ [^" ]+",?$/) {
-                    ref = buf[i]; sub(/^ "/, "", ref); sub(/",?$/, "", ref); sp = index(ref, " ")
-                    if ((substr(ref, 1, sp - 1) in member) && substr(ref, sp + 1) == cur) sub(cur "\"", nv "\"", buf[i])
-                }
-                print buf[i]
-            }
-            n = 0; src = 0; pkg = 0
-        }
-        FNR == NR {
-            if (header($0)) { note_member(); pkg = ($0 == "[[package]]"); name = ""; ver = ""; src = 0; next }
-            if ($0 ~ /^name = "/) { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name) }
-            else if ($0 ~ /^version = "/) { ver = $0; sub(/^version = "/, "", ver); sub(/"$/, "", ver) }
-            else if ($0 ~ /^source = /) src = 1
-            next
-        }
-        FNR == 1 { note_member(); n = 0; src = 0; pkg = 0 }
-        header($0) { flush(); pkg = ($0 == "[[package]]") }
-        { buf[++n] = $0; if ($0 ~ /^source = /) src = 1 }
-        END { flush() }
-    ' Cargo.lock Cargo.lock > "$lock" && cat "$lock" > Cargo.lock
-    rm -f "$lock"
-    note "stamp: $cur -> $v in Cargo.toml and Cargo.lock (uncommitted: the committed version is not the released one)"
+    local exported=""
+    [ -z "${GITHUB_ENV:-}" ] || exported=", TASK_RELEASE_VERSION for later steps"
+    note "stamp: this checkout builds as $v ($RELEASE_VERSION_FILE$exported; Cargo.toml untouched)"
 }
 
 # The image tag of a release tag: the bare CalVer, which is what

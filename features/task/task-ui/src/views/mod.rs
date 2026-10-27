@@ -13,6 +13,8 @@ pub use issue_view::{
 };
 mod kanban;
 mod links;
+mod menu;
+pub use menu::ChoiceMenu;
 mod list;
 pub use list::{TaskSection, classify as task_section};
 mod palette;

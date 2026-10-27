@@ -38,5 +38,33 @@ workflows-proto = { workspace = true }
 # so raw HTML in task bodies stays inert.
 pulldown-cmark = { workspace = true }
 
+# The headless Blitz render behind the `shot` feature (examples/task_shot.rs).
+dioxus-native-dom = { workspace = true, optional = true }
+blitz-dom = { workspace = true, optional = true }
+blitz-paint = { workspace = true, optional = true }
+blitz-traits = { workspace = true, optional = true }
+anyrender = { workspace = true, optional = true }
+anyrender_vello = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+
+[features]
+# Render the components to a PNG through Blitz, with no window:
+# `cargo run -p task-ui --features shot --example task_shot -- OUT.png [W H] [list|kanban]`.
+# Off by default and enabled by nothing, so wgpu / Vello / Stylo never
+# reach `cargo check --workspace` or clippy's `--all-targets`.
+shot = [
+    "dep:dioxus-native-dom",
+    "dep:blitz-dom",
+    "dep:blitz-paint",
+    "dep:blitz-traits",
+    "dep:anyrender",
+    "dep:anyrender_vello",
+    "dep:image",
+]
+
+[[example]]
+name = "task_shot"
+required-features = ["shot"]
+
 [lints]
 workspace = true

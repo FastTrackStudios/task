@@ -18,5 +18,33 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 
 architect-ui.workspace = true
 
+# The headless Blitz render behind the `shot` feature (examples/thread_shot.rs).
+dioxus-native-dom = { workspace = true, optional = true }
+blitz-dom = { workspace = true, optional = true }
+blitz-paint = { workspace = true, optional = true }
+blitz-traits = { workspace = true, optional = true }
+anyrender = { workspace = true, optional = true }
+anyrender_vello = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+
+[features]
+# Render the panel to a PNG through Blitz, with no window:
+# `cargo run -p threads-ui --features shot --example thread_shot -- OUT.png [W H]`.
+# Off by default and enabled by nothing, so wgpu / Vello / Stylo never
+# reach `cargo check --workspace` or clippy's `--all-targets`.
+shot = [
+    "dep:dioxus-native-dom",
+    "dep:blitz-dom",
+    "dep:blitz-paint",
+    "dep:blitz-traits",
+    "dep:anyrender",
+    "dep:anyrender_vello",
+    "dep:image",
+]
+
+[[example]]
+name = "thread_shot"
+required-features = ["shot"]
+
 [lints]
 workspace = true

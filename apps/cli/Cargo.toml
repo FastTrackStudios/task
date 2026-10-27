@@ -18,6 +18,8 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+# The release version, recorded by main (crates/release-version).
+task-release-version.workspace = true
 vox = { workspace = true, features = ["transport-websocket", "transport-websocket-tls"] }
 vox-core = { workspace = true }
 # vox-websocket's wss:// path needs a process-level rustls

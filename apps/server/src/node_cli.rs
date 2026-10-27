@@ -19,16 +19,20 @@
 
 use std::io::Write as _;
 
-/// The version every artifact of a release reports: `[workspace.package]
-/// version` of the root Cargo.toml, which `task-server` inherits.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version every artifact of a release reports: the release's, which
+/// `main` recorded (crates/release-version), else the committed workspace
+/// version.
+#[must_use]
+pub fn version() -> &'static str {
+    task_release_version::get()
+}
 
 /// What `--version` prints, exactly (one line). The release check
 /// (`scripts/check-versions.sh --bin`) and `self-update` both compare
 /// against this shape, so keep it `<name> <version>`.
 #[must_use]
 pub fn version_line() -> String {
-    format!("task-server {VERSION}")
+    format!("task-server {}", version())
 }
 
 /// `--help`.
@@ -152,7 +156,7 @@ mod tests {
     fn the_version_line_is_name_space_version() {
         assert_eq!(
             version_line(),
-            format!("task-server {}", env!("CARGO_PKG_VERSION"))
+            format!("task-server {}", task_release_version::get())
         );
         assert_eq!(version_line().split_whitespace().count(), 2);
     }

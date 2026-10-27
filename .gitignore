@@ -69,3 +69,6 @@ deploy/docker/web-public/
 # The resolved architect-ui git checkout (scripts/architect-ui-link.sh):
 # apps/fts-theme.css imports its token sheet, apps/tailwind.css scans it.
 apps/.architect-ui
+
+# `release.sh stamp`: the version a release build of this checkout is.
+/.release-version

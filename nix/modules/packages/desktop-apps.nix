@@ -4,11 +4,11 @@
 # the workspace is too large/build.rs-heavy for crane's dummy-src deps
 # split).
 #
-# On Linux this is the RELEASE artifact NixOS hosts install: every
-# release pushes it to fasttrackstudio.cachix.org (desktop-cache.yml), and
-# nix-fleet installs `github:FastTrackStudios/task/<tag rev>#task-desktop`
-# into a profile. So on Linux it is built the way the app ships, and it
-# has to launch OUTSIDE the dev shell:
+# Not what NixOS hosts install: they get the release's own AppImage, built
+# once on the warm `task-release-desktop` runner and wrapped by nix-fleet
+# (packages/task-desktop), so a release is not compiled a second time from
+# nothing here. This package is for `nix run`, and on Linux it is still
+# built the way the app ships, so it has to launch OUTSIDE the dev shell:
 #
 #   - Built with `dx build --release --linux`, not plain cargo. A release
 #     binary is a "bundled app" to manganis, so every `asset!()` (the

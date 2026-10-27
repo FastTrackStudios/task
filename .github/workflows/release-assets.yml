@@ -32,8 +32,9 @@
 # scripts/desktop/linux.sh, which takes every binary off /nix/store and
 # prints the glibc floor (the Nix toolchain's: a recent-distro floor,
 # decision 2026-10-24). The web bundle job only copies files out of the
-# published image (docker), so it stays on a hosted runner. NixOS hosts keep
-# installing the nix package from cachix (desktop-cache.yml).
+# published image (docker), so it stays on a hosted runner. NixOS hosts
+# install this same AppImage (nix-fleet packages/task-desktop wraps it):
+# there is no second, from-scratch Nix build of the desktop.
 
 name: Release assets
 
@@ -197,10 +198,10 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.linux == 'true' }}
     # THEBATTLESHIP's `task-release` pool: the release-profile build reuses
-    # the pool's warm target dir ($TASK_CACHE_DIR/desktop), and one build is
+    # the instance's warm target dir ($TASK_CACHE_DIR/desktop-<runner>), and one build is
     # packaged twice by scripts/desktop/linux.sh (which says what each
     # package carries and why its glibc floor is the Nix toolchain's).
-    runs-on: [self-hosted, task-release]
+    runs-on: [self-hosted, task-release-desktop]
     timeout-minutes: 120
     permissions:
       contents: write
@@ -220,7 +221,7 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          export CARGO_TARGET_DIR="$TASK_CACHE_DIR/desktop" OUT_DIR="$PWD/dist"
+          export CARGO_TARGET_DIR="$TASK_CACHE_DIR/desktop-$RUNNER_NAME" OUT_DIR="$PWD/dist"
           rm -rf dist
           bash scripts/desktop/linux.sh
           ls -la dist

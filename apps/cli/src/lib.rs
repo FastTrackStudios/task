@@ -163,7 +163,11 @@ use clap::{Parser, Subcommand};
 use shared::RemoteVoxConfig;
 
 #[derive(Parser)]
-#[command(name = "task", about = "Task management CLI", version)]
+#[command(
+    name = "task",
+    about = "Task management CLI",
+    version = task_release_version::get()
+)]
 struct Cli {
     /// Vox WebSocket URL (e.g. <ws://127.0.0.1:9090/vox>). Falls back
     /// to `TASK_VOX_URL` (loaded from .env) then to the localhost

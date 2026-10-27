@@ -139,7 +139,7 @@ mod imp {
             "resourceSpans": [{
                 "resource": { "attributes": [
                     attr_str("service.name", "task-web"),
-                    attr_str("service.version", env!("CARGO_PKG_VERSION")),
+                    attr_str("service.version", task_release_version::get()),
                     attr_str("deployment.environment", "prod"),
                     attr_str("browser.user_agent", &user_agent),
                 ]},

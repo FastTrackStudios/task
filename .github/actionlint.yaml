@@ -6,11 +6,23 @@
 #                   (macOS app, iOS, the macOS node binary).
 #   `task-main`     THEBATTLESHIP's pool for merges to main (checks.yml).
 #   `task-release`  THEBATTLESHIP's pool for release-profile artifacts only
-#                   (images, the desktop cache, built from a release tag);
-#                   every check runs on task-main.
+#                   (images, node binaries, the Linux desktop, built from a
+#                   release tag); every check runs on task-main.
+#   One label per THEBATTLESHIP instance pins each job kind to the same
+#   runner every time, so it builds on the target dir it left warm
+#   (.github/actions/battleship-nix-rust):
+#   `task-main-tests` / `-lint` / `-wasm`         task-main-1 / 2 / 3
+#   `task-release-images` / `-node` / `-desktop`  task-release-1 / 2 / 3
+#                   (`-desktop`: the AppImage and Flatpak)
 self-hosted-runner:
   labels:
     - airlock
     - task-main
+    - task-main-tests
+    - task-main-lint
+    - task-main-wasm
     - task-release
+    - task-release-images
+    - task-release-node
+    - task-release-desktop
     - task-release-mac

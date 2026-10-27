@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # One version everywhere: every artifact a release ships reports the
-# release's version, `[workspace.package] version` in the root Cargo.toml.
-# In a release build that is the tag's version, which `release.sh stamp`
-# wrote into the checkout before anything was built; releases commit none.
+# release's version, `release.sh version`. In a release build that is the
+# tag's version, which `release.sh stamp` set for the checkout before
+# anything was built (.release-version, TASK_RELEASE_VERSION; Cargo.toml is
+# never touched, so a release does not rebuild every workspace crate);
+# otherwise it is the committed `[workspace.package] version`. Releases
+# commit none.
 #
 #   scripts/check-versions.sh                 the static checks (no build)
 #   scripts/check-versions.sh --bin <path>…   also run each built binary's
@@ -10,15 +13,16 @@
 #
 # The artifacts, and where each one's version comes from:
 #
-#   task-server (headless node, OCI image payload)  CARGO_PKG_VERSION, version.workspace
-#   task CLI (task-cli)                             CARGO_PKG_VERSION, version.workspace
-#   fts-files-daemon (files-daemon)                 CARGO_PKG_VERSION, version.workspace
-#   desktop app (task-app-desktop) + its bundle     CARGO_PKG_VERSION; CFBundleShortVersionString
+#   task-server (headless node, OCI image payload)  task_release_version (main records
+#   task CLI (task-cli)                             TASK_RELEASE_VERSION at build time,
+#   fts-files-daemon (files-daemon)                 else the workspace version)
+#   desktop app (task-app-desktop) + its bundle     task_release_version; CFBundleShortVersionString
 #                                                   from MARKETING_VER, default release.sh version
+#   in-tree plugins                                 SHIPS_WITH_TASK: the app's, at runtime
 #   iOS app (task-app-mobile), marketing version    MARKETING_VER in task-ios.yml / deploy-testflight.sh
 #   its watch app + widget extension, the Finder    $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) in
 #   extension: the app's version AND build number   their plists, stamped by the build (scripts/apple-release.sh)
-#   web bundle (task-app-web)                       CARGO_PKG_VERSION, version.workspace
+#   web bundle (task-app-web)                       task_release_version, as above
 #   OCI images ghcr.io/…/task-{server,web}:<version>  the release tag (images.yml,
 #                                                   `release.sh image-tag`)
 #   GitHub Release v<version> + node binaries       release.sh publish / node-binaries.yml
@@ -55,6 +59,36 @@ for manifest in \
         "version.workspace = true"|"version = { workspace = true }") ;;
         *) bad "$manifest: [package] version must be \`version.workspace = true\` (it is \`${line:-missing}\`)" ;;
     esac
+done
+
+# ── Only binaries read the release version at build time ─────────────────
+# crates/release-version says why: a crate that reads TASK_RELEASE_VERSION
+# (or a stamped CARGO_PKG_VERSION) recompiles on every release, with
+# everything that depends on it.
+while IFS= read -r hit; do
+    bad "$hit: reads CARGO_PKG_VERSION; report task_release_version::get() (a release would show the committed version)"
+done < <(grep -rn --include='*.rs' 'CARGO_PKG_VERSION' apps crates features \
+    | grep -v '^crates/release-version/' \
+    | grep -vE '^[^:]+:[0-9]+:\s*//' || true)
+while IFS= read -r hit; do
+    bad "$hit: clap's bare \`version\` reads CARGO_PKG_VERSION; use \`version = task_release_version::get()\`"
+done < <(grep -rnE --include='*.rs' '#\[command\([^]]*\bversion\b[,)]' apps crates features || true)
+while IFS= read -r hit; do
+    bad "$hit: of_this_build! in a library recompiles it on every release; only a binary's main expands it"
+done < <(grep -rln --include='*.rs' 'of_this_build!' apps crates features \
+    | grep -v '^crates/release-version/' \
+    | grep -vE '/src/(main\.rs|bin/[^/]+\.rs)$' || true)
+for main in \
+    apps/server/src/main.rs \
+    apps/cli/src/main.rs \
+    apps/desktop/src/main.rs \
+    apps/desktop/src/bin/task.rs \
+    apps/desktop/src/bin/fts-files-daemon.rs \
+    apps/mobile/src/main.rs \
+    apps/web/src/main.rs \
+    features/files/files-daemon/src/bin/fts-files-daemon.rs; do
+    grep -q 'task_release_version::set(task_release_version::of_this_build!())' "$main" \
+        || bad "$main: main must record the release version first: task_release_version::set(task_release_version::of_this_build!())"
 done
 
 # ── Apple builds default to the release version ──────────────────────────
@@ -95,8 +129,7 @@ grep -c 'MARKETING_VERSION="$MARKETING_VER" CURRENT_PROJECT_VERSION="$BUILD_NO"'
 
 # ── Image tag, release tag, node binaries ────────────────────────────────
 # The images are tagged with the release tag's bare version, and every
-# release build stamps the tag's version first. (desktop-cache.yml builds
-# the pure flake at the tag for cachix, so it does not stamp.)
+# release build stamps the tag's version first.
 grep -q 'scripts/release.sh image-tag' .github/workflows/images.yml \
     || bad ".github/workflows/images.yml: the image tag must come from \`scripts/release.sh image-tag\` (the release tag)"
 for wf in images.yml node-binaries.yml release-assets.yml task-ios.yml task-macos.yml deploy.yml; do
