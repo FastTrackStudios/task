@@ -96,6 +96,27 @@ css:
     tailwindcss -i apps/tailwind.css -o apps/mobile/assets/tailwind.css
     tailwindcss -i apps/tailwind.css -o apps/web/assets/tailwind.css
 
+# The committed utility sheets of the UI crates other apps host (Studio,
+# a dioxus-native window): `task_ui::UTILITIES_CSS`,
+# `threads_ui::UTILITIES_CSS`. Each crate's own `tailwind.css` scans only
+# its sources. Run after adding a class to one of them; `--check` fails
+# when a committed sheet is stale (`just ci-architect-css`).
+ui-sheets *CHECK:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/architect-ui-link.sh
+    for crate in features/task/task-ui features/threads/threads-ui; do
+        out="$crate/assets/utilities.css"
+        if [ "{{CHECK}}" = "--check" ]; then
+            fresh="$(mktemp)"
+            (cd "$crate" && tailwindcss -i tailwind.css -o "$fresh" --minify 2>/dev/null)
+            cmp -s "$fresh" "$out" || { echo "$out is stale: run just ui-sheets" >&2; rm -f "$fresh"; exit 1; }
+            rm -f "$fresh"
+        else
+            (cd "$crate" && tailwindcss -i tailwind.css -o assets/utilities.css --minify)
+        fi
+    done
+
 # Back-compat aliases — all three sheets come from the same input now.
 desktop-css: css
 
@@ -380,6 +401,7 @@ ci-fmt:
 # on `css` so the sheet was also compiled from that link.
 ci-architect-css: css
     bash scripts/architect-ui-link.sh --check
+    just ui-sheets --check
 
 ci-manifests:
     cargo metadata --locked --format-version 1 > /dev/null
