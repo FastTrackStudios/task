@@ -4517,6 +4517,7 @@ mod declared_tests {
     /// curated wiki declares (it promotes), one whose type it does not
     /// (it is refused). Without the second the seed can only show the
     /// happy path, and the refusal is the feature.
+    #[cfg(feature = "plugin-wiki")]
     #[test]
     fn the_promotion_pair_commits_a_promotable_and_an_unpromotable_page() {
         let (working, curated) = PROMOTION_PAIR;
@@ -4751,6 +4752,7 @@ mod declared_tests {
     /// what maps a node kind onto it. A drift here is a cross-org
     /// reference that silently stops resolving, so the two are pinned
     /// against each other rather than kept in step by hand.
+    #[cfg(feature = "plugin-wiki")]
     #[test]
     fn every_asset_library_is_a_home_some_node_kind_resolves_through() {
         use links::NodeKind;
