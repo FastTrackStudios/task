@@ -249,12 +249,22 @@ fn git_lock() -> MutexGuard<'static, ()> {
 
 /// Run `git` in `dir`, returning stdout, or the stderr as the error.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    git_with_env(dir, args, &[])
+}
+
+/// [`git`] with extra environment variables on the child.
+///
+/// An identity must ride the environment: git ranks `GIT_AUTHOR_*` and
+/// `GIT_COMMITTER_*` from the environment above `-c user.*`, so a host
+/// that exports them would otherwise replace the one asked for.
+fn git_with_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String, String> {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
         // Never prompt: a URL that wants a password fails instead of
         // hanging a server thread.
         .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(env.iter().copied())
         .output()
         .map_err(|e| format!("running git {args:?}: {e}"))?;
     if out.status.success() {
@@ -885,21 +895,14 @@ fn commit_and_push(
     let mut add = vec!["add", "-A", "--"];
     add.push(if subpath.is_empty() { "." } else { subpath });
     git(clone, &add)?;
-    let ident_name = format!("user.name={committer_name}");
-    let ident_email = format!("user.email={committer_email}");
-    let author_line = format!("{author_name} <{author_email}>");
-    git(
+    git_with_env(
         clone,
+        &["commit", "-m", message],
         &[
-            "-c",
-            &ident_name,
-            "-c",
-            &ident_email,
-            "commit",
-            "--author",
-            &author_line,
-            "-m",
-            message,
+            ("GIT_AUTHOR_NAME", author_name),
+            ("GIT_AUTHOR_EMAIL", author_email),
+            ("GIT_COMMITTER_NAME", committer_name),
+            ("GIT_COMMITTER_EMAIL", committer_email),
         ],
     )?;
     let commit = git(clone, &["rev-parse", "HEAD"])?.trim().to_owned();
@@ -932,7 +935,13 @@ mod tests {
     /// Run `git` with a fixed identity, asserting success.
     fn g(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
-            .args(["-c", "user.email=test@example.com", "-c", "user.name=Test"])
+            // The identity rides the environment, above any the host exports.
+            .envs([
+                ("GIT_AUTHOR_NAME", "Test"),
+                ("GIT_AUTHOR_EMAIL", "test@example.com"),
+                ("GIT_COMMITTER_NAME", "Test"),
+                ("GIT_COMMITTER_EMAIL", "test@example.com"),
+            ])
             .args(args)
             .current_dir(dir)
             .output()

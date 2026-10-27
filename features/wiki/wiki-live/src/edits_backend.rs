@@ -1010,7 +1010,13 @@ mod tests {
         use wiki_proto::service::registry::{ChangeKind, Registry as _};
         fn g(dir: &Path, args: &[&str]) -> String {
             let out = std::process::Command::new("git")
-                .args(["-c", "user.email=t@example.com", "-c", "user.name=T"])
+                // The identity rides the environment, above any the host exports.
+                .envs([
+                    ("GIT_AUTHOR_NAME", "T"),
+                    ("GIT_AUTHOR_EMAIL", "t@example.com"),
+                    ("GIT_COMMITTER_NAME", "T"),
+                    ("GIT_COMMITTER_EMAIL", "t@example.com"),
+                ])
                 .args(args)
                 .current_dir(dir)
                 .output()
