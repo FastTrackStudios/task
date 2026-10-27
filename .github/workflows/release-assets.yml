@@ -20,8 +20,12 @@
 # the AppImage URL it names) and with anyone scripting a download.
 #
 # WHEN: called from deploy.yml once the release is published (after the
-# tag guard + "GitHub Release"; Verify live runs beside, informational). By
-# hand, for a release that already
+# tag guard + "GitHub Release"; Verify live runs beside, informational),
+# twice: `assets: linux` at once, since the desktop build needs nothing but
+# the tag, and `assets: web` once the images are on GHCR, since the web
+# bundle is copied out of the task-web image. The Linux packages so build
+# beside the images (their own runner, task-release-desktop) instead of
+# after them. By hand, for a release that already
 # exists (a backfill): `gh workflow run release-assets.yml --ref main -f
 # tag=v26.10.0`. Every job is a no-op when the release already carries its
 # asset, unless `replace` is set: a published checksum must not change
@@ -46,6 +50,11 @@ on:
         type: string
         required: false
         default: ""
+      assets:
+        description: "Which assets: all, web (the bundle, from the published task-web image) or linux (AppImage + Flatpak)."
+        type: string
+        required: false
+        default: all
   workflow_dispatch:
     inputs:
       tag:
@@ -62,7 +71,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-assets-${{ inputs.tag || github.ref }}
+  # Per asset set: deploy.yml's `linux` and `web` calls for one tag must
+  # run side by side, not queue behind each other.
+  group: release-assets-${{ inputs.assets || 'all' }}-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -86,8 +97,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.tag }}
           REPLACE: ${{ inputs.replace && 'true' || 'false' }}
+          # A dispatch has no `assets` input: it attaches everything missing.
+          ASSETS: ${{ inputs.assets || 'all' }}
         run: |
           set -euo pipefail
+          case "$ASSETS" in
+            all|web|linux) ;;
+            *) echo "::error::assets must be all, web or linux (got '$ASSETS')"; exit 1 ;;
+          esac
           if [ -n "$INPUT_TAG" ]; then
             tag="$INPUT_TAG"
             git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
@@ -116,8 +133,17 @@ jobs:
             exit 1
           fi
           have="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
-          wants() { # <asset> -> true unless the release has it (and replace is off)
-            if grep -qx "$1" <<<"$have" && [ "$REPLACE" != true ]; then
+          asked() { # <asset> -> is it one of this call's `assets`?
+            case "$ASSETS" in
+              web) [[ "$1" == task-web-* ]] ;;
+              linux) [[ "$1" != task-web-* ]] ;;
+              *) true ;;
+            esac
+          }
+          wants() { # <asset> -> true if asked for, unless the release has it (and replace is off)
+            if ! asked "$1"; then
+              echo false
+            elif grep -qx "$1" <<<"$have" && [ "$REPLACE" != true ]; then
               echo "::notice::$tag already carries $1 — skipped (dispatch with replace=true to rebuild)" >&2
               echo false
             else
