@@ -1,14 +1,3 @@
-
-  Task dev shell
-  ─────────────────────────────────────────────
-  just css   # generated tailwind sheets
-  cargo check --workspace
-  cargo run -p task-server        # the server
-  (cd apps/web && dx serve --web --hot-patch false)
-
-  Rust: rustc 1.101.0-nightly (7189d39d9 2026-10-22)
-  dx:   dioxus 0.8.0-alpha.0 (was built without git repository)
-
 //! App docs in the UI: the documents client apps keep in each org's
 //! app-docs catalog, shown by the face each keeps
 //! (`app_docs_proto::DocFace`).
