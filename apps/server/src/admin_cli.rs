@@ -1513,6 +1513,7 @@ async fn seed(args: &[String]) -> eyre::Result<()> {
         if is_home {
             seed_studio_vault(&org)?;
             seed_studio_files(&org, with_divergence).await?;
+            seed_recital_project(&org)?;
         }
     }
 
@@ -1998,6 +1999,41 @@ fn song_note(title: &str, artist: &str, album: Option<&str>, facts_index: usize)
          **Chorus** — we don't fade, we amplify,\nsignal strong against the night.\n\n\
          *(seeded demo lyric — original text)*\n"
     )
+}
+
+/// The page path of [`seed_recital_project`]'s project on the Projects
+/// tier — its `project:` reference is this minus `/project.md`.
+#[cfg(debug_assertions)]
+const RECITAL_PAGE: &str = "jts-senior-recital/project.md";
+
+/// One concert project on the Projects tier, "JT's Senior Recital": the
+/// container a client app attaches its documents to (its setlists and
+/// sessions, through `project:jts-senior-recital` → `doc:` links). No
+/// app docs are planted; the app makes those. Idempotent: a page
+/// already at the path is left alone.
+#[cfg(debug_assertions)]
+fn seed_recital_project(org: &org_proto::OrgRoot) -> eyre::Result<()> {
+    use project::ProjectService as _;
+
+    if org.projects_dir().join(RECITAL_PAGE).exists() {
+        println!("  project: JT's Senior Recital already present");
+        return Ok(());
+    }
+    let projects = project::ProjectBackend::new(org.projects_dir());
+    projects
+        .create(project::ProjectInfo {
+            title: "JT's Senior Recital".to_owned(),
+            path: RECITAL_PAGE.to_owned(),
+            form: Some(project::Form::Concert),
+            status: "active".to_owned(),
+            details: "The senior recital: the program, the band's parts, and \
+                      the sessions it is rehearsed and recorded in."
+                .to_owned(),
+            ..Default::default()
+        })
+        .map_err(|e| eyre::eyre!("create JT's Senior Recital: {e:?}"))?;
+    println!("  project: JT's Senior Recital (projects/{RECITAL_PAGE})");
+    Ok(())
 }
 
 /// The studio vault: projects with their working notes, albums with

@@ -288,6 +288,173 @@ async fn a_merge_doc_made_on_two_devices_offline_converges_through_the_org() {
     run_phone.abort();
 }
 
+// t[verify offline.app-docs.face] — a face written on a device reads on
+// the org, listed by kind and singly; a doc without one is titled by its
+// catalog name; a deleted doc is refused
+#[tokio::test(flavor = "multi_thread")]
+async fn the_org_lists_its_docs_by_the_face_each_keeps() {
+    use app_docs_proto::{
+        AppDocFacesClient, DocFace, FaceLink, FaceProp, FacePropType, FaceValue, FacesError,
+        write_face,
+    };
+
+    let (url, _tmp) = support::boot_ws().await.expect("boot");
+    let laptop = device();
+    let list_req = CreateDoc {
+        kind: "app.list".into(),
+        ..project("untitled list")
+    };
+    let id = list_req.doc_id;
+    let list = laptop.create(list_req).await.unwrap();
+    let bare_req = CreateDoc {
+        kind: "app.item".into(),
+        ..project("Bare item")
+    };
+    let bare = bare_req.doc_id;
+    laptop.create(bare_req).await.unwrap();
+    let face = DocFace {
+        title: "Sunday 10/26".into(),
+        subtitle: Some("The Barn".into()),
+        colour: Some("#22c55e".into()),
+        props: vec![
+            FaceProp {
+                key: "entries".into(),
+                label: "Entries".into(),
+                ty: FacePropType::Number,
+                value: FaceValue::Integer(12),
+            },
+            FaceProp {
+                key: "tags".into(),
+                label: "Tags".into(),
+                ty: FacePropType::Tags,
+                value: FaceValue::Tags(vec!["live".into()]),
+            },
+        ],
+        links: vec![FaceLink {
+            rel: "holds".into(),
+            label: "Bare item".into(),
+            doc: bare,
+        }],
+    };
+    write_face(list.loro(), &face).unwrap();
+    list.loro().commit();
+    let run = online(&laptop, lane(&url).await);
+
+    let faces: AppDocFacesClient = client(&url).await;
+    eventually("the org reads the face", async || {
+        faces
+            .face(id)
+            .await
+            .is_ok_and(|c| c.face.as_ref() == Some(&face))
+    })
+    .await;
+    let card = faces.face(id).await.unwrap();
+    assert_eq!(card.title, "Sunday 10/26", "the face titles it");
+    assert_eq!(card.name, "untitled list", "the catalog's name is kept");
+    assert_eq!(card.kind, "app.list");
+
+    // Listed, narrowed by kind; a faceless doc is titled by its name.
+    let lists = faces.list_faces(Some("app.list".into()), 0).await.unwrap();
+    assert_eq!(lists.len(), 1, "{lists:?}");
+    assert_eq!(lists[0].face.as_ref(), Some(&face));
+    let all = faces.list_faces(None, 0).await.unwrap();
+    let item = all.iter().find(|c| c.doc_id == bare).expect("listed");
+    assert_eq!(
+        (item.face.as_ref(), item.title.as_str()),
+        (None, "Bare item")
+    );
+    assert_eq!(faces.list_faces(None, 1).await.unwrap().len(), 1, "limit");
+
+    // A project holds the list (its `project:` → `doc:` link); its
+    // faces carry the comments on each doc.
+    let projects: project::ProjectServiceClient = client(&url).await;
+    let recital = projects
+        .create(project::ProjectInfo {
+            title: "Senior Recital".into(),
+            project_type: "general".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("create project");
+    let tier = task_server::app_docs::project_tier_path(&recital.path).to_owned();
+    let links: LinksServiceClient = client(&url).await;
+    links
+        .create(TypedLink::new(
+            NodeRef::new(NodeKind::Project, tier),
+            NodeRef::new(NodeKind::AppDoc, id.to_string()),
+            Relation::Down,
+            Confidence::Certain,
+        ))
+        .await
+        .expect("attach");
+    let threads: threads::ThreadsServiceClient = client(&url).await;
+    let thread = threads
+        .create_thread(threads::CreateThreadRequest {
+            org_id: Uuid::nil(),
+            entity_type: "doc".into(),
+            entity_id: id,
+            anchor_path: None,
+            title: "Comments".into(),
+            kind: String::new(),
+            created_by: Uuid::nil(),
+            source_kind: String::new(),
+            source_ref: None,
+            source_url: None,
+        })
+        .await
+        .expect("thread");
+    for body in ["Open with the Bach?", "Yes."] {
+        threads
+            .post_message(threads::PostMessageRequest {
+                thread_id: thread.id,
+                org_id: Uuid::nil(),
+                author_id: None,
+                author_label: "Sam".into(),
+                body: body.into(),
+                reply_to: None,
+                source_kind: String::new(),
+                external_id: None,
+                original_text: None,
+                source_url: None,
+                posted_at: None,
+            })
+            .await
+            .expect("post");
+    }
+    let held = faces.project_faces(recital.id).await.unwrap();
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].doc_id, id);
+    assert_eq!(held[0].face.as_ref(), Some(&face));
+    assert_eq!(held[0].comments, 2, "the doc's comments are counted");
+    assert!(faces.project_faces(Uuid::new_v4()).await.is_err());
+
+    // Deleted: refused by name; an id the catalog lacks, likewise.
+    let docs: DocsClient = client(&url).await;
+    docs.delete(bare).await.unwrap();
+    let refused = |r: Result<_, vox::VoxError<FacesError>>| match r {
+        Err(vox::VoxError::User(e)) => Some(*e),
+        _ => None,
+    };
+    assert!(matches!(
+        refused(faces.face(bare).await),
+        Some(FacesError::Deleted(_))
+    ));
+    assert!(matches!(
+        refused(faces.face(Uuid::new_v4()).await),
+        Some(FacesError::NotFound(_))
+    ));
+    assert!(
+        faces
+            .list_faces(None, 0)
+            .await
+            .unwrap()
+            .iter()
+            .all(|c| c.doc_id != bare),
+        "a tombstone is not listed"
+    );
+    run.abort();
+}
+
 const MCP_TOKEN: &str = "app-docs-mcp-secret";
 
 /// One MCP `tools/call`: the whole JSON-RPC answer.
@@ -532,6 +699,14 @@ async fn only_members_reach_the_catalog_and_the_content() -> eyre::Result<()> {
     assert!(refused.contains("permission denied"), "list: {refused}");
     let refused = format!("{:?}", anonymous.create(project("Not mine")).await);
     assert!(refused.contains("permission denied"), "create: {refused}");
+    let faces: app_docs_proto::AppDocFacesClient = dial(&url, None).await?;
+    let refused = format!("{:?}", faces.list_faces(None, 0).await);
+    assert!(
+        refused.contains("permission denied"),
+        "list_faces: {refused}"
+    );
+    let refused = format!("{:?}", faces.face(req.doc_id).await);
+    assert!(refused.contains("permission denied"), "face: {refused}");
     let stream: DocsStreamClient = dial(&url, None).await?;
     let (tx, _rx) = vox::channel();
     let refused = format!(

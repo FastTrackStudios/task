@@ -22,11 +22,22 @@
 //!   [`detach`] and [`project_docs`] are that, with the catalog checked
 //!   on the way in and read on the way out. Nothing here looks at
 //!   `kind`: a project holds whatever docs its apps made.
+//! - A project holds collections the same way: `project:<path>` →
+//!   `collection:<id>` ([`NodeKind::Collection`], `Down`), through
+//!   [`attach_collection`] and [`detach_collection`]. One link shape,
+//!   one code path ([`hold`], [`release`]); only the target's kind and
+//!   the store that vouches for it differ. A series project holds one
+//!   setlist a week this way, an album its running order.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use app_docs_proto::{AppDocFaces, DocCard, DocFace, FacesError, read_face};
+#[cfg(feature = "plugin-fasttrackstudio")]
+use collection::{Collection, CollectionService};
+use crdt::Persistence as _;
 use crdt::docs::{DocMeta, DocQuery, Docs as _, DocsError, DocsHost};
+use crdt::loro;
 use crdt::sync::{DocSync, SyncDown, SyncError};
 use links::{
     Confidence, LinksService, NodeHomes, NodeKind, NodeRef, Reach, Relation, ResolvedNode,
@@ -93,12 +104,31 @@ pub fn doc_node(doc_id: Uuid) -> NodeRef {
     NodeRef::new(NodeKind::AppDoc, doc_id.to_string())
 }
 
+/// The reference a collection goes by: `collection:<id>`, local.
+#[must_use]
+pub fn collection_node(id: &str) -> NodeRef {
+    NodeRef::new(NodeKind::Collection, id)
+}
+
 /// The reference a project goes by: `project:<path>`, its path on the
 /// Projects tier (`example-album`, `example-album/track-two`). Slashes
 /// at either end are dropped; an empty segment, `.` or `..` is refused,
 /// since the path is the project's address and those name nothing.
+///
+/// The project's page path (`example-album/project.md`, what
+/// `list_projects` reports) is accepted too and names its directory:
+/// handing the page back is the obvious thing to do with a path a tool
+/// just printed, and a link to `project:example-album/project.md` would
+/// be a link no project page ever lists.
 pub fn project_node(project: &str) -> Result<NodeRef, String> {
     let path = project.trim().trim_matches('/');
+    let path = if path == org_proto::PROJECT_PAGE {
+        ""
+    } else {
+        path.strip_suffix(org_proto::PROJECT_PAGE)
+            .and_then(|dir| dir.strip_suffix('/'))
+            .unwrap_or(path)
+    };
     if path.is_empty()
         || path
             .split('/')
@@ -140,20 +170,79 @@ pub async fn list(
     Ok(out)
 }
 
-/// Every link by which `project` holds an app doc.
-fn attached(links: &impl LinksService, project: &NodeRef) -> Result<Vec<TypedLink>, String> {
-    let held = links
+/// Every `Down` link by which `project` holds a local node of `kind`.
+fn held(
+    links: &impl LinksService,
+    project: &NodeRef,
+    kind: NodeKind,
+) -> Result<Vec<TypedLink>, String> {
+    let all = links
         .links_for(project.clone())
         .map_err(|e| format!("couldn't read the links of `{}`: {e}", project.id))?;
-    Ok(held
+    Ok(all
         .into_iter()
         .filter(|l| {
             l.source == *project
                 && l.relation == Relation::Down
-                && l.target.kind == NodeKind::AppDoc
+                && l.target.kind == kind
                 && l.target.is_local()
         })
         .collect())
+}
+
+/// Every link by which `project` holds an app doc.
+fn attached(links: &impl LinksService, project: &NodeRef) -> Result<Vec<TypedLink>, String> {
+    held(links, project, NodeKind::AppDoc)
+}
+
+/// `project` holds `target`: the `Down` link, made once. An identical
+/// link already held is returned rather than duplicated. The caller has
+/// already checked that `target` names something; `by` is who asked,
+/// for the link's provenance.
+fn hold(
+    links: &impl LinksService,
+    project: &NodeRef,
+    target: NodeRef,
+    by: &str,
+) -> Result<TypedLink, String> {
+    if let Some(link) = held(links, project, target.kind)?
+        .into_iter()
+        .find(|l| l.target == target)
+    {
+        return Ok(link);
+    }
+    let what = target.to_token();
+    let mut link = TypedLink::new(project.clone(), target, Relation::Down, Confidence::Certain);
+    link.provenance.created_by = by.to_owned();
+    links
+        .create(link)
+        .map_err(|e| format!("couldn't attach `{what}` to `{}`: {e}", project.id))
+}
+
+/// `project` no longer holds `target`: every link by which it did goes.
+/// Returns how many; none is an error, naming what was asked.
+fn release(
+    links: &impl LinksService,
+    project: &NodeRef,
+    target: &NodeRef,
+) -> Result<usize, String> {
+    let gone: Vec<TypedLink> = held(links, project, target.kind)?
+        .into_iter()
+        .filter(|l| l.target == *target)
+        .collect();
+    if gone.is_empty() {
+        return Err(format!(
+            "`{}` is not attached to project `{}`",
+            target.to_token(),
+            project.id
+        ));
+    }
+    for l in &gone {
+        links
+            .delete(&l.id)
+            .map_err(|e| format!("couldn't detach `{}`: {e}", target.to_token()))?;
+    }
+    Ok(gone.len())
 }
 
 /// Attach a catalogued doc to `project`: the `Down` link, made once. An
@@ -182,19 +271,8 @@ pub async fn attach(
         }
         Err(e) => return Err(format!("couldn't read app doc `{doc_id}`: {e}")),
     };
-    let doc = doc_node(doc_id);
-    if let Some(held) = attached(links, project)?
-        .into_iter()
-        .find(|l| l.target == doc)
-    {
-        return Ok((held, meta));
-    }
-    let mut link = TypedLink::new(project.clone(), doc, Relation::Down, Confidence::Certain);
-    link.provenance.created_by = by.to_owned();
-    let made = links
-        .create(link)
-        .map_err(|e| format!("couldn't attach `{doc_id}` to `{}`: {e}", project.id))?;
-    Ok((made, meta))
+    let link = hold(links, project, doc_node(doc_id), by)?;
+    Ok((link, meta))
 }
 
 /// Detach a doc from `project`: every link by which the project holds
@@ -202,23 +280,77 @@ pub async fn attach(
 /// to a deleted doc can be cleared. Returns how many links went; none is
 /// an error, naming what was asked.
 pub fn detach(links: &impl LinksService, project: &NodeRef, doc_id: Uuid) -> Result<usize, String> {
-    let doc = doc_node(doc_id);
-    let held: Vec<TypedLink> = attached(links, project)?
+    release(links, project, &doc_node(doc_id))
+}
+
+/// One of `org`'s collections, by id or, failing that, by exact title.
+/// A title two collections share is refused rather than guessed at.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn find_collection(
+    collections: &impl CollectionService,
+    org: &str,
+    target: &str,
+) -> Result<Option<Collection>, String> {
+    let target = target.trim();
+    if let Some(c) = collections
+        .get(target)
+        .map_err(|e| format!("couldn't read collection `{target}`: {e}"))?
+    {
+        return Ok(Some(c));
+    }
+    let mut named: Vec<Collection> = collections
+        .list(org.to_owned(), None)
+        .map_err(|e| format!("couldn't list collections: {e}"))?
         .into_iter()
-        .filter(|l| l.target == doc)
+        .filter(|c| c.title == target)
         .collect();
-    if held.is_empty() {
+    match named.len() {
+        0 | 1 => Ok(named.pop()),
+        n => Err(format!(
+            "{n} collections are titled `{target}`; pass one's id instead"
+        )),
+    }
+}
+
+/// Attach one of `org`'s collections to `project` — a set list to the
+/// show, the series or the album it belongs to. `target` is the
+/// collection's id or its exact title. Idempotent, like [`attach`]; a
+/// collection the store does not hold is refused. Any kind of
+/// collection may be held: the kind is the app's word, not Task's.
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub fn attach_collection(
+    collections: &impl CollectionService,
+    links: &impl LinksService,
+    project: &NodeRef,
+    org: &str,
+    target: &str,
+    by: &str,
+) -> Result<(TypedLink, Collection), String> {
+    let Some(collection) = find_collection(collections, org, target)? else {
         return Err(format!(
-            "app doc `{doc_id}` is not attached to project `{}`",
-            project.id
+            "no collection `{target}` in this org (by id or title)"
         ));
-    }
-    for l in &held {
-        links
-            .delete(&l.id)
-            .map_err(|e| format!("couldn't detach `{doc_id}`: {e}"))?;
-    }
-    Ok(held.len())
+    };
+    let link = hold(links, project, collection_node(&collection.id), by)?;
+    Ok((link, collection))
+}
+
+/// Detach a collection from `project`. `target` is its id or title;
+/// an id the store no longer holds still clears its link, so a deleted
+/// collection's entry can be removed. Returns the collection's id and
+/// how many links went.
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub fn detach_collection(
+    collections: &impl CollectionService,
+    links: &impl LinksService,
+    project: &NodeRef,
+    org: &str,
+    target: &str,
+) -> Result<(String, usize), String> {
+    let id = find_collection(collections, org, target)?
+        .map_or_else(|| target.trim().to_owned(), |c| c.id);
+    let gone = release(links, project, &collection_node(&id))?;
+    Ok((id, gone))
 }
 
 /// One doc a project holds, as the catalog has it now.
@@ -252,6 +384,245 @@ pub async fn project_docs(
         out.push(ProjectDoc { link, meta });
     }
     Ok(out)
+}
+
+// ── Faces ────────────────────────────────────────────────────────────
+
+/// What each doc shows of itself: its `face` map
+/// ([`app_docs_proto::read_face`]), the one part of an app's content
+/// Task reads. A doc the host has open is read where it is; any other
+/// is read from its stored bytes into a throwaway `LoroDoc`, so listing
+/// an org's docs does not open (and keep resident) every one of them.
+#[derive(Clone)]
+pub struct Faces {
+    pub docs: DocsHost,
+    bytes: crdt_seaorm::SeaOrmPersistence,
+}
+
+impl Faces {
+    /// The faces of `docs`, whose bytes are in `db` (the connection
+    /// [`open`] was given).
+    #[must_use]
+    pub const fn new(docs: DocsHost, db: sea_orm::DatabaseConnection) -> Self {
+        Self {
+            docs,
+            bytes: crdt_seaorm::SeaOrmPersistence::new(db),
+        }
+    }
+
+    /// `doc_id`'s face, `None` when it keeps none. Errors only when the
+    /// stored bytes cannot be read or imported; what the app wrote in
+    /// the face never fails the read.
+    pub async fn read(&self, doc_id: Uuid) -> Result<Option<DocFace>, String> {
+        let registry = self.docs.registry();
+        if registry.is_open(doc_id).await
+            && let Ok(doc) = registry.doc(doc_id).await
+        {
+            return Ok(read_face(doc.loro()));
+        }
+        let doc = loro::LoroDoc::new();
+        let snapshot = self
+            .bytes
+            .load_snapshot(doc_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let updates = self
+            .bytes
+            .load_updates(doc_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        for bytes in snapshot.iter().chain(&updates) {
+            doc.import(bytes).map_err(|e| format!("import: {e}"))?;
+        }
+        Ok(read_face(&doc))
+    }
+
+    /// `meta` with its face. A face that cannot be read leaves the card
+    /// faceless (titled by the catalog's name) rather than failing a
+    /// list over one bad doc; `Err` carries why, for the caller's span.
+    pub async fn card(&self, meta: DocMeta) -> (DocCard, Result<(), String>) {
+        let (face, read) = match self.read(meta.doc_id).await {
+            Ok(face) => (face, Ok(())),
+            Err(e) => (None, Err(e)),
+        };
+        (
+            DocCard::new(meta.doc_id, meta.kind, meta.name, meta.updated_us, face),
+            read,
+        )
+    }
+}
+
+/// [`AppDocFaces::list_faces`] answers this many when asked for 0.
+pub const FACES_DEFAULT: usize = 200;
+/// …and never more than this, whatever was asked.
+pub const FACES_MAX: usize = 1000;
+
+/// The `AppDocFaces` RPC over one org: the faces ([`Faces`]), with each
+/// card's comment count from the org's threads (anchored on `"doc"`),
+/// and a project's docs through its links.
+#[derive(Clone)]
+pub struct FacesService {
+    pub faces: Faces,
+    pub links: links::Store,
+    pub projects: project::ProjectBackend,
+    pub threads: threads::Store,
+}
+
+impl FacesService {
+    /// Cards for `rows`, each with its face and comment count, recording
+    /// the list's shape on the span.
+    async fn cards(&self, rows: Vec<DocMeta>) -> Vec<DocCard> {
+        let mut cards = Vec::with_capacity(rows.len());
+        let mut unreadable = 0_i64;
+        for meta in rows {
+            let (card, read) = self.faces.card(meta).await;
+            if read.is_err() {
+                unreadable += 1;
+            }
+            cards.push(card);
+        }
+        match comment_counts(&self.threads, cards.iter().map(|c| c.doc_id).collect()).await {
+            Ok(counts) => {
+                for c in &mut cards {
+                    c.comments = counts.get(&c.doc_id).copied().unwrap_or(0);
+                }
+            }
+            Err(e) => architect_telemetry::wide::set("doc.comments_error", e),
+        }
+        let faced = cards.iter().filter(|c| c.face.is_some()).count();
+        architect_telemetry::wide::set("doc.count", i64::try_from(cards.len()).unwrap_or(i64::MAX));
+        architect_telemetry::wide::set("doc.faced", i64::try_from(faced).unwrap_or(i64::MAX));
+        architect_telemetry::wide::set("doc.unreadable", unreadable);
+        cards
+    }
+}
+
+/// How many comments (messages) each doc's threads hold, for `docs`.
+async fn comment_counts(
+    threads: &threads::Store,
+    docs: Vec<Uuid>,
+) -> Result<std::collections::HashMap<Uuid, u32>, String> {
+    use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, QuerySelect as _};
+    use threads::entity::{MessageColumn, MessageEntity, ThreadColumn, ThreadEntity};
+
+    let mut out = std::collections::HashMap::new();
+    if docs.is_empty() {
+        return Ok(out);
+    }
+    let held: Vec<(Uuid, Uuid)> = ThreadEntity::find()
+        .select_only()
+        .column(ThreadColumn::Id)
+        .column(ThreadColumn::EntityId)
+        .filter(ThreadColumn::EntityType.eq(DOC_ENTITY))
+        .filter(ThreadColumn::EntityId.is_in(docs))
+        .into_tuple()
+        .all(threads.conn())
+        .await
+        .map_err(|e| e.to_string())?;
+    if held.is_empty() {
+        return Ok(out);
+    }
+    let doc_of: std::collections::HashMap<Uuid, Uuid> = held.into_iter().collect();
+    let posted: Vec<Uuid> = MessageEntity::find()
+        .select_only()
+        .column(MessageColumn::ThreadId)
+        .filter(MessageColumn::ThreadId.is_in(doc_of.keys().copied()))
+        .into_tuple()
+        .all(threads.conn())
+        .await
+        .map_err(|e| e.to_string())?;
+    for thread in posted {
+        if let Some(doc) = doc_of.get(&thread) {
+            *out.entry(*doc).or_insert(0) += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// The `entity_type` a thread on an app doc anchors with.
+pub const DOC_ENTITY: &str = "doc";
+
+/// A project's path on the Projects tier, from its page's vault path
+/// (`example-album/project.md` → `example-album`).
+#[must_use]
+pub fn project_tier_path(page: &str) -> &str {
+    page.strip_suffix(org_proto::PROJECT_PAGE)
+        .unwrap_or(page)
+        .trim_end_matches('/')
+}
+
+// t[impl offline.app-docs.face] — the org's docs listed with the face
+// each keeps, read without opening them for good
+impl AppDocFaces for FacesService {
+    async fn list_faces(
+        &self,
+        kind: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<DocCard>, FacesError> {
+        let limit = match usize::try_from(limit).unwrap_or(FACES_MAX) {
+            0 => FACES_DEFAULT,
+            n => n.min(FACES_MAX),
+        };
+        if let Some(k) = &kind {
+            architect_telemetry::wide::set("doc.kind", k.clone());
+        }
+        let rows = list(&self.faces.docs, kind, limit)
+            .await
+            .map_err(|e| FacesError::Backend(e.to_string()))?;
+        Ok(self.cards(rows).await)
+    }
+
+    async fn face(&self, doc_id: Uuid) -> Result<DocCard, FacesError> {
+        architect_telemetry::wide::set("doc.id", doc_id.to_string());
+        let meta = match self.faces.docs.get(doc_id).await {
+            Ok(m) if !m.deleted => m,
+            Ok(_) | Err(DocsError::Deleted) => {
+                architect_telemetry::wide::set("doc.outcome", "deleted");
+                return Err(FacesError::Deleted(doc_id.to_string()));
+            }
+            Err(DocsError::NotFound) => {
+                architect_telemetry::wide::set("doc.outcome", "not_found");
+                return Err(FacesError::NotFound(doc_id.to_string()));
+            }
+            Err(e) => return Err(FacesError::Backend(e.to_string())),
+        };
+        architect_telemetry::wide::set("doc.kind", meta.kind.clone());
+        let mut cards = self.cards(vec![meta]).await;
+        let card = cards
+            .pop()
+            .ok_or_else(|| FacesError::Backend("no card".into()))?;
+        let outcome = if card.face.is_some() {
+            "faced"
+        } else {
+            "faceless"
+        };
+        architect_telemetry::wide::set("doc.outcome", outcome);
+        Ok(card)
+    }
+
+    async fn project_faces(&self, project_id: Uuid) -> Result<Vec<DocCard>, FacesError> {
+        architect_telemetry::wide::set("project.id", project_id.to_string());
+        let projects = self.projects.clone();
+        let page = tokio::task::spawn_blocking(move || {
+            use project::ProjectService as _;
+            projects.get(project_id)
+        })
+        .await
+        .map_err(|e| FacesError::Backend(e.to_string()))?
+        .map_err(|_| FacesError::NotFound(project_id.to_string()))?
+        .path;
+        let node = project_node(project_tier_path(&page)).map_err(FacesError::Backend)?;
+        let held = project_docs(&self.faces.docs, &self.links, &node)
+            .await
+            .map_err(FacesError::Backend)?;
+        // A doc deleted since it was attached is left out here; the MCP
+        // `project_docs` tool lists it as gone, for clearing.
+        let rows = held
+            .into_iter()
+            .filter_map(|d| d.meta.filter(|m| !m.deleted))
+            .collect();
+        Ok(self.cards(rows).await)
+    }
 }
 
 /// Answers a local `doc:<uuid>` from the org's catalog and hands every
@@ -288,6 +659,82 @@ impl NodeHomes for CatalogHomes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_docs_proto::{FaceProp, FacePropType, FaceValue, write_face};
+    use crdt::docs::{CreateDoc, Lineage};
+    use sea_orm_migration::MigratorTrait as _;
+
+    async fn host(dir: &std::path::Path) -> (DocsHost, sea_orm::DatabaseConnection) {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.join("app_docs.sqlite").display()
+        );
+        let db = sea_orm::Database::connect(url).await.unwrap();
+        crdt_seaorm::Migrator::up(&db, None).await.unwrap();
+        (open(db.clone()).await.unwrap(), db)
+    }
+
+    fn face() -> DocFace {
+        DocFace {
+            title: "Sunday 10/26".into(),
+            subtitle: Some("The Barn".into()),
+            colour: None,
+            props: vec![FaceProp {
+                key: "entries".into(),
+                label: "Entries".into(),
+                ty: FacePropType::Number,
+                value: FaceValue::Integer(12),
+            }],
+            links: vec![],
+        }
+    }
+
+    async fn register(docs: &DocsHost, kind: &str, name: &str) -> Uuid {
+        let doc_id = Uuid::new_v4();
+        docs.create(CreateDoc {
+            doc_id,
+            kind: kind.into(),
+            name: name.into(),
+            parent: None,
+            lineage: Lineage::Strict,
+        })
+        .await
+        .unwrap();
+        doc_id
+    }
+
+    #[tokio::test]
+    async fn a_face_reads_from_an_open_doc_and_from_stored_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docs, db) = host(tmp.path()).await;
+        let id = register(&docs, "app.list", "untitled").await;
+        let doc = docs.registry().doc(id).await.unwrap();
+        write_face(doc.loro(), &face()).unwrap();
+        doc.loro().commit();
+        doc.compact(id).await.unwrap();
+
+        let faces = Faces::new(docs, db.clone());
+        assert_eq!(faces.read(id).await.unwrap(), Some(face()), "open");
+
+        // A second host over the same file has nothing open: the read
+        // goes to the stored bytes and leaves the doc closed.
+        let cold = Faces::new(open(db.clone()).await.unwrap(), db);
+        assert_eq!(cold.read(id).await.unwrap(), Some(face()), "stored");
+        assert!(!cold.docs.registry().is_open(id).await, "not kept resident");
+    }
+
+    #[tokio::test]
+    async fn a_doc_without_a_face_is_titled_by_its_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docs, db) = host(tmp.path()).await;
+        let id = register(&docs, "app.list", "Bare").await;
+        let faces = Faces::new(docs.clone(), db);
+        let meta = docs.get(id).await.unwrap();
+        let (card, read) = faces.card(meta).await;
+        assert!(read.is_ok());
+        assert_eq!(card.face, None);
+        assert_eq!(card.title, "Bare");
+        assert_eq!(card.kind, "app.list");
+    }
 
     #[test]
     fn a_project_path_is_trimmed_and_must_name_something() {
@@ -295,8 +742,72 @@ mod tests {
             project_node("/example-album/track-two/").unwrap().id,
             "example-album/track-two"
         );
-        for bad in ["", "/", "a//b", "../x", "a/./b"] {
+        for bad in ["", "/", "a//b", "../x", "a/./b", "project.md"] {
             assert!(project_node(bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// The page path `list_projects` prints names the same project as
+    /// its directory, so a tool's output can be handed straight back.
+    #[test]
+    fn a_project_page_path_names_its_directory() {
+        assert_eq!(
+            project_node("crescendum-album/project.md").unwrap(),
+            project_node("crescendum-album").unwrap()
+        );
+        assert_eq!(
+            project_node("example-album/track-two/project.md")
+                .unwrap()
+                .id,
+            "example-album/track-two"
+        );
+        // Only a whole `project.md` segment is the page.
+        assert_eq!(project_node("myproject.md").unwrap().id, "myproject.md");
+    }
+
+    /// A project holds a collection by the one link shape app docs use,
+    /// found by id or title, made once, and cleared by either.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    #[test]
+    fn a_project_holds_a_collection_once_and_lets_it_go() {
+        use collection::{CollectionKind, CollectionService as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let links = links::Store::open(dir.path().join("links.jsonl"));
+        let collections = collection::Store::open(dir.path().join("collections.jsonl"));
+        let set = collections
+            .create(
+                "acme".into(),
+                "Album Launch Set".into(),
+                CollectionKind::new("setlist"),
+            )
+            .unwrap();
+        let album = project_node("example-album").unwrap();
+
+        let (first, c) = attach_collection(
+            &collections,
+            &links,
+            &album,
+            "acme",
+            "Album Launch Set",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(c.id, set.id);
+        assert_eq!(first.target, collection_node(&set.id));
+        assert_eq!(first.relation, Relation::Down);
+        let (again, _) =
+            attach_collection(&collections, &links, &album, "acme", &set.id, "t").unwrap();
+        assert_eq!(again.id, first.id, "attaching twice keeps one link");
+
+        assert!(
+            attach_collection(&collections, &links, &album, "acme", "Nope", "t").is_err(),
+            "a collection the store does not hold is refused"
+        );
+
+        let (id, gone) =
+            detach_collection(&collections, &links, &album, "acme", "Album Launch Set").unwrap();
+        assert_eq!((id.as_str(), gone), (set.id.as_str(), 1));
+        assert!(detach_collection(&collections, &links, &album, "acme", &set.id).is_err());
     }
 }

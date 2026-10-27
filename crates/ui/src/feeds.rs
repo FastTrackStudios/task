@@ -208,6 +208,33 @@ feeds! {
     }
 }
 
+// ── App docs (the faces of the docs client apps keep) ─────────────────
+
+/// Every app doc in the selected orgs with its face, each tagged with
+/// its org's slug (`crate::app_docs`).
+pub async fn fetch_app_doc_faces(
+    slugs: &[String],
+) -> Result<Vec<(String, app_docs_proto::DocCard)>, String> {
+    fan_out_tagged(
+        slugs,
+        "list app doc faces",
+        |c: app_docs_proto::AppDocFacesClient| async move { c.list_faces(None, 0).await },
+    )
+    .await
+}
+
+feeds! {
+    app_docs_proto::AppDocFacesClient {
+        /// The app docs a project holds, with their faces.
+        fetch_project_faces(project_id: uuid::Uuid) -> Vec<app_docs_proto::DocCard>
+            = project_faces(project_id) as "project app docs";
+
+        /// One app doc's face.
+        fetch_app_doc_face(doc_id: uuid::Uuid) -> app_docs_proto::DocCard
+            = face(doc_id) as "app doc face";
+    }
+}
+
 // ── Threads (conversations on tasks/projects) ────────────────────────
 //
 // Single cross-target impl — the architect-generated `ThreadsServiceClient`

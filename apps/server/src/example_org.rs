@@ -826,6 +826,7 @@ pub async fn plant_activity(
                         org_id: uuid::Uuid::nil(),
                         entity_type: "task".to_owned(),
                         entity_id: t.id,
+                        anchor_path: None,
                         title: "Comments".to_owned(),
                         kind: String::new(),
                         created_by: user.id,
@@ -2518,6 +2519,10 @@ pub struct DeclaredAppDoc {
     /// ([`project_rel`]): planted as the `project:` → `doc:` link a
     /// project page lists (`crate::app_docs::attach`).
     pub project: Option<&'static str>,
+    /// Its face (`app_docs_proto`'s `face` map): a subtitle and text
+    /// props `(key, label, type, value)`; the title is [`Self::name`].
+    pub subtitle: &'static str,
+    pub props: &'static [(&'static str, &'static str, &'static str, &'static str)],
 }
 
 pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
@@ -2530,6 +2535,11 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         songs: &["track-one", "track-two"],
         lineage: crdt::docs::Lineage::Strict,
         project: Some("example-album"),
+        subtitle: "Two songs · launch night",
+        props: &[
+            ("venue", "Venue", "text", "The Barn"),
+            ("date", "Date", "date", "2026-11-14"),
+        ],
     },
     DeclaredAppDoc {
         org: "acme-audio",
@@ -2540,6 +2550,11 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         songs: &[],
         lineage: crdt::docs::Lineage::Strict,
         project: Some("example-album"),
+        subtitle: "Example Album",
+        props: &[
+            ("key", "Key", "enum", "A"),
+            ("tempo", "Tempo", "text", "120 BPM"),
+        ],
     },
     DeclaredAppDoc {
         org: "acme-audio",
@@ -2550,6 +2565,8 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         songs: &[],
         lineage: crdt::docs::Lineage::Strict,
         project: Some("example-album"),
+        subtitle: "Example Album · acoustic branch",
+        props: &[("key", "Key", "enum", "G")],
     },
     // A rig's library, as Studio keeps it: one id every device derives,
     // made on each offline and merged when they meet.
@@ -2562,11 +2579,35 @@ pub static DECLARED_APP_DOCS: &[DeclaredAppDoc] = &[
         songs: &[],
         lineage: crdt::docs::Lineage::Merge,
         project: None,
+        subtitle: "Every device's copy, merged",
+        props: &[("instrument", "Instrument", "enum", "Bass")],
     },
 ];
 
 pub fn app_docs_of(slug: &str) -> impl Iterator<Item = &'static DeclaredAppDoc> + '_ {
     DECLARED_APP_DOCS.iter().filter(move |d| d.org == slug)
+}
+
+/// A declared doc's face: its name as the title, its text props.
+fn seed_face(d: &DeclaredAppDoc) -> app_docs_proto::DocFace {
+    app_docs_proto::DocFace {
+        title: d.name.to_owned(),
+        subtitle: Some(d.subtitle.to_owned()).filter(|s| !s.is_empty()),
+        colour: None,
+        props: d
+            .props
+            .iter()
+            .filter_map(|(key, label, ty, value)| {
+                Some(app_docs_proto::FaceProp {
+                    key: (*key).to_owned(),
+                    label: (*label).to_owned(),
+                    ty: app_docs_proto::FacePropType::parse(ty)?,
+                    value: app_docs_proto::FaceValue::Text((*value).to_owned()),
+                })
+            })
+            .collect(),
+        links: Vec::new(),
+    }
 }
 
 fn app_doc_id(id: &str) -> eyre::Result<uuid::Uuid> {
@@ -2628,8 +2669,20 @@ pub async fn plant_app_docs(org_root: &org_proto::OrgRoot, slug: &str) -> eyre::
             .await
             .map_err(|e| eyre::eyre!("open \"{}\": {e}", d.name))?;
         if !doc.loro().oplog_vv().is_empty() {
+            // Planted before docs had faces: top the face up.
+            if app_docs_proto::read_face(doc.loro()).is_none() {
+                app_docs_proto::write_face(doc.loro(), &seed_face(d))
+                    .map_err(|e| eyre::eyre!("face \"{}\": {e}", d.name))?;
+                doc.loro().commit();
+                doc.compact(doc_id)
+                    .await
+                    .map_err(|e| eyre::eyre!("persist \"{}\": {e}", d.name))?;
+                planted += 1;
+            }
             continue;
         }
+        app_docs_proto::write_face(doc.loro(), &seed_face(d))
+            .map_err(|e| eyre::eyre!("face \"{}\": {e}", d.name))?;
         let meta = doc.loro().get_map("meta");
         meta.insert("title", d.name)
             .map_err(|e| eyre::eyre!("seed \"{}\": {e}", d.name))?;
@@ -3167,9 +3220,20 @@ mod declared_tests {
         .await
         .unwrap();
         crdt_seaorm::Migrator::up(&db, None).await.unwrap();
-        let host = crate::app_docs::open(db).await.unwrap();
+        let host = crate::app_docs::open(db.clone()).await.unwrap();
         let rows = host.list(DocQuery::default()).await.unwrap().docs;
         assert_eq!(rows.len(), declared, "one row per declared doc");
+        // Each keeps its face, titled by its name.
+        let faces = crate::app_docs::Faces::new(host.clone(), db.clone());
+        for d in app_docs_of("acme-audio") {
+            let face = faces
+                .read(app_doc_id(d.id).unwrap())
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("\"{}\" has a face", d.name));
+            assert_eq!(face.title, d.name);
+            assert_eq!(face.props.len(), d.props.len(), "\"{}\"", d.name);
+        }
         let branch = DECLARED_APP_DOCS
             .iter()
             .find(|d| d.parent.is_some())

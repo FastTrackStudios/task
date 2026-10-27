@@ -47,6 +47,7 @@ members = [
     "features/agent/agent-tasks",
     "features/agent/agent-wiki",
     "features/agent/agent-worktree",
+    "features/app-docs/app-docs-proto",
     "features/attachments/attachments-proto",
     "features/collection/collection",
     "features/collection/collection-proto",
@@ -332,6 +333,7 @@ email-store = { path = "features/email/email-store" }
 email-sync = { path = "features/email/email-sync" }
 email-ui = { path = "features/email/email-ui" }
 # features/ — work primitives + the vault-superset slices
+app-docs-proto = { path = "features/app-docs/app-docs-proto", default-features = false }
 attachments-proto = { path = "features/attachments/attachments-proto" }
 body = { path = "features/fitness/body" }
 collection = { path = "features/collection/collection" }
@@ -550,8 +552,20 @@ vox-codegen = "0.10.0-rc.7"
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false, features = ["lib"] }
 dioxus-native = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", features = ["prelude", "system-fonts", "svg", "autofocus", "incremental", "data-uri"] }
 dioxus-router = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false }
+# The headless Blitz render (task-ui's / threads-ui's `shot` feature and
+# their `*_shot` examples): a dioxus VirtualDom into a Blitz document,
+# painted by Vello into a PNG — the same paint path a dioxus-native host
+# (Studio) takes. Behind a feature nothing enables by default, so neither
+# `cargo check --workspace` nor clippy's `--all-targets` builds wgpu.
+dioxus-native-dom = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc" }
+blitz-dom = "=0.3.0-beta.1"
+blitz-paint = "=0.3.0-beta.1"
+blitz-traits = "=0.3.0-beta.1"
+anyrender = "0.11"
+anyrender_vello = "0.12"
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Render-to-string, for UI markup snapshots in tests (crates/ui toasts).
-dioxus-ssr = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc" }
+dioxus-ssr ={ git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc" }
 dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", branch = "main" }
 neo_frizbee = { version = "0.11", features = ["match_end_col"] }
 nucleo-matcher = "0.3"
@@ -609,6 +623,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 thiserror = "2.0"
+# Loro, the CRDT under `crdt` — read directly where a doc is decoded
+# without the sync stack (`app-docs-proto`'s face reader).
+loro = "1.13"
 eyre = "0.6"
 
 # ── Observability ─────────────────────────────────────────────────────

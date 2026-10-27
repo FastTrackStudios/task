@@ -26,6 +26,18 @@ pub trait ThreadsService {
         entity_id: Uuid,
     ) -> Result<Vec<Thread>, ThreadsError>;
 
+    /// The threads anchored to `(entity_type, entity_id)` at
+    /// `anchor_path` or anywhere under it (`entries/<uuid>` takes
+    /// `entries/<uuid>/notes` too). An empty path is every thread on the
+    /// entity, whatever its place, like [`Self::list_threads`]. Newest
+    /// first.
+    async fn list_threads_at(
+        &self,
+        entity_type: String,
+        entity_id: Uuid,
+        anchor_path: String,
+    ) -> Result<Vec<Thread>, ThreadsError>;
+
     async fn get_thread(&self, id: Uuid) -> Result<Thread, ThreadsError>;
 
     /// Open a new thread. The backend assigns `id` + timestamps.
@@ -58,9 +70,13 @@ pub trait ThreadsService {
 #[repr(C)]
 pub struct CreateThreadRequest {
     pub org_id: Uuid,
-    /// `"task"` | `"project"` | … — the host entity kind.
+    /// `"task"` | `"project"` | `"doc"` | … — the host entity kind.
     pub entity_type: String,
     pub entity_id: Uuid,
+    /// A place inside the entity ([`Thread::anchor_path`]); `None` for
+    /// the entity as a whole. Surrounding slashes are dropped and an
+    /// empty path is `None`.
+    pub anchor_path: Option<String>,
     pub title: String,
     /// See [`crate::thread::THREAD_KINDS`]. Empty ⇒ backend defaults to
     /// `"discussion"`.

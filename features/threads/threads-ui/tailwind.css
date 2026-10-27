@@ -1,0 +1,27 @@
+/*
+ * threads-ui's OWN utility sheet: the classes its components use, compiled
+ * and embedded as `threads_ui::UTILITIES_CSS`.
+ *
+ * Why: a host outside this repo (Studio, a dioxus-native window) cannot
+ * scan these sources. Tailwind's `@source` resolves on the filesystem and
+ * a git dependency has no stable path, so a host's sheet silently omits
+ * every class used only here. And Blitz loads no external stylesheet, so
+ * the host mounts the bytes. Task's own apps do not need this sheet: their
+ * `apps/tailwind.css` scans these sources directly.
+ *
+ * Theme and utilities only, no preflight: the reset comes with
+ * `architect_ui::UTILITIES_CSS`, which a host mounts anyway for the
+ * Button / Input / Heading these components draw. The colour tokens
+ * (`--background`, `--primary`, ...) come from `architect_ui::THEME_CSS`;
+ * the token sheet is imported here by reference only, for the utility
+ * names, and emits nothing.
+ *
+ * Rebuild with `just ui-sheets` after adding a class (`just css` runs it;
+ * `just ci-architect-css` fails when the committed sheet is stale).
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../../../apps/.architect-ui/assets/fts-theme.css" reference;
+
+@source "./src/**/*.rs";

@@ -8,7 +8,57 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20260609_000001_create_threads::Migration)]
+        vec![
+            Box::new(m20260609_000001_create_threads::Migration),
+            Box::new(m20261026_000001_thread_anchor_path::Migration),
+        ]
+    }
+}
+
+/// A place inside the host entity (`Thread::anchor_path`), nullable so
+/// every existing thread stays on its entity as a whole.
+mod m20261026_000001_thread_anchor_path {
+    use sea_orm_migration::prelude::*;
+
+    // Named by hand: `DeriveMigrationName` takes the file's name, which
+    // this module shares with the first migration.
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &'static str {
+            "m20261026_000001_thread_anchor_path"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(ThreadsThreads::Table)
+                        .add_column(ColumnDef::new(ThreadsThreads::AnchorPath).string().null())
+                        .to_owned(),
+                )
+                .await
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(ThreadsThreads::Table)
+                        .drop_column(ThreadsThreads::AnchorPath)
+                        .to_owned(),
+                )
+                .await
+        }
+    }
+
+    #[derive(Iden)]
+    enum ThreadsThreads {
+        Table,
+        AnchorPath,
     }
 }
 

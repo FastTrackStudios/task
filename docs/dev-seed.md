@@ -49,6 +49,11 @@ a "Demo Project" Files root (3 checkpoints, a Named Version, a
 divergence — `--no-divergence` opts out everywhere, studio roots
 included). The **home org additionally gets the studio dataset**:
 
+- **JT's Senior Recital** (`projects/jts-senior-recital/project.md`,
+  form `concert`) on the Projects tier: the container a client app
+  attaches its documents to (`project:jts-senior-recital` → `doc:<uuid>`;
+  they show on the project page and under Documents). No app docs are
+  planted; the app makes them.
 - **50 projects** (`vault/Projects/<name>/` + `vault/Albums/<name>/`),
   each a folder with the project note (`type: project`, `kind:
   video|album|engagement`, statuses rotating through the real

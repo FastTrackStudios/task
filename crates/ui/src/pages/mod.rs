@@ -26,6 +26,7 @@ pub mod planner;
 pub mod project_detail;
 pub mod projects;
 pub mod schedule;
+pub mod setlists;
 pub mod settings;
 pub mod share_panel;
 pub mod study_path;

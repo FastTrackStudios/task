@@ -111,6 +111,7 @@ async fn snapshot_under_concurrent_writes_restore_and_branch() {
                         org_id: uuid::Uuid::new_v4(),
                         entity_type: "task".into(),
                         entity_id: uuid::Uuid::new_v4(),
+                        anchor_path: None,
                         title: format!("hammer {w}-{i}"),
                         kind: String::new(),
                         created_by: uuid::Uuid::new_v4(),

@@ -1001,6 +1001,8 @@ pub struct RecordingThreads {
     pub tasks: task::TaskBackend,
     pub projects: project::ProjectBackend,
     pub people: People,
+    /// The org's app docs, for a thread anchored on one (`"doc"`).
+    pub docs: crate::app_docs::Faces,
 }
 
 /// The entry a posted comment makes, anchored where its thread is.
@@ -1066,6 +1068,17 @@ impl RecordingThreads {
                     Some(id),
                 )
             }
+            // An app doc in the org's catalog: titled by its face, else
+            // its catalog name. Task has no page for one yet; `/docs/{id}`
+            // is the route it will take.
+            "doc" => {
+                use crdt::docs::Docs as _;
+                let title = match self.docs.docs.get(id).await {
+                    Ok(meta) => self.docs.card(meta).await.0.title,
+                    Err(_) => String::new(),
+                };
+                (title, format!("/docs/{id}"), None)
+            }
             _ => (String::new(), String::new(), None),
         }
     }
@@ -1078,6 +1091,16 @@ impl threads::ThreadsService for RecordingThreads {
         entity_id: Uuid,
     ) -> Result<Vec<threads::Thread>, threads::ThreadsError> {
         self.inner.list_threads(entity_type, entity_id).await
+    }
+    async fn list_threads_at(
+        &self,
+        entity_type: String,
+        entity_id: Uuid,
+        anchor_path: String,
+    ) -> Result<Vec<threads::Thread>, threads::ThreadsError> {
+        self.inner
+            .list_threads_at(entity_type, entity_id, anchor_path)
+            .await
     }
     async fn get_thread(&self, id: Uuid) -> Result<threads::Thread, threads::ThreadsError> {
         self.inner.get_thread(id).await

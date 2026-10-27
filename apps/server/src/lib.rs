@@ -227,6 +227,10 @@ pub struct OrgAppState {
     /// content, synced over the org's `DocSync`. `<org>/app_docs.sqlite`.
     /// See [`app_docs`].
     pub app_docs: crdt::docs::DocsHost,
+    /// What each of [`Self::app_docs`] shows of itself — its `face` map,
+    /// the one part of an app's content Task reads — served as the
+    /// `AppDocFaces` RPC. See [`app_docs::Faces`].
+    pub app_doc_faces: app_docs::Faces,
     /// Wiki feature backend rooted at this org's `vault/`.
     #[cfg(feature = "plugin-wiki")]
     pub wiki: wiki_live::WikiBackend,
@@ -1448,6 +1452,7 @@ pub(crate) async fn build_org_state(
         })
         .await?;
         let app_docs = app_docs::open(app_docs_conn.clone()).await?;
+        let app_doc_faces = app_docs::Faces::new(app_docs.clone(), app_docs_conn.clone());
 
         // Identity locker — only the **home** org anchors it. Opened
         // at `<org>/identity.sqlite` (per `OrgRoot::identity_db`);
@@ -2271,6 +2276,7 @@ pub(crate) async fn build_org_state(
             vault_sync: vault_sync_state,
             vault_collab,
             app_docs,
+            app_doc_faces,
             #[cfg(feature = "plugin-scripture")]
             scripture,
             links,
@@ -4059,6 +4065,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 tasks: org.tasks.clone(),
                 projects: org.projects.clone(),
                 people: org.people.clone(),
+                docs: org.app_doc_faces.clone(),
             }),
         )
         // Per-user preferences — get-with-defaults / upsert set.
@@ -4597,6 +4604,17 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             crdt::docs::serve(org.app_docs.clone()),
         )
         .merge(crdt::docs::stream_layer(org.app_docs.clone()))
+        // What each app doc shows of itself: its `face`, read beside the
+        // catalog (`app_docs::Faces`), generic over any app's kinds.
+        .with(
+            app_docs_proto::service::app_doc_faces_rpc_service_descriptor(),
+            app_docs_proto::service::serve(app_docs::FacesService {
+                faces: org.app_doc_faces.clone(),
+                links: org.links.clone(),
+                projects: org.projects.clone(),
+                threads: org.threads.clone(),
+            }),
+        )
         // The same documents for the org's other nodes (`offline.peers`):
         // listed and exchanged by path, gated on `docs/replica` — the
         // only part of the vault an admitted peer reaches.

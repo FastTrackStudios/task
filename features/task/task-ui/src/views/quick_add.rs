@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 use crate::TaskInfo;
 
+use super::menu::ChoiceMenu;
+
 #[derive(Props, Clone, PartialEq)]
 pub struct QuickAddProps {
     pub on_create: EventHandler<TaskInfo>,
@@ -108,38 +110,39 @@ pub fn QuickAdd(props: QuickAddProps) -> Element {
                 div { class: "flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary",
                     Plus { size: 14 }
                 }
-                input {
-                    r#type: "text",
-                    value: "{value}",
-                    aria_label: "New task",
-                    placeholder: "Add a task — \"Mix vocals friday #trackone\"",
-                    // `min-w-0`: an input's intrinsic width otherwise
-                    // pushes the project picker off a phone's edge.
-                    class: "min-w-0 flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground outline-none sm:text-sm",
-                    oninput: move |e| value.set(e.value()),
-                    onmounted: move |e| async move {
-                        if autofocus {
-                            let _ = e.set_focus(true).await;
+                // `min-w-0`: an input's intrinsic width otherwise pushes
+                // the project picker off a phone's edge. The hint is drawn
+                // over the field rather than a `placeholder`, which Blitz
+                // does not paint.
+                div { class: "relative flex min-w-0 flex-1 items-center",
+                    input {
+                        r#type: "text",
+                        value: "{value}",
+                        aria_label: "New task",
+                        class: "w-full min-w-0 bg-transparent text-base text-foreground outline-none sm:text-sm",
+                        oninput: move |e| value.set(e.value()),
+                        onmounted: move |e| async move {
+                            if autofocus {
+                                let _ = e.set_focus(true).await;
+                            }
+                        },
+                    }
+                    if line.is_empty() {
+                        span { class: "pointer-events-none absolute inset-y-0 left-0 right-0 flex items-center overflow-hidden whitespace-nowrap text-base text-muted-foreground sm:text-sm",
+                            "Add a task — \"Mix vocals friday #trackone\""
                         }
-                    },
+                    }
                 }
-                // Explicit project filing — "(no project)" stays the
+                // Explicit project filing — "No project" stays the
                 // default; `[[Project]]` in the title infers instead.
                 if !props.projects.is_empty() {
-                    select {
+                    ChoiceMenu {
                         aria_label: "Project",
-                        class: "max-w-[35%] shrink-0 truncate rounded-md border border-border/60 bg-transparent px-1.5 py-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        value: "{chosen_project}",
-                        onchange: move |e| chosen_project.set(e.value()),
-                        option { value: "", selected: chosen_project.read().is_empty(), "No project" }
-                        for (id, title) in props.projects.iter() {
-                            option {
-                                key: "{id}",
-                                value: "{id}",
-                                selected: chosen_project.read().as_str() == id.to_string(),
-                                "{title}"
-                            }
-                        }
+                        empty_label: "No project",
+                        clearable: true,
+                        options: props.projects.iter().map(|(id, title)| (id.to_string(), title.clone())).collect::<Vec<_>>(),
+                        selected: Some(chosen_project.read().clone()).filter(|c| !c.is_empty()),
+                        on_pick: move |id: String| chosen_project.set(id),
                     }
                 }
                 // A keyboard hint where there is a keyboard; a button to

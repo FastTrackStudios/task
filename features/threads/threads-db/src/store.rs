@@ -45,6 +45,7 @@ fn thread_from(m: ThreadModel) -> Thread {
         org_id: m.org_id,
         entity_type: m.entity_type,
         entity_id: m.entity_id,
+        anchor_path: m.anchor_path,
         title: m.title,
         kind: m.kind,
         resolved: m.resolved,
@@ -93,6 +94,23 @@ impl ThreadsService for Store {
         Ok(rows.into_iter().map(thread_from).collect())
     }
 
+    async fn list_threads_at(
+        &self,
+        entity_type: String,
+        entity_id: Uuid,
+        anchor_path: String,
+    ) -> Result<Vec<Thread>, ThreadsError> {
+        // One entity's threads are few: filter the place here rather than
+        // with a LIKE whose wildcards the path would have to escape.
+        let all = self.list_threads(entity_type, entity_id).await?;
+        Ok(all
+            .into_iter()
+            .filter(|t| {
+                threads_proto::thread::anchor_within(t.anchor_path.as_deref(), &anchor_path)
+            })
+            .collect())
+    }
+
     async fn get_thread(&self, id: Uuid) -> Result<Thread, ThreadsError> {
         ThreadEntity::find_by_id(id)
             .one(&self.conn)
@@ -122,6 +140,9 @@ impl ThreadsService for Store {
             org_id: Set(req.org_id),
             entity_type: Set(req.entity_type),
             entity_id: Set(req.entity_id),
+            anchor_path: Set(threads_proto::thread::anchor_path(
+                req.anchor_path.as_deref(),
+            )),
             title: Set(req.title),
             kind: Set(kind),
             resolved: Set(false),
@@ -220,5 +241,86 @@ impl ThreadsService for Store {
             .await
             .map_err(db)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm_migration::MigratorTrait as _;
+
+    use super::*;
+
+    async fn store(dir: &std::path::Path) -> Store {
+        let url = format!("sqlite://{}?mode=rwc", dir.join("threads.sqlite").display());
+        let conn = sea_orm::Database::connect(url).await.unwrap();
+        crate::Migrator::up(&conn, None).await.unwrap();
+        Store::new(conn)
+    }
+
+    fn on(entity_id: Uuid, path: Option<&str>, title: &str) -> CreateThreadRequest {
+        CreateThreadRequest {
+            org_id: Uuid::nil(),
+            entity_type: "doc".into(),
+            entity_id,
+            anchor_path: path.map(str::to_owned),
+            title: title.into(),
+            kind: String::new(),
+            created_by: Uuid::nil(),
+            source_kind: String::new(),
+            source_ref: None,
+            source_url: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_thread_keeps_its_place_inside_the_entity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path()).await;
+        let doc = Uuid::new_v4();
+        let whole = s.create_thread(on(doc, None, "Whole")).await.unwrap();
+        let entry = s
+            .create_thread(on(doc, Some("/entries/e1/"), "Entry"))
+            .await
+            .unwrap();
+        let note = s
+            .create_thread(on(doc, Some("entries/e1/notes"), "Note"))
+            .await
+            .unwrap();
+        s.create_thread(on(doc, Some("entries/e10"), "Other"))
+            .await
+            .unwrap();
+        s.create_thread(on(doc, Some(" "), "Blank is whole"))
+            .await
+            .unwrap();
+
+        assert_eq!(whole.anchor_path, None);
+        assert_eq!(entry.anchor_path.as_deref(), Some("entries/e1"), "trimmed");
+        assert_eq!(
+            s.get_thread(note.id).await.unwrap().anchor_path.as_deref(),
+            Some("entries/e1/notes")
+        );
+
+        let all = s.list_threads("doc".into(), doc).await.unwrap();
+        assert_eq!(all.len(), 5, "the entity lists every place");
+        let mut at: Vec<String> = s
+            .list_threads_at("doc".into(), doc, "entries/e1".into())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        at.sort();
+        assert_eq!(at, ["Entry", "Note"], "the place and under, not a sibling");
+        let everything = s
+            .list_threads_at("doc".into(), doc, String::new())
+            .await
+            .unwrap();
+        assert_eq!(everything.len(), 5);
+        assert!(
+            s.list_threads_at("doc".into(), Uuid::new_v4(), "entries/e1".into())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

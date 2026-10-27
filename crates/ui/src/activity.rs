@@ -773,6 +773,7 @@ pub fn EntityActivity(
                         org_id,
                         entity_type: et.clone(),
                         entity_id: id,
+                        anchor_path: None,
                         title: "Comments".to_owned(),
                         kind: String::new(),
                         created_by: author_id.unwrap_or_default(),
