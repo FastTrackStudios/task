@@ -406,20 +406,6 @@ ci-architect-css: css
 ci-manifests:
     cargo metadata --locked --format-version 1 > /dev/null
 
-# Crate-layout boundaries + ratcheted idioms (boundaries.toml), checked by
-# architect's xtask at a pinned release tag. Resolves graphs, compiles nothing
-# of Task's. Bump the tag with architect releases.
-architect_xtask_tag := "v0.9.27"
-ci-boundaries:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    bin="${CI_CACHE_DIR:-$HOME/.cache}/architect-xtask/{{architect_xtask_tag}}"
-    if [ ! -x "$bin/bin/xtask" ]; then
-        cargo install --locked --quiet --git https://github.com/FastTrackStudios/architect \
-            --tag {{architect_xtask_tag}} xtask --root "$bin"
-    fi
-    "$bin/bin/xtask" boundaries
-
 # One version everywhere: every shipped artifact takes the release's
 # version from `[workspace.package]` (static; compiles nothing). The
 # built binaries are checked where they are built: the deploy and

@@ -18,8 +18,9 @@
 #   3. beside 2, publishes the GitHub Release (release.yml) with the notes
 #      from the change files added since the previous tag, then attaches
 #      what the version ships: the headless node binaries
-#      (node-binaries.yml), the web bundle and the Linux AppImage
-#      (release-assets.yml, after the images). NixOS hosts install that
+#      (node-binaries.yml), the Linux AppImage (release-assets.yml,
+#      beside the images) and the web bundle (release-assets.yml, after
+#      the images: it is copied out of task-web). NixOS hosts install that
 #      same AppImage (nix-fleet packages/task-desktop wraps it), so there is
 #      no second, from-scratch Nix build of the desktop. The macOS app joins
 #      the same release from task-macos.yml, so one `v*` release carries
@@ -194,16 +195,32 @@ jobs:
     secrets:
       TASK_RELEASE_MINISIGN_KEY: ${{ secrets.TASK_RELEASE_MINISIGN_KEY }}
 
-  # The release exists: attach the rest of what the version ships — the
-  # web bundle (from the published task-web image) and the Linux desktop
-  # AppImage + its updater manifest. Hosted runners; each asset is a no-op
-  # when the release already carries it. (The macOS app is attached by
-  # task-macos.yml, on the Mac.)
-  release-assets:
-    name: Web bundle + Linux desktop
-    # The web bundle comes out of the published task-web image.
+  # The release exists: attach the rest of what the version ships, each a
+  # no-op when the release already carries it. (The macOS app is attached
+  # by task-macos.yml, on the Mac.)
+  #
+  # The Linux desktop AppImage + Flatpak + updater manifest need only the
+  # tag, so they build on their own runner (task-release-desktop) beside
+  # the images. Waiting on the images, as one call did, put the desktop
+  # build's 16-26 minutes after the images' instead of beside them.
+  linux-desktop:
+    name: Linux desktop
+    needs: release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      assets: linux
+
+  # The web bundle comes out of the published task-web image (hosted
+  # runner), so it waits for the images.
+  web-bundle:
+    name: Web bundle
     needs: [release, images]
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     permissions:
       contents: write
     uses: ./.github/workflows/release-assets.yml
+    with:
+      assets: web

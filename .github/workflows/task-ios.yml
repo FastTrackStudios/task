@@ -95,6 +95,19 @@ jobs:
             exit 1
           fi
           df -h /Volumes/build-disk | tail -1
+      # The job's tools (gh, nix) come from rat's nix profile and
+      # Homebrew, but a runner's PATH is whatever its LaunchAgent plist says:
+      # `svc.sh install` regenerates that plist with a bare
+      # /usr/bin:/bin:/usr/sbin:/sbin, which is how v26.10.6's tag guard
+      # died with "gh: command not found" on airlock-task-release-2. Set
+      # the PATH here, in git, so a reinstalled runner can't drop it.
+      - name: Preflight — tool PATH
+        run: |
+          for d in /opt/homebrew/bin /nix/var/nix/profiles/default/bin "$HOME/.nix-profile/bin"; do
+            [ -d "$d" ] && echo "$d" >> "$GITHUB_PATH"
+          done
+          PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:$PATH"
+          command -v gh >/dev/null || { echo "ERROR: gh is not installed on this runner" >&2; exit 1; }
       # clean:false keeps target/ between runs so nix+cargo build incrementally.
       - uses: actions/checkout@v4
         with:
