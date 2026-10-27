@@ -16,6 +16,11 @@
 # shellcheck disable=SC2015,SC2016 # `[ test ] && ok || bad` is the idiom here: ok never fails; the ERE patterns hold literal backticks
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# A git hook (prek's pre-push `local-ci`) exports GIT_DIR, GIT_INDEX_FILE
+# and friends; left set, every git call below hits the pushing repo instead
+# of the sandbox (STA-521: it set core.bare, origin's URL and tags there).
+# shellcheck disable=SC2046 # one variable name per word
+unset $(git rev-parse --local-env-vars)
 S="${1:-${TMPDIR:-/tmp}/task-release-sandbox}"
 REPO=FastTrackStudios/task
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=t@example.invalid
@@ -340,6 +345,20 @@ green HEAD
 expect_fail "release with origin unreachable" R release --yes
 expect_fail "tag-guard with origin unreachable" env GITHUB_REF=refs/tags/v26.10.3 bash -c 'git switch -q --detach v26.10.3 && bash scripts/release.sh stamp v26.10.3 && bash scripts/release.sh tag-guard'
 git checkout -q -- .; git remote set-url origin "$S/origin.git"
+
+echo "=== run from a git hook: the hook's repo is left alone"
+# Hooks export GIT_DIR and GIT_INDEX_FILE: rerun the sandbox under a canary's
+# and check its config, refs and index are unchanged. The nested run skips this.
+if [ -z "${RELEASE_SANDBOX_NESTED:-}" ]; then
+  C="$S/canary"; git init -q -b main "$C"; echo canary > "$C/f"; git -C "$C" add f; git -C "$C" commit -qm canary
+  git -C "$C" remote add origin https://example.invalid/canary.git
+  snap() { cat "$C/.git/config"; git -C "$C" for-each-ref; git -C "$C" symbolic-ref HEAD; git -C "$C" ls-files -s; }
+  snap > "$S/canary.before"
+  expect_ok "the sandbox passes under a hook's GIT_DIR" env RELEASE_SANDBOX_NESTED=1 GIT_DIR="$C/.git" GIT_INDEX_FILE="$C/.git/index" GIT_PREFIX= bash "$HERE/scripts/release-sandbox.sh" "$S/nested"
+  snap > "$S/canary.after" 2>&1
+  if cmp -s "$S/canary.before" "$S/canary.after"; then ok "the hook's repo: config, refs, HEAD and index unchanged"
+  else bad "the hook's repo changed"; diff "$S/canary.before" "$S/canary.after" | sed 's/^/      | /' | head -20; fi
+fi
 
 echo; echo "=== RESULT: $pass passed, $failn failed"
 [ "$failn" = 0 ]
