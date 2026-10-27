@@ -241,9 +241,9 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
         .sum();
 
     let shell = if props.embedded {
-        "relative flex flex-col gap-3 h-full"
+        "relative flex w-full min-w-0 flex-col gap-3 h-full"
     } else {
-        "relative mx-auto flex max-w-6xl flex-col gap-3 p-3 sm:p-5 lg:px-8 lg:py-6 h-full"
+        "relative mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-3 p-3 sm:p-5 lg:px-8 lg:py-6 h-full"
     };
     rsx! {
         div {

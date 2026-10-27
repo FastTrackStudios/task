@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 use crate::{TaskInfo, TaskMutation};
 
+use super::menu::ChoiceMenu;
+
 #[derive(Props, Clone, PartialEq)]
 pub struct TriageStripProps {
     /// Open tasks with no filing anchor, oldest capture first (see
@@ -97,11 +99,12 @@ fn TriageRow(
                 "{task.title}"
             }
             if !projects.is_empty() {
-                select {
-                    class: "shrink-0 rounded-md border border-border/60 bg-transparent px-1.5 py-0.5 text-xs text-muted-foreground outline-none focus:border-border",
-                    value: "",
-                    onchange: move |e| {
-                        let Ok(pid) = Uuid::parse_str(&e.value()) else { return };
+                ChoiceMenu {
+                    aria_label: "File under a project",
+                    empty_label: "file under…",
+                    options: projects.iter().map(|(pid, title)| (pid.to_string(), title.clone())).collect::<Vec<_>>(),
+                    on_pick: move |picked: String| {
+                        let Ok(pid) = Uuid::parse_str(&picked) else { return };
                         let Some((_, title)) = projects.iter().find(|(p, _)| *p == pid) else {
                             return;
                         };
@@ -112,10 +115,6 @@ fn TriageRow(
                         filed.projects = vec![format!("[[{title}]]")].into();
                         on_event.call(TaskMutation::Update { task: filed });
                     },
-                    option { value: "", selected: true, "file under…" }
-                    for (pid, title) in projects.iter() {
-                        option { key: "{pid}", value: "{pid}", "{title}" }
-                    }
                 }
             }
         }
