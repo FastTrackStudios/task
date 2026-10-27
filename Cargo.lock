@@ -456,6 +456,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-docs-proto"
+version = "26.10.1"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.30)",
+ "facet",
+ "loro",
+ "serde",
+ "thiserror 2.0.20",
+ "uuid",
+ "vox",
+ "vox-types",
+]
+
+[[package]]
 name = "app_units"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -20938,6 +20952,7 @@ dependencies = [
  "agent-proto",
  "agent-runners",
  "agent-tasks",
+ "app-docs-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.30)",
  "architect-auth",
  "architect-mcp",
@@ -22623,6 +22638,7 @@ dependencies = [
  "actions-proto",
  "actions-standalone",
  "agent-proto",
+ "app-docs-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.30)",
  "architect-input",
  "architect-ui",

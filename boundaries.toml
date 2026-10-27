@@ -56,6 +56,11 @@ layer = "L0"
 note = "sibling contract crate; fold into the feature crate"
 
 [[row]]
+package = "app-docs-proto"
+layer = "L0"
+note = "contract crate for app docs' faces (the catalog itself is architect's crdt::docs)"
+
+[[row]]
 package = "attachments-proto"
 layer = "L0"
 note = "sibling contract crate; fold into the feature crate"

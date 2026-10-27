@@ -47,6 +47,7 @@ members = [
     "features/agent/agent-tasks",
     "features/agent/agent-wiki",
     "features/agent/agent-worktree",
+    "features/app-docs/app-docs-proto",
     "features/attachments/attachments-proto",
     "features/collection/collection",
     "features/collection/collection-proto",
@@ -332,6 +333,7 @@ email-store = { path = "features/email/email-store" }
 email-sync = { path = "features/email/email-sync" }
 email-ui = { path = "features/email/email-ui" }
 # features/ — work primitives + the vault-superset slices
+app-docs-proto = { path = "features/app-docs/app-docs-proto", default-features = false }
 attachments-proto = { path = "features/attachments/attachments-proto" }
 body = { path = "features/fitness/body" }
 collection = { path = "features/collection/collection" }
@@ -621,6 +623,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 thiserror = "2.0"
+# Loro, the CRDT under `crdt` — read directly where a doc is decoded
+# without the sync stack (`app-docs-proto`'s face reader).
+loro = "1.13"
 eyre = "0.6"
 
 # ── Observability ─────────────────────────────────────────────────────

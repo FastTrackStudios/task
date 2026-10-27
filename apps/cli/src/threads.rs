@@ -149,6 +149,7 @@ pub(crate) async fn run_threads(cmd: ThreadsCmd) -> eyre::Result<()> {
                     org_id,
                     entity_type,
                     entity_id,
+                    anchor_path: None,
                     title,
                     kind: kind.unwrap_or_default(),
                     created_by: user_id,

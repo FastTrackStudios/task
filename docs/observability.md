@@ -97,6 +97,9 @@ families here when you introduce them.
 | `telemetry.outcome` | `ok` \| `refused` \| `unconfigured` \| `bad_request` \| `upstream_error` | `mcp::telemetry_call` |
 | `watch.suggested` | the suggestion kind served or acted on: `planned` \| `mode` \| `continue` \| `overdue` \| `process` \| `today` \| `none` | `watch_bridge` |
 | `watch.act.outcome` | `acted` \| `stale` (key no longer applies, 409) \| `refused` (Process, 422) | `watch_bridge` |
+| `doc.kind` / `doc.count` / `doc.faced` / `doc.unreadable` | an `AppDocFaces/list_faces` call: the kind asked for, the docs listed, how many keep a face, how many could not be read (listed faceless) | `app_docs::FacesService` |
+| `doc.id` / `doc.outcome` | an `AppDocFaces/face` call: `faced` \| `faceless` \| `not_found` \| `deleted` (plus `doc.kind`) | `app_docs::FacesService` |
+| `project.id` / `doc.comments_error` | an `AppDocFaces/project_faces` call's project; why comment counts could not be read (the cards still list, at 0) | `app_docs::FacesService` |
 | `activity.kind` / `activity.error` | the feed entry a request recorded (`commented`), or why it could not be written — the comment's own write still succeeds | `activity::RecordingThreads` |
 | `starter.planted` / `starter.error` | how many starter notes (Home, Example Formatting) this org boot planted into the vault — each once per org (its marker), `0` after — or why it could not, on the `boot.org` span | `starter` |
 | `doc_peer.outcome` / `doc_peer.listed` / `doc_peer.exchanged` / `doc_peer.pulled` / `doc_peer.foreign` / `doc_peer.failed` | one sweep's pull of one peer's documents (`ok` \| `unreachable`) and its counts — documents the peer holds, those whose file differed, those that brought history, those made separately on both nodes (left unmerged; also one `warn!`), those refused or dropped — one `doc_peer/pull` span per peer per sweep | `doc_peer` |

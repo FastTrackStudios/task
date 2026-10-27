@@ -121,6 +121,14 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_setlists,
             route: Route::SetlistsRoute {},
         },
+        // What client apps keep here (setlists, sessions, …), by the
+        // face each doc gives itself (`crate::app_docs`).
+        NavTab {
+            label: "Documents",
+            plugin: "core",
+            icon: icon_projects,
+            route: Route::AppDocsRoute {},
+        },
         NavTab {
             label: "Favorites",
             plugin: "core",
@@ -330,6 +338,8 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::ProjectDetailRoute { .. } => "Project",
         Route::SetlistsRoute {} => "Setlists",
         Route::SetlistDetailRoute { .. } => "Setlist",
+        Route::AppDocsRoute {} => "Documents",
+        Route::AppDocRoute { .. } => "Document",
         Route::GoalsRoute {} => "Goals",
         Route::TasksRoute {} => "Tasks",
         Route::TaskDetailRoute { .. } => "Task",

@@ -101,6 +101,13 @@ pub enum Route {
         #[route("/setlists/:org/:id")]
         SetlistDetailRoute { org: String, id: String },
 
+        // The documents client apps keep in the org (`crate::app_docs`).
+        #[route("/docs")]
+        AppDocsRoute {},
+
+        #[route("/docs/:id")]
+        AppDocRoute { id: String },
+
         #[route("/goals")]
         GoalsRoute {},
 
@@ -382,6 +389,16 @@ fn SetlistsRoute() -> Element {
 #[component]
 fn SetlistDetailRoute(org: String, id: String) -> Element {
     rsx! { pages::setlists::SetlistDetailView { org, id } }
+}
+
+#[component]
+fn AppDocsRoute() -> Element {
+    rsx! { crate::app_docs::AppDocsPage {} }
+}
+
+#[component]
+fn AppDocRoute(id: String) -> Element {
+    rsx! { crate::app_docs::AppDocPage { id } }
 }
 
 #[component]

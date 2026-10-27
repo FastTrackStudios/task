@@ -1524,6 +1524,7 @@ pub fn draft_thread(req: &threads::CreateThreadRequest) -> threads::Thread {
         org_id: req.org_id,
         entity_type: req.entity_type.clone(),
         entity_id: req.entity_id,
+        anchor_path: req.anchor_path.clone(),
         title: req.title.clone(),
         kind: req.kind.clone(),
         resolved: false,
