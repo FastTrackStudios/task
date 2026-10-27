@@ -83,11 +83,58 @@
 
 use eyre::{Context as _, Result};
 use sea_orm::{
-    ConnectionTrait as _, Database, DatabaseBackend, DatabaseConnection, Statement,
-    TransactionTrait as _,
+    ConnectOptions, ConnectionTrait as _, Database, DatabaseBackend, DatabaseConnection, DbErr,
+    ExecResult, QueryResult, Statement, TransactionTrait as _,
 };
 use std::path::Path;
+use std::time::Duration;
 use uuid::Uuid;
+
+/// Connections in the store's pool.
+///
+/// sea-orm opens a SQLite pool with ONE connection unless told
+/// otherwise, and every gated call on the server asks this table (the
+/// cross-org fence, the Files role check). One connection made the whole
+/// server's sign-in a single point of failure: once something held it and
+/// never gave it back (2026-10-27, right as a vox connection was closed
+/// under a burst of range reads), every signed-in call after was refused
+/// as anonymous until a restart. Reads are concurrent in SQLite; a
+/// handful of connections costs nothing.
+const POOL_CONNECTIONS: u32 = 8;
+
+/// How long a caller waits for a connection before the lookup fails
+/// (closed — see the fence). sqlx's default is 30 s, which turned an
+/// exhausted pool into requests that hung for half a minute before
+/// being refused; a membership read takes well under a millisecond.
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The pool both `open`s share.
+fn connect_options(url: String) -> ConnectOptions {
+    let mut opts = ConnectOptions::new(url);
+    opts.max_connections(POOL_CONNECTIONS)
+        .acquire_timeout(ACQUIRE_TIMEOUT);
+    opts
+}
+
+/// Run one database step on a task of its own, and wait for it.
+///
+/// The step holds a pooled connection only while it runs, and it always
+/// runs to the end, whatever happens to the caller. Awaited in place, a
+/// query's connection belongs to the caller's future: drop it mid-query
+/// or — worse — park it and never poll it again, and the connection goes
+/// with it. A vox driver runs every handler of a connection as one task,
+/// so a driver stuck on anything parks all of its requests at once.
+/// Detached, a caller that goes away costs one finished query.
+async fn detached<T, F, Fut>(conn: &DatabaseConnection, step: F) -> Result<T, DbErr>
+where
+    F: FnOnce(DatabaseConnection) -> Fut,
+    Fut: std::future::Future<Output = Result<T, DbErr>> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::spawn(step(conn.clone()))
+        .await
+        .unwrap_or_else(|e| Err(DbErr::Custom(format!("membership query task: {e}"))))
+}
 
 /// One org a principal belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +153,21 @@ pub struct Memberships {
 }
 
 impl Memberships {
+    /// One statement, on a connection held only while it runs.
+    async fn exec(&self, stmt: Statement) -> Result<ExecResult, DbErr> {
+        detached(&self.conn, |c| async move { c.execute(stmt).await }).await
+    }
+
+    /// At most one row, likewise.
+    async fn one(&self, stmt: Statement) -> Result<Option<QueryResult>, DbErr> {
+        detached(&self.conn, |c| async move { c.query_one(stmt).await }).await
+    }
+
+    /// Every row, likewise.
+    async fn rows(&self, stmt: Statement) -> Result<Vec<QueryResult>, DbErr> {
+        detached(&self.conn, |c| async move { c.query_all(stmt).await }).await
+    }
+
     /// Open (creating the file and table if absent).
     ///
     /// Creating on open rather than through `sea-orm-migration`: this is
@@ -113,7 +175,7 @@ impl Memberships {
     /// server must come up clean on a data root that predates it.
     pub async fn open(path: &Path) -> Result<Self> {
         let url = format!("sqlite://{}?mode=rwc", path.display());
-        let conn = Database::connect(&url)
+        let conn = Database::connect(connect_options(url))
             .await
             .wrap_err_with(|| format!("open memberships store at {}", path.display()))?;
         conn.execute(Statement::from_string(
@@ -166,7 +228,7 @@ impl Memberships {
     /// Open read-only — for reporting beside a live server.
     pub async fn open_ro(path: &Path) -> Result<Self> {
         let url = format!("sqlite://{}?mode=ro", path.display());
-        let conn = Database::connect(&url)
+        let conn = Database::connect(connect_options(url))
             .await
             .wrap_err_with(|| format!("open memberships store (ro) at {}", path.display()))?;
         Ok(Self { conn })
@@ -178,19 +240,18 @@ impl Memberships {
     pub async fn upsert(&self, user_id: Uuid, org_slug: &str, role: Option<&str>) -> Result<()> {
         let now = now_unix();
         let role_sql = role.map_or_else(|| "NULL".to_owned(), |r| format!("'{}'", esc(r)));
-        self.conn
-            .execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "INSERT INTO memberships (user_id, org_slug, role, created_at, source)
+        self.exec(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!(
+                "INSERT INTO memberships (user_id, org_slug, role, created_at, source)
                      VALUES ('{user_id}', '{}', {role_sql}, {now}, 'local')
                      ON CONFLICT(user_id, org_slug) DO UPDATE SET
                          role = excluded.role, source = 'local'",
-                    esc(org_slug)
-                ),
-            ))
-            .await
-            .wrap_err_with(|| format!("upsert membership {user_id} in `{org_slug}`"))?;
+                esc(org_slug)
+            ),
+        ))
+        .await
+        .wrap_err_with(|| format!("upsert membership {user_id} in `{org_slug}`"))?;
         Ok(())
     }
 
@@ -233,8 +294,7 @@ impl Memberships {
                 keep.join(", ")
             )
         };
-        self.conn
-            .execute(Statement::from_string(DatabaseBackend::Sqlite, prune))
+        self.exec(Statement::from_string(DatabaseBackend::Sqlite, prune))
             .await
             .wrap_err_with(|| format!("prune issuer memberships for {user_id}"))?;
 
@@ -242,19 +302,18 @@ impl Memberships {
             let role_sql = role
                 .as_deref()
                 .map_or_else(|| "NULL".to_owned(), |r| format!("'{}'", esc(r)));
-            self.conn
-                .execute(Statement::from_string(
-                    DatabaseBackend::Sqlite,
-                    format!(
-                        "INSERT INTO memberships (user_id, org_slug, role, created_at, source)
+            self.exec(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "INSERT INTO memberships (user_id, org_slug, role, created_at, source)
                          VALUES ('{user_id}', '{}', {role_sql}, {now}, 'issuer')
                          ON CONFLICT(user_id, org_slug) DO UPDATE SET
                              role = excluded.role, source = 'issuer'",
-                        esc(slug)
-                    ),
-                ))
-                .await
-                .wrap_err_with(|| format!("mirror membership {user_id} in `{slug}`"))?;
+                    esc(slug)
+                ),
+            ))
+            .await
+            .wrap_err_with(|| format!("mirror membership {user_id} in `{slug}`"))?;
         }
         Ok(())
     }
@@ -262,8 +321,7 @@ impl Memberships {
     /// Every org this principal belongs to, slug order.
     pub async fn for_user(&self, user_id: Uuid) -> Result<Vec<Membership>> {
         let rows = self
-            .conn
-            .query_all(Statement::from_string(
+            .rows(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!(
                     "SELECT org_slug, role FROM memberships
@@ -289,8 +347,7 @@ impl Memberships {
     /// anyone holding a valid home token.
     pub async fn role_for(&self, user_id: Uuid, org_slug: &str) -> Result<Option<Membership>> {
         let row = self
-            .conn
-            .query_one(Statement::from_string(
+            .one(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!(
                     "SELECT org_slug, role FROM memberships
@@ -312,16 +369,15 @@ impl Memberships {
     /// Remove a membership — the revoke path, and the rollback for an
     /// adopt that named the wrong org.
     pub async fn revoke(&self, user_id: Uuid, org_slug: &str) -> Result<()> {
-        self.conn
-            .execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "DELETE FROM memberships WHERE user_id = '{user_id}' AND org_slug = '{}'",
-                    esc(org_slug)
-                ),
-            ))
-            .await
-            .wrap_err("revoke membership")?;
+        self.exec(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!(
+                "DELETE FROM memberships WHERE user_id = '{user_id}' AND org_slug = '{}'",
+                esc(org_slug)
+            ),
+        ))
+        .await
+        .wrap_err("revoke membership")?;
         Ok(())
     }
 
@@ -335,32 +391,31 @@ impl Memberships {
     /// a failure part-way cannot leave a person a member of an org that
     /// no longer exists and not of the one that does.
     pub async fn rename_org(&self, from: &str, to: &str) -> Result<(usize, usize)> {
-        let txn = self.conn.begin().await.wrap_err("begin rename")?;
-        let members = txn
-            .execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "UPDATE memberships SET org_slug = '{}' WHERE org_slug = '{}'",
-                    esc(to),
-                    esc(from)
-                ),
-            ))
-            .await
-            .wrap_err("rename memberships")?
-            .rows_affected();
-        let invites = txn
-            .execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "UPDATE invites SET org_slug = '{}' WHERE org_slug = '{}'",
-                    esc(to),
-                    esc(from)
-                ),
-            ))
-            .await
-            .wrap_err("rename invites")?
-            .rows_affected();
-        txn.commit().await.wrap_err("commit rename")?;
+        let (from, to) = (esc(from), esc(to));
+        // One task for the whole transaction, for the reason `detached`
+        // gives: a caller that goes away mid-rename must not take the
+        // connection — or an open write transaction — with it.
+        let (members, invites) = detached(&self.conn, |conn| async move {
+            let txn = conn.begin().await?;
+            let members = txn
+                .execute(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    format!("UPDATE memberships SET org_slug = '{to}' WHERE org_slug = '{from}'"),
+                ))
+                .await?
+                .rows_affected();
+            let invites = txn
+                .execute(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    format!("UPDATE invites SET org_slug = '{to}' WHERE org_slug = '{from}'"),
+                ))
+                .await?
+                .rows_affected();
+            txn.commit().await?;
+            Ok((members, invites))
+        })
+        .await
+        .wrap_err("rename org in memberships and invites")?;
         Ok((
             usize::try_from(members).unwrap_or(usize::MAX),
             usize::try_from(invites).unwrap_or(usize::MAX),
@@ -375,8 +430,7 @@ impl Memberships {
     /// case — invisible to the operator inspecting their own server.
     pub async fn all(&self) -> Result<Vec<(Uuid, Membership, String)>> {
         let rows = self
-            .conn
-            .query_all(Statement::from_string(
+            .rows(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 "SELECT user_id, org_slug, role, source FROM memberships
                  ORDER BY user_id, org_slug"
@@ -419,44 +473,41 @@ impl Memberships {
         let email = normalize_email(email);
         let now = now_unix();
         let role_sql = role.map_or_else(|| "NULL".to_owned(), |r| format!("'{}'", esc(r)));
-        self.conn
-            .execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "INSERT INTO invites (email, org_slug, role, created_at)
+        self.exec(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!(
+                "INSERT INTO invites (email, org_slug, role, created_at)
                      VALUES ('{}', '{}', {role_sql}, {now})
                      ON CONFLICT(email, org_slug) DO UPDATE SET role = excluded.role",
-                    esc(&email),
-                    esc(org_slug)
-                ),
-            ))
-            .await
-            .wrap_err_with(|| format!("invite `{email}` to `{org_slug}`"))?;
+                esc(&email),
+                esc(org_slug)
+            ),
+        ))
+        .await
+        .wrap_err_with(|| format!("invite `{email}` to `{org_slug}`"))?;
         Ok(())
     }
 
     /// Withdraw a pending invite. Does nothing to a membership already
     /// claimed from it — revoking that is [`Self::revoke`].
     pub async fn withdraw(&self, email: &str, org_slug: &str) -> Result<()> {
-        self.conn
-            .execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "DELETE FROM invites WHERE email = '{}' AND org_slug = '{}'",
-                    esc(&normalize_email(email)),
-                    esc(org_slug)
-                ),
-            ))
-            .await
-            .wrap_err("withdraw invite")?;
+        self.exec(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!(
+                "DELETE FROM invites WHERE email = '{}' AND org_slug = '{}'",
+                esc(&normalize_email(email)),
+                esc(org_slug)
+            ),
+        ))
+        .await
+        .wrap_err("withdraw invite")?;
         Ok(())
     }
 
     /// Every invite still waiting to be claimed.
     pub async fn pending(&self) -> Result<Vec<(String, Membership)>> {
         let rows = self
-            .conn
-            .query_all(Statement::from_string(
+            .rows(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 "SELECT email, org_slug, role FROM invites ORDER BY email, org_slug".to_owned(),
             ))
@@ -494,8 +545,7 @@ impl Memberships {
     pub async fn claim_for_email(&self, email: &str, user_id: Uuid) -> Result<Vec<String>> {
         let email = normalize_email(email);
         let rows = self
-            .conn
-            .query_all(Statement::from_string(
+            .rows(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!(
                     "SELECT org_slug, role FROM invites WHERE email = '{}' ORDER BY org_slug",
@@ -703,6 +753,41 @@ mod tests {
         let path = dir.path().join("memberships.sqlite");
         let m = Memberships::open(&path).await.unwrap();
         (dir, m)
+    }
+
+    /// A caller parked mid-lookup — polled once, then never again and
+    /// never dropped — must not take the store down with it. That is
+    /// what a vox connection closed under a burst of reads left behind:
+    /// its in-flight requests, each holding (or queued for) the pool's
+    /// one connection, and every signed-in call after that refused as
+    /// anonymous for want of a connection.
+    #[tokio::test]
+    async fn callers_parked_mid_lookup_do_not_hold_the_store() {
+        use std::future::Future as _;
+        use std::task::Poll;
+
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.upsert(cody, "codywright", Some("admin")).await.unwrap();
+
+        // More parked callers than the pool has connections.
+        let mut parked: Vec<_> = (0..(POOL_CONNECTIONS * 2))
+            .map(|_| Box::pin(m.role_for(cody, "codywright")))
+            .collect();
+        for f in &mut parked {
+            std::future::poll_fn(|cx| {
+                let _ = f.as_mut().poll(cx);
+                Poll::Ready(())
+            })
+            .await;
+        }
+
+        let fresh = tokio::time::timeout(Duration::from_secs(3), m.role_for(cody, "codywright"))
+            .await
+            .expect("a lookup must not wait on callers that went away")
+            .unwrap();
+        assert_eq!(fresh.unwrap().role.as_deref(), Some("admin"));
+        drop(parked);
     }
 
     #[tokio::test]

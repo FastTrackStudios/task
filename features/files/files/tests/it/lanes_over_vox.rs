@@ -594,3 +594,104 @@ async fn a_timestamp_crosses_the_wire_without_losing_precision() {
         "the wire rounded a timestamp to the second"
     );
 }
+
+/// A byte stream that finished must give its request slot back.
+///
+/// Each range read is a `bytes` subscription, and the server holds a
+/// subscription's request open until the client cancels it (architect's
+/// generated `*_attach` ends in `pending()`). vox at the pinned rev never
+/// sends that cancel when a caller drops its call future — only its own
+/// idle-timeout policy does — while the caller's own permit IS released
+/// on drop. So the client believes the slot is free and the server still
+/// counts it: on one connection the 65th read, however far apart, trips
+/// `max_concurrent_requests exceeded (limit 64, in-flight 64)` and the
+/// server closes the whole connection as a protocol violation. Session's
+/// song streaming hit exactly that.
+///
+/// Ignored until vox cancels a dropped call (the fix belongs in vox's
+/// `Caller::call_inner`: a drop guard that sends `RequestBody::Cancel`
+/// for a request still awaiting its response).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "vox does not cancel a dropped call, so every finished stream leaks a server slot"]
+async fn finished_byte_streams_give_back_their_request_slots() {
+    use files_proto::MediaServiceStreamClient;
+    use files_proto::service::media::{ByteFrame, ByteRange, ByteRequest, MediaService};
+
+    let tmp = tempfile::tempdir().expect("data tempdir");
+    let dir = tmp.path().join("song");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("mix.wav"), vec![7u8; 10_000]).unwrap();
+    let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+    let local = LocalServer::serve(
+        LayerRouter::new()
+            .merge(files_proto::roots_layer(backend.clone()))
+            .merge(files_proto::version_layer(backend.clone()))
+            .merge(files_proto::media_layer(backend.clone()))
+            .merge(files_proto::media_stream_layer(backend.clone())),
+        Scope::new(),
+    );
+    let roots: RootsServiceClient = local.establish().await.expect("roots client");
+    let root = RootId::new(
+        roots
+            .adopt(AdoptRequest {
+                path: dir.to_string_lossy().into_owned(),
+                name: "Song".into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
+            .await
+            .expect("adopt")
+            .id,
+    );
+    let version: VersionServiceClient = local.establish().await.expect("version client");
+    version.checkpoint(root, None).await.expect("checkpoint");
+    let ticket = backend
+        .read(root, RootPath::parse("mix.wav").unwrap())
+        .await
+        .expect("mint a ticket");
+
+    // One connection, one read at a time — never more than one in flight
+    // as the client counts — and more reads than the server's limit.
+    let stream: MediaServiceStreamClient = local.establish().await.expect("byte lane client");
+    for n in 0..80 {
+        let (tx, mut rx) = vox::channel::<ByteFrame>();
+        let call = stream.bytes(
+            ByteRequest {
+                token: ticket.token.clone(),
+                range: Some(ByteRange { first: 0, last: 99 }),
+            },
+            tx,
+        );
+        let listen = async {
+            loop {
+                let mut frame = None;
+                match rx.recv().await {
+                    Ok(Some(f)) => {
+                        let _ = f.map(|f| frame = Some(f));
+                    }
+                    Ok(None) => return Err("the stream closed before Done".into()),
+                    Err(e) => return Err(format!("{e:?}")),
+                }
+                match frame {
+                    Some(ByteFrame::Done) => return Ok(()),
+                    Some(ByteFrame::Failed(fault)) => return Err(format!("{fault:?}")),
+                    _ => {}
+                }
+            }
+        };
+        // What `FilesClient::redeem` does: listen until Done, then drop
+        // the call.
+        let read = async {
+            let call = std::pin::pin!(call);
+            let listen = std::pin::pin!(listen);
+            match futures_util::future::select(call, listen).await {
+                futures_util::future::Either::Left((_, listen)) => listen.await,
+                futures_util::future::Either::Right((out, _)) => out,
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), read)
+            .await
+            .unwrap_or_else(|_| panic!("read {n} stalled"))
+            .unwrap_or_else(|e| panic!("read {n} failed: {e}"));
+    }
+}
