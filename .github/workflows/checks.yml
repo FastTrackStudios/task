@@ -116,16 +116,24 @@ on:
 
 # WHO CANCELS WHOM:
 #
-#   push to main /      one group per branch, cancel-in-progress: a newer
-#   release/v*          merge cancels the older run, so the runner always
-#                       works on the newest main. `just release` tags the
+#   push to main /      one group per branch, QUEUED, not cancelled: the
+#   release/v*          running run finishes, and of the merges that land
+#                       meanwhile only the newest waits (GitHub replaces a
+#                       pending run with a newer one). Cancelling the
+#                       running one threw its build away on every burst of
+#                       merges (2026-10-24: five runs cancelled 7-20 minutes
+#                       in, STA-523) and left no passing commit for Tests to
+#                       narrow from. The newest run plans its tests from the
+#                       last passing commit, so the merges whose runs were
+#                       replaced are still covered; `just release` tags the
 #                       newest commit whose `CI passed` is green, so a
-#                       cancelled run only means that commit is skipped.
+#                       replaced run only means that commit is skipped.
+#                       (Studio queues the same way: its checks.yml.)
 #   hotfix PR           one group per PR; a newer push cancels the older.
 #   dispatch            its own group (the run id): never cancelled.
 concurrency:
   group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # mold for the host target only -- 326 test binaries get linked on a
