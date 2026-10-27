@@ -1,3 +1,14 @@
+
+  Task dev shell
+  ─────────────────────────────────────────────
+  just css   # generated tailwind sheets
+  cargo check --workspace
+  cargo run -p task-server        # the server
+  (cd apps/web && dx serve --web --hot-patch false)
+
+  Rust: rustc 1.101.0-nightly (7189d39d9 2026-10-22)
+  dx:   dioxus 0.8.0-alpha.0 (was built without git repository)
+
 //! App docs in the UI: the documents client apps keep in each org's
 //! app-docs catalog, shown by the face each keeps
 //! (`app_docs_proto::DocFace`).
@@ -139,7 +150,11 @@ pub fn ProjectAppDocs(slug: String, project_id: Uuid) -> Element {
     let held = use_resource(move || async move {
         let (slug, id) = key();
         let cards = crate::feeds::fetch_project_faces(&slug, id).await;
-        cards.map(|cs| cs.into_iter().map(|c| (slug.clone(), c)).collect::<Vec<_>>())
+        cards.map(|cs| {
+            cs.into_iter()
+                .map(|c| (slug.clone(), c))
+                .collect::<Vec<_>>()
+        })
     });
     let cards = match &*held.read() {
         Some(Ok(cards)) if !cards.is_empty() => cards.clone(),
@@ -184,7 +199,11 @@ pub fn AppDocsPage() -> Element {
     };
     let labels: Vec<String> = by_kind(&all).into_keys().collect();
     let shown: Vec<(String, DocCard)> = match kind() {
-        Some(k) => all.iter().filter(|(_, c)| c.kind_label() == k).cloned().collect(),
+        Some(k) => all
+            .iter()
+            .filter(|(_, c)| c.kind_label() == k)
+            .cloned()
+            .collect(),
         None => all.clone(),
     };
     let chip = |on: bool| {
