@@ -588,10 +588,19 @@ pub fn apply_processed(n: &mut NewActivity, into: &ProcessedInto) {
 /// The mode a session names, when its description is a steering kind's
 /// label ("Maintenance hour") — the server's twin of the app's
 /// `now_block::mode_of`.
+#[cfg(feature = "plugin-scheduling")]
 #[must_use]
 pub fn mode_label(description: &str) -> Option<&'static str> {
     scheduling_proto::BlockCategory::from_focus_label(description.trim())
         .and_then(scheduling_proto::BlockCategory::focus_label)
+}
+
+/// The steering kinds are the scheduling plugin's; without it no
+/// description names one.
+#[cfg(not(feature = "plugin-scheduling"))]
+#[must_use]
+pub fn mode_label(_description: &str) -> Option<&'static str> {
+    None
 }
 
 fn fmt_duration(from: DateTime<Utc>, to: DateTime<Utc>) -> String {

@@ -319,6 +319,7 @@ async fn only_an_owner_grants_and_everyone_else_finds_nothing() {
 
 // t[verify wiki.access.source-grant]
 // t[verify wiki.access.shelf-visibility]
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn only_an_owner_opens_a_shelf_to_another_org_and_every_change_is_on_record() {
     use share_proto::{NewSourceGrant, SourceTier, SourceVisibility};

@@ -668,6 +668,9 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                 )
             },
         },
+    ]);
+    #[cfg(feature = "plugin-scheduling")]
+    v.extend([
         // ── Day plans / bookings (scheduling plugin) ─────────────
         ToolDef {
             name: "get_day_plan",
@@ -773,6 +776,9 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                 )
             },
         },
+    ]);
+    #[cfg(feature = "plugin-contacts")]
+    v.extend([
         // ── Contacts ─────────────────────────────────────────────
         ToolDef {
             name: "list_contacts",
@@ -808,6 +814,9 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                 )
             },
         },
+    ]);
+    #[cfg(feature = "plugin-email")]
+    v.extend([
         // ── Email (read + draft only — no send tool, by design) ──
         ToolDef {
             name: "list_email_accounts",
@@ -866,6 +875,8 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                 )
             },
         },
+    ]);
+    v.extend([
         // ── Discovery ────────────────────────────────────────────
         ToolDef {
             name: "api_reference",
@@ -884,6 +895,9 @@ fn build_tool_catalog() -> Vec<ToolDef> {
                 )
             },
         },
+    ]);
+    #[cfg(feature = "plugin-email")]
+    v.extend([
         ToolDef {
             name: "draft_reply",
             plugin: "email",
@@ -2913,6 +2927,7 @@ fn required_str(args: &Value, key: &str) -> Result<String, ToolFailure> {
 /// trailing newline is part of its content (and of the sha a later
 /// read reports), so it is not trimmed the way an id or a title is.
 /// Blank is still an error.
+#[cfg(feature = "plugin-wiki")]
 fn required_text(args: &Value, key: &str) -> Result<String, ToolFailure> {
     args.get(key)
         .and_then(Value::as_str)
@@ -3006,6 +3021,7 @@ pub(crate) fn parse_assignee(
     Ok(agent)
 }
 
+#[cfg(feature = "plugin-scheduling")]
 /// `"HH:MM"` (24h) → minutes-since-midnight.
 fn parse_hhmm(s: &str, key: &str) -> Result<scheduling_proto::TimeOfDay, ToolFailure> {
     let bad = || ToolFailure::Message(format!("`{key}` must be 'HH:MM' (24h), got `{s}`"));
@@ -3018,6 +3034,7 @@ fn parse_hhmm(s: &str, key: &str) -> Result<scheduling_proto::TimeOfDay, ToolFai
     Ok(scheduling_proto::TimeOfDay::new(h, m))
 }
 
+#[cfg(feature = "plugin-scheduling")]
 /// Day-plan block category, spelled the way the schema documents it
 /// (lower snake_case); unknown values are an error rather than a
 /// silent `Other` so the model learns the vocabulary.
@@ -3241,7 +3258,12 @@ fn call_tool(
     // still takes the principal so the dispatch site has one shape.
     #[cfg(not(feature = "plugin-wiki"))]
     let _ = principal;
+    // The links org and the creator are read only by the email tools.
+    #[cfg(not(feature = "plugin-email"))]
+    let _ = (links, creator);
+    #[cfg(feature = "plugin-contacts")]
     use contacts_proto::Contacts as _;
+    #[cfg(feature = "plugin-email")]
     use email_proto::{EmailLinks as _, EmailSync as _};
     use goal::GoalService as _;
     use milestone::MilestoneService as _;
@@ -3423,6 +3445,7 @@ fn call_tool(
             })
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         // t[impl scheduling.event.external-ref]
         // t[impl scheduling.event.links.note-side]
         "list_events" => {
@@ -4124,6 +4147,7 @@ fn call_tool(
             Ok(milestone_json(&saved))
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         // ── Day plans / bookings ─────────────────────────────────
         "get_day_plan" => {
             let date = required_str(args, "date")?;
@@ -4135,6 +4159,7 @@ fn call_tool(
             Ok(json!({ "date": date, "plan": plan.map(|p| day_plan_json(&p)) }))
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         "upsert_day_plan" => {
             let date = required_str(args, "date")?;
             parse_date(&date, "date")?;
@@ -4179,6 +4204,7 @@ fn call_tool(
             Ok(json!({ "date": date, "blocks": count, "written": true }))
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         "list_bookings" => {
             let mut rows = org
                 .scheduling
@@ -4193,6 +4219,7 @@ fn call_tool(
             Ok(json!({ "count": out.len(), "bookings": out }))
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         "list_open_slots" => {
             let query = scheduling_proto::SlotQuery {
                 event_type_id: scheduling_proto::EventTypeId(required_str(args, "event_type_id")?),
@@ -4211,6 +4238,7 @@ fn call_tool(
             Ok(json!({ "count": out.len(), "slots": out }))
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         "book_slot" => {
             let new = scheduling_proto::NewBooking {
                 event_type_id: scheduling_proto::EventTypeId(required_str(args, "event_type_id")?),
@@ -4228,6 +4256,7 @@ fn call_tool(
             Ok(booking_json(&booked))
         }
 
+        #[cfg(feature = "plugin-scheduling")]
         "cancel_booking" => {
             let id = required_str(args, "id")?;
             org.scheduling
@@ -4239,6 +4268,7 @@ fn call_tool(
             Ok(json!({ "cancelled": id }))
         }
 
+        #[cfg(feature = "plugin-contacts")]
         // ── Contacts ─────────────────────────────────────────────
         "list_contacts" => {
             let query = arg_str(args, "query").map(|q| q.to_lowercase());
@@ -4263,6 +4293,7 @@ fn call_tool(
             Ok(json!({ "count": out.len(), "contacts": out }))
         }
 
+        #[cfg(feature = "plugin-contacts")]
         "upsert_contact" => {
             let mut contact = match arg_str(args, "id") {
                 Some(id) => org
@@ -4307,6 +4338,7 @@ fn call_tool(
             Ok(contact_json(&contact))
         }
 
+        #[cfg(feature = "plugin-email")]
         // ── Email (read + draft; no send by design) ──────────────
         "list_email_accounts" => {
             let accounts = org.email.accounts().map_err(|e| email_err(&e))?;
@@ -4339,6 +4371,7 @@ fn call_tool(
             Ok(json!({ "count": out.len(), "accounts": out }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "list_envelopes" => {
             let account = required_str(args, "account")?;
             let folder = arg_str(args, "folder").unwrap_or_else(|| "INBOX".into());
@@ -4357,6 +4390,7 @@ fn call_tool(
             Ok(json!({ "account": account, "folder": folder, "count": out.len(), "messages": out }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "read_email" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
@@ -4380,6 +4414,7 @@ fn call_tool(
             Ok(out)
         }
 
+        #[cfg(feature = "plugin-email")]
         "draft_email" => {
             let account = required_str(args, "account")?;
             let to = arg_str_list(args, "to")?.unwrap_or_default();
@@ -4414,6 +4449,7 @@ fn call_tool(
             }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "draft_reply" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
@@ -4456,6 +4492,7 @@ fn call_tool(
             }))
         }
 
+        #[cfg(feature = "plugin-email")]
         // ── Filing mail into the work it belongs to ──────────────
         "link_email" => {
             let message_id = required_str(args, "message_id")?;
@@ -4467,6 +4504,7 @@ fn call_tool(
             Ok(link_json(&link))
         }
 
+        #[cfg(feature = "plugin-email")]
         "unlink_email" => {
             let message_id = required_str(args, "message_id")?;
             let target = link_target(args, &org.slug)?;
@@ -4477,6 +4515,7 @@ fn call_tool(
             Ok(json!({ "unlinked": true, "message_id": message_id }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "email_links" => {
             let message_id = required_str(args, "message_id")?;
             let rows = links
@@ -4487,6 +4526,7 @@ fn call_tool(
             Ok(json!({ "message_id": message_id, "count": out.len(), "links": out }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "linked_emails" => {
             let target = link_target(args, &org.slug)?;
             let rows = links
@@ -4520,6 +4560,7 @@ fn call_tool(
             }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "email_to_task" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
@@ -4631,6 +4672,7 @@ fn call_tool(
             Ok(out)
         }
 
+        #[cfg(feature = "plugin-email")]
         "file_email" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
@@ -4642,6 +4684,7 @@ fn call_tool(
             Ok(json!({ "moved": true, "message_id": message_id, "folder": folder }))
         }
 
+        #[cfg(feature = "plugin-email")]
         "flag_email" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
@@ -5962,6 +6005,7 @@ fn wiki_summary_json(w: &wiki_proto::WikiSummary) -> Value {
     })
 }
 
+#[cfg(feature = "plugin-email")]
 /// The sender identity for a draft: the account's own address.
 fn account_addr(org: &crate::OrgAppState, account: &str) -> Result<email_proto::Addr, ToolFailure> {
     use email_proto::EmailSync as _;
@@ -5977,10 +6021,12 @@ fn account_addr(org: &crate::OrgAppState, account: &str) -> Result<email_proto::
     })
 }
 
+#[cfg(feature = "plugin-email")]
 fn bare_addr(email: String) -> email_proto::Addr {
     email_proto::Addr { name: None, email }
 }
 
+#[cfg(feature = "plugin-email")]
 /// The `kind` + `id` pair every link tool takes.
 ///
 /// `kind` stays free-form on the wire — a new entity type shouldn't
@@ -6007,6 +6053,7 @@ fn link_target(args: &Value, acting_org: &str) -> Result<email_proto::LinkTarget
     })
 }
 
+#[cfg(feature = "plugin-email")]
 fn link_json(l: &email_proto::MessageLink) -> Value {
     json!({
         "message_id": l.message_id,
@@ -6019,6 +6066,7 @@ fn link_json(l: &email_proto::MessageLink) -> Value {
     })
 }
 
+#[cfg(feature = "plugin-email")]
 /// Email backend errors, with the one common capability gap named
 /// instead of debug-dumped.
 fn email_err(e: &email_proto::EmailSyncError) -> ToolFailure {
@@ -6219,6 +6267,7 @@ fn milestone_json(m: &milestone::Milestone) -> Value {
     })
 }
 
+#[cfg(feature = "plugin-scheduling")]
 fn day_plan_json(p: &scheduling_proto::DayPlan) -> Value {
     let hhmm = |t: scheduling_proto::TimeOfDay| format!("{:02}:{:02}", t.hours(), t.minutes());
     json!({
@@ -6234,6 +6283,7 @@ fn day_plan_json(p: &scheduling_proto::DayPlan) -> Value {
     })
 }
 
+#[cfg(feature = "plugin-scheduling")]
 fn booking_json(b: &scheduling_proto::Booking) -> Value {
     json!({
         "id": b.id.0,
@@ -6247,6 +6297,7 @@ fn booking_json(b: &scheduling_proto::Booking) -> Value {
     })
 }
 
+#[cfg(feature = "plugin-contacts")]
 fn contact_json(c: &contacts_proto::Contact) -> Value {
     json!({
         "id": c.id,
@@ -6258,6 +6309,7 @@ fn contact_json(c: &contacts_proto::Contact) -> Value {
     })
 }
 
+#[cfg(feature = "plugin-email")]
 fn envelope_json(e: &email_proto::Envelope) -> Value {
     let addr = |a: &email_proto::Addr| match &a.name {
         Some(n) => format!("{n} <{}>", a.email),
@@ -6932,6 +6984,7 @@ mod tests {
         assert!(required_str(&args, "blank").is_err());
     }
 
+    #[cfg(feature = "plugin-email")]
     #[test]
     fn a_link_target_names_a_kind_the_reverse_lookup_can_find() {
         let Ok(ok) = link_target(
@@ -6968,6 +7021,7 @@ mod tests {
         assert!(msg.contains("task, project, note, person"), "{msg}");
     }
 
+    #[cfg(feature = "plugin-email")]
     #[test]
     fn a_link_reports_both_ends_and_who_made_it() {
         let row = link_json(&email_proto::MessageLink {
@@ -6993,6 +7047,7 @@ mod tests {
         assert_eq!(row["tags"][0], "invoice");
     }
 
+    #[cfg(feature = "plugin-email")]
     #[test]
     fn every_mail_filing_tool_belongs_to_the_email_plugin() {
         // If one of these were mis-tagged it would stay visible in an

@@ -44,9 +44,13 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use org_proto::{Shelf, Tier};
+use org_proto::Shelf;
+#[cfg(feature = "plugin-wiki")]
+use org_proto::Tier;
 use tracing::Instrument;
+#[cfg(feature = "plugin-wiki")]
 use vault_proto::VaultEvent;
+#[cfg(feature = "plugin-wiki")]
 use wiki_proto::WikiEvent;
 
 /// The vault-id prefix that marks a wiki root.
@@ -78,6 +82,7 @@ pub struct ShelfRegistry {
     sync: vault::Backend,
     graph: vault::GraphBackend,
     collab: vault_collab::VaultCollab,
+    #[cfg(feature = "plugin-wiki")]
     wiki: Option<wiki_live::WikiBackend>,
     watchers: Arc<Mutex<Vec<vault::sync::WatcherHandle>>>,
     /// Watchers still starting (see [`Self::attach`]).
@@ -97,6 +102,7 @@ impl ShelfRegistry {
             sync,
             graph,
             collab,
+            #[cfg(feature = "plugin-wiki")]
             wiki: None,
             watchers: Arc::new(Mutex::new(Vec::new())),
             starting: Arc::new(Mutex::new(Vec::new())),
@@ -123,6 +129,7 @@ impl ShelfRegistry {
     /// exactly like any other and simply announces nothing — which is
     /// the correct behaviour in a build that has no wiki UI to
     /// announce to.
+    #[cfg(feature = "plugin-wiki")]
     #[must_use]
     pub fn with_wiki(mut self, wiki: wiki_live::WikiBackend) -> Self {
         self.wiki = Some(wiki);
@@ -183,6 +190,7 @@ impl ShelfRegistry {
         // External writes — a service, the CLI, an ingest, a person
         // with vim — merge into whichever documents are open.
         self.collab.watch_vault(&id);
+        #[cfg(feature = "plugin-wiki")]
         if shelf.tier() == Tier::Wiki {
             self.spawn_wiki_bridge(shelf.name(), &id).await;
         }
@@ -231,6 +239,7 @@ impl ShelfRegistry {
     /// an editor save. A write through `Pages::write_page` announces
     /// itself already and is seen again here through the disk watcher;
     /// the duplicate is a second refetch, not a second write.
+    #[cfg(feature = "plugin-wiki")]
     async fn spawn_wiki_bridge(&self, slug: &str, id: &str) {
         let Some(wiki) = self.wiki.clone() else {
             return;
@@ -270,6 +279,7 @@ impl ShelfRegistry {
     /// The `create_wiki` hook: register a wiki made while the server
     /// runs, from the dispatcher's thread, by handing the async attach
     /// to `handle`.
+    #[cfg(feature = "plugin-wiki")]
     #[must_use]
     pub fn created_hook(
         &self,
@@ -322,8 +332,10 @@ impl ShelfRegistry {
 /// web editor saves a wiki page as `wiki:<slug>` over `VaultSync`, and
 /// joins its live session over the collab lane, and without this guard
 /// both were a way around the rule for anyone who could open the page.
+#[cfg(feature = "plugin-wiki")]
 pub struct WikiEditLane(pub wiki_live::WikiBackend);
 
+#[cfg(feature = "plugin-wiki")]
 impl vault::WriteGuard for WikiEditLane {
     fn check(&self, vault_id: &str, path: &str, principal: Option<&str>) -> Result<(), String> {
         // Not a wiki, or the server acting on its own behalf (the

@@ -95,7 +95,6 @@ pub mod service_units;
 pub mod share;
 pub mod share_guest;
 pub mod sharing;
-#[cfg(feature = "plugin-wiki")]
 pub mod shelves;
 pub mod snapshot;
 mod starter;
@@ -337,10 +336,13 @@ pub struct OrgAppState {
     pub agent_tasks: agent_tasks::Store,
     /// The runner registry — who can execute agent work, what they
     /// can do, and whether they are still alive.
+    #[cfg(feature = "plugin-agent")]
     pub agent_runners: agent_runners::Store,
     /// Run records — every attempt at every ticket.
+    #[cfg(feature = "plugin-agent")]
     pub agent_runs: agent_runners::RunStore,
     /// The grill queue — questions agents are waiting on.
+    #[cfg(feature = "plugin-agent")]
     pub agent_questions: agent_runners::QuestionStore,
     /// Codex agent backend — in-process session registry + turn
     /// dispatch. Hosts the `Sessions` + `TurnDispatch` vox services
@@ -2279,7 +2281,6 @@ pub(crate) async fn build_org_state(
             resources,
             #[cfg(feature = "plugin-wiki")]
             wiki,
-            #[cfg(feature = "plugin-wiki")]
             shelf_registry,
             #[cfg(feature = "plugin-wiki")]
             subscriptions,

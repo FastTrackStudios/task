@@ -45,10 +45,13 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(feature = "plugin-agent")]
 use agent_proto::event::{AgentEvent, AgentEventEnvelope};
+#[cfg(feature = "plugin-git")]
 use git_proto::GitEvent;
 use notify::{DeliveryChannel, InApp, NewNotification, Store, Webhook};
 use notify_proto::{NotifyKind, NotifySource};
+#[cfg(feature = "plugin-scheduling")]
 use scheduling_proto::{Booking, BookingStatus, SchedulingEvent};
 use task::model::TaskInfo;
 use task::service::TaskEvent;
@@ -188,6 +191,7 @@ fn spawn_org(org: &Arc<OrgAppState>, scope: Arc<architect::Scope>) {
     }
 
     // Agent rule — only when the agent plugin is mounted.
+    #[cfg(feature = "plugin-agent")]
     if org.plugins.contains("agent") {
         let subscribe = {
             let local = Arc::clone(&local);
@@ -211,6 +215,7 @@ fn spawn_org(org: &Arc<OrgAppState>, scope: Arc<architect::Scope>) {
     }
 
     // Booking rule — only when the scheduling plugin is mounted.
+    #[cfg(feature = "plugin-scheduling")]
     if org.plugins.contains("scheduling") {
         let cache: Arc<Mutex<HashMap<String, BookingStatus>>> = Arc::default();
         let subscribe = {
@@ -259,6 +264,7 @@ fn spawn_org(org: &Arc<OrgAppState>, scope: Arc<architect::Scope>) {
 
     // Forge rules — only when the forge plugin is mounted. Two hubs,
     // one rule fn: both streams carry `GitEvent`.
+    #[cfg(feature = "plugin-git")]
     if org.plugins.contains("git") {
         for (what, issues) in [("forge-issues", true), ("forge-reviews", false)] {
             let subscribe = {
@@ -864,6 +870,7 @@ fn task_rule(cache: &mut HashMap<Uuid, TaskSnapshot>, ev: TaskEvent) -> Option<N
 /// Agent turn finished / errored. A routine run is a turn on its
 /// routine's session, so it lands here too. The actor is the agent —
 /// exactly the "tell me when it's done" case.
+#[cfg(feature = "plugin-agent")]
 fn agent_rule(env: &AgentEventEnvelope) -> Option<NewNotification> {
     let source = |session: &str| NotifySource {
         service: "agent".into(),
@@ -897,6 +904,7 @@ fn agent_rule(env: &AgentEventEnvelope) -> Option<NewNotification> {
 /// Booking landed / cancelled. First sight of an id (post-seed) is a
 /// creation; a known id flipping to `Cancelled` is a cancellation;
 /// every other status change (confirm, complete, no-show) is quiet.
+#[cfg(feature = "plugin-scheduling")]
 fn booking_rule(
     cache: &mut HashMap<String, BookingStatus>,
     ev: SchedulingEvent,
@@ -936,6 +944,7 @@ fn booking_rule(
 /// "assigned to you" / "review requested" granularity waits on richer
 /// events; these fire on the writes this server commits plus whatever
 /// the poll loop publishes.
+#[cfg(feature = "plugin-git")]
 fn forge_rule(ev: &GitEvent) -> Option<NewNotification> {
     let source = |repo: &git_proto::RepoId, entity: String| NotifySource {
         service: "forge".into(),
@@ -1032,6 +1041,7 @@ mod tests {
         assert!(!cache.contains_key(&id2));
     }
 
+    #[cfg(feature = "plugin-scheduling")]
     #[test]
     fn booking_rule_first_sight_and_cancellation() {
         let mut cache = HashMap::new();
@@ -1077,6 +1087,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "plugin-agent")]
     #[test]
     fn agent_rule_turn_endings_only() {
         let fin = AgentEventEnvelope {
