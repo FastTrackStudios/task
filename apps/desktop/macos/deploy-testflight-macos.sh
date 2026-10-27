@@ -118,6 +118,16 @@ fi
 # shellcheck disable=SC2086
 APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
 [ -n "$APP" ] && [ -d "$APP" ] || { echo "ERROR: build produced no app"; tail -30 /tmp/task-macos-build.log; exit 1; }
+# A failed dx build still leaves the bundle skeleton with an empty
+# Contents/MacOS, so the .app alone proves nothing: v26.10.6 shipped such a
+# shell to App Store Connect, which refused it ("Bad Bundle Executable",
+# 90259). The real check is the main executable (as in build-dmg.sh).
+EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[ -n "$EXE" ] && [ -x "$APP/Contents/MacOS/$EXE" ] || {
+    echo "ERROR: dx build failed: $APP has no executable" >&2
+    grep -E '(^|INFO  )error' -A8 /tmp/task-macos-build.log | head -60 >&2 || tail -40 /tmp/task-macos-build.log >&2
+    exit 1
+}
 PLIST="$APP/Contents/Info.plist"
 echo "=== app bundle: $APP ==="
 
