@@ -54,6 +54,12 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 COMMON_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 log="$COMMON_DIR/ci-local.log"
+# git runs hooks with GIT_DIR, the index etc. exported for this repo; a
+# check that makes its own repo (the release sandbox) would write into
+# this one instead (STA-527). From the top level, plain discovery finds it.
+cd "$REPO_ROOT"
+# shellcheck disable=SC2046 # one variable name per word
+unset $(git rev-parse --local-env-vars)
 
 # Which commits a green run at HEAD vouches for: the pushed one, plus every
 # open layer of the gh stack HEAD belongs to that HEAD contains. One run on
