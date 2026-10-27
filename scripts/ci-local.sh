@@ -20,6 +20,11 @@
 # Order is the Justfile's: the test build does the codegen clippy reuses.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+# Under the pre-push hook git exports GIT_DIR, the index etc.; from the
+# top level plain discovery finds the same repo, and nothing below (the
+# release sandbox, tests that make their own repos) inherits them (STA-527).
+# shellcheck disable=SC2046 # one variable name per word
+unset $(git rev-parse --local-env-vars)
 
 if [ "${1:-}" = "--post" ]; then
   shift
