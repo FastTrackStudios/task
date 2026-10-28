@@ -126,7 +126,10 @@ root there. Asking again returns the same root, so an app may ask on every
 start. A directory that exists and is not a root is refused — creating is never
 adopting by accident — and the names the backend keeps its own bookkeeping
 under are reserved. Anyone whose role writes in the org may create a root; a
-caller holding only grants may not.
+caller holding only grants may not. The same request can name one of the org's
+granted Storage Locations instead of the files area (a media volume): the root
+is made under that location's grant prefix, by the location's id — or, with
+none named, on the org's one location — and still never by a server path.
 
 ---
 

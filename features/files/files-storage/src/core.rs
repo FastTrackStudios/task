@@ -505,6 +505,15 @@ impl StorageCore {
     /// grants, which is the single-machine default: only the org's own
     /// directory is permitted, exactly as before locations existed.
     pub fn live_tree_boundaries(&self, org: &str) -> Vec<PathBuf> {
+        self.live_tree_locations(org)
+            .into_iter()
+            .map(|(_, dir)| dir)
+            .collect()
+    }
+
+    /// [`Self::live_tree_boundaries`], each with the location it is on:
+    /// what a client creating a root names a location by.
+    pub fn live_tree_locations(&self, org: &str) -> Vec<(Uuid, PathBuf)> {
         self.registry.read(|state| {
             state
                 .locations
@@ -519,7 +528,7 @@ impl StorageCore {
                     // escapes the location — the same rule `place_root`
                     // enforces via `safe_relative`.
                     let prefix = files_store::safe_relative(&grant.path_prefix).ok()?;
-                    Some(Path::new(&location.root_path).join(prefix))
+                    Some((location.id, Path::new(&location.root_path).join(prefix)))
                 })
                 .collect()
         })

@@ -306,6 +306,16 @@ pub trait LocationBoundaries: Send + Sync {
     /// Absolute directories that are permitted, in addition to the org
     /// directory. Empty means "no locations" — the default everywhere.
     fn permitted(&self) -> Vec<PathBuf>;
+
+    /// The same directories, each with the Storage Location it is on —
+    /// what [`RootsService::create_on`] resolves a location id against.
+    /// Empty by default: an implementation that cannot name its
+    /// locations still confines, it just offers none to create on.
+    ///
+    /// [`RootsService::create_on`]: files_proto::service::roots::RootsService::create_on
+    fn located(&self) -> Vec<(uuid::Uuid, PathBuf)> {
+        Vec::new()
+    }
 }
 
 #[derive(Clone, architect::HasDispatcher)]
@@ -436,6 +446,31 @@ impl std::fmt::Debug for FilesBackend {
         f.debug_struct("FilesBackend")
             .field("data_dir", &self.data_dir)
             .finish_non_exhaustive()
+    }
+}
+
+/// Which of `located` (location id, its directory) `wanted` names: that
+/// one, or for `None` the only one there is. The refusal says why, naming
+/// what there is to choose from.
+fn pick_location(located: &[(Uuid, PathBuf)], wanted: Option<Uuid>) -> Result<&Path, String> {
+    match (wanted, located) {
+        (Some(id), _) => located
+            .iter()
+            .find(|(at, _)| *at == id)
+            .map(|(_, dir)| dir.as_path())
+            .ok_or_else(|| {
+                format!("no Storage Location {id} is granted to this org for live trees")
+            }),
+        (None, [(_, dir)]) => Ok(dir.as_path()),
+        (None, []) => Err("this org holds no Storage Location grant for live trees".to_owned()),
+        (None, many) => Err(format!(
+            "this org may create roots on {} Storage Locations ({}); name one",
+            many.len(),
+            many.iter()
+                .map(|(id, _)| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
     }
 }
 
@@ -828,12 +863,52 @@ impl FilesBackend {
         use files_proto::error::FilesFault;
         const RESERVED: [&str; 4] = ["uploads", "federation-blobs", "stores", "roots.json"];
         let first = rel.as_str().split('/').next().unwrap_or_default();
-        if first.starts_with('.') || RESERVED.contains(&first) {
+        if RESERVED.contains(&first) {
             return Ok(Err(FilesFault::invalid(format!(
                 "`{first}` is reserved in the files area; choose another directory"
             ))));
         }
-        let dir = self.confine_root.join(rel.as_str());
+        let area = self.confine_root.clone();
+        self.create_fresh_root_in(&area, rel, name, flavor)
+    }
+
+    /// The directory of the Storage Location `location_id` names (or the
+    /// org's one location, for `None`) that this org may make roots in —
+    /// `RootsService::create_on`'s base.
+    pub(crate) fn location_area(
+        &self,
+        location_id: Option<uuid::Uuid>,
+    ) -> Result<PathBuf, files_proto::error::FilesFault> {
+        use files_proto::error::FilesFault;
+        let located = self
+            .boundaries
+            .as_ref()
+            .map(|b| b.located())
+            .unwrap_or_default();
+        pick_location(&located, location_id)
+            .map(Path::to_path_buf)
+            .map_err(|why| FilesFault::invalid(why))
+    }
+
+    /// [`Self::create_fresh_root`] under `area`: make `<area>/<rel>` and
+    /// adopt it, or return the root already there. `area` is the files
+    /// area or a granted location's directory; the result is confined
+    /// either way.
+    pub(crate) fn create_fresh_root_in(
+        &self,
+        area: &Path,
+        rel: &files_proto::path::RootPath,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<Result<(FileRootInfo, bool), files_proto::error::FilesFault>, Error> {
+        use files_proto::error::FilesFault;
+        let first = rel.as_str().split('/').next().unwrap_or_default();
+        if first.starts_with('.') {
+            return Ok(Err(FilesFault::invalid(format!(
+                "`{first}` is hidden; choose another directory"
+            ))));
+        }
+        let dir = area.join(rel.as_str());
         if dir.exists() {
             let canonical = self.confine(&dir)?;
             if let Some(existing) = self

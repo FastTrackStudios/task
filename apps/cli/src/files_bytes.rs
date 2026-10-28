@@ -123,6 +123,7 @@ pub(crate) async fn ensure_root(
     dir: &str,
     name: Option<String>,
     flavor: RootFlavor,
+    location: Option<Option<uuid::Uuid>>,
     json: bool,
 ) -> eyre::Result<()> {
     let files = files_at(vox_url).await?;
@@ -133,10 +134,11 @@ pub(crate) async fn ensure_root(
             .unwrap_or(dir)
             .to_owned()
     });
-    let root = files
-        .ensure_root(dir, &name, flavor)
-        .await
-        .map_err(|e| eyre::eyre!("ensure root: {e}"))?;
+    let root = match location {
+        None => files.ensure_root(dir, &name, flavor).await,
+        Some(location) => files.ensure_root_on(location, dir, &name, flavor).await,
+    }
+    .map_err(|e| eyre::eyre!("ensure root: {e}"))?;
     if json {
         println!(
             "{}",

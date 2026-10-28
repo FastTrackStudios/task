@@ -82,6 +82,36 @@ fn progress_of(root_id: RootId, a: &Adoption) -> AdoptionProgress {
 }
 
 impl FilesBackend {
+    /// What `create` and `create_on` both check before making anything:
+    /// a name, a caller who may write in the org, and a directory of its
+    /// own. Returns the directory, name and flavor to make it with.
+    async fn creatable(
+        &self,
+        request: CreateRequest,
+    ) -> Result<(RootPath, String, files_proto::model::RootFlavor), FilesFault> {
+        let CreateRequest { dir, name, flavor } = request;
+        if name.trim().is_empty() {
+            return Err(FilesFault::invalid("a root's name may not be empty"));
+        }
+        // A new root is new content, so anyone whose role lets them write
+        // in the org may make one. A person holding only grants — a
+        // client on one folder — may not: minting a root would give them
+        // a place in the org nobody granted.
+        if !crate::lane::caller::baseline(self)
+            .await
+            .contains(&files_proto::service::access::Capability::Write)
+        {
+            return Err(FilesFault::denied("create a root", RootPath::root()));
+        }
+        let rel = RootPath::parse(dir.trim_matches('/'))?;
+        if rel.is_root() {
+            return Err(FilesFault::invalid(
+                "a new root needs a directory of its own, not the area itself",
+            ));
+        }
+        Ok((rel, name, flavor))
+    }
+
     fn adoption_or_complete(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault> {
         // A root with no live adoption was adopted before this process
         // started, or by the legacy path. Reporting `Complete` is the
@@ -292,31 +322,26 @@ impl RootsService for FilesBackend {
 
     // t[impl files.adopt.create] — a root for a client with no server path
     async fn create(&self, request: CreateRequest) -> Result<FileRootInfo, FilesFault> {
-        let CreateRequest { dir, name, flavor } = request;
-        if name.trim().is_empty() {
-            return Err(FilesFault::invalid("a root's name may not be empty"));
-        }
-        // A new root is new content, so anyone whose role lets them write
-        // in the org may make one. A person holding only grants — a
-        // client on one folder — may not: minting a root would give them
-        // a place in the org nobody granted.
-        if !crate::lane::caller::baseline(self)
-            .await
-            .contains(&files_proto::service::access::Capability::Write)
-        {
-            return Err(FilesFault::denied("create a root", RootPath::root()));
-        }
-        let rel = RootPath::parse(dir.trim_matches('/'))?;
-        if rel.is_root() {
-            return Err(FilesFault::invalid(
-                "a new root needs a directory of its own, not the files area itself",
-            ));
-        }
+        let (rel, name, flavor) = self.creatable(request).await?;
         let this = self.clone();
         // A fresh root announces itself: `register_root` publishes
         // `RootEvent::Created`, so nothing is published here.
         let (root, _fresh) =
             crate::lane::blocking(move || this.create_fresh_root(&rel, name, flavor)).await??;
+        Ok(root)
+    }
+
+    async fn create_on(
+        &self,
+        location_id: Option<uuid::Uuid>,
+        request: CreateRequest,
+    ) -> Result<FileRootInfo, FilesFault> {
+        let (rel, name, flavor) = self.creatable(request).await?;
+        let area = self.location_area(location_id)?;
+        let this = self.clone();
+        let (root, _fresh) =
+            crate::lane::blocking(move || this.create_fresh_root_in(&area, &rel, name, flavor))
+                .await??;
         Ok(root)
     }
 

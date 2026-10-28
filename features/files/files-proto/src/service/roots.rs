@@ -122,6 +122,27 @@ pub trait RootsService {
     /// grants on other people's roots may not mint roots of their own.
     async fn create(&self, request: CreateRequest) -> Result<FileRootInfo, FilesFault>;
 
+    /// Make a new, empty root on one of the org's granted Storage
+    /// Locations: `<location>/<grant prefix>/<request.dir>`.
+    ///
+    /// [`Self::create`] for a store that does not belong on the server's
+    /// own disk — a media library on the NAS the org was granted. The
+    /// caller names the location, never a server path: `location_id` is
+    /// a Storage Location's id (`StorageService::list_locations`), or
+    /// `None` for the org's one location that hosts live trees (refused,
+    /// naming them, when it has none or several).
+    ///
+    /// The same rules as [`Self::create`]: idempotent on `dir` (a
+    /// directory that is already a root returns that root), a directory
+    /// that holds anything else is refused with [`FilesFault::Exists`],
+    /// `dir` may not escape the location, and only a caller who may
+    /// write in the org may make one.
+    async fn create_on(
+        &self,
+        location_id: Option<uuid::Uuid>,
+        request: CreateRequest,
+    ) -> Result<FileRootInfo, FilesFault>;
+
     /// Browse the org's files area itself — folders that are roots and
     /// folders that are not yet — so a steward can choose what to adopt.
     /// `path` is relative to the area; `""` lists its top. Confined to

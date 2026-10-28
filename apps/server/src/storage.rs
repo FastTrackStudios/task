@@ -479,6 +479,10 @@ impl files::LocationBoundaries for GrantedBoundaries {
     fn permitted(&self) -> Vec<PathBuf> {
         self.core.live_tree_boundaries(&self.org)
     }
+
+    fn located(&self) -> Vec<(uuid::Uuid, PathBuf)> {
+        self.core.live_tree_locations(&self.org)
+    }
 }
 
 #[cfg(test)]

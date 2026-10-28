@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use files::{FilesBackend, LocationBoundaries};
 use files_proto::RootFlavor;
-use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::roots::{AdoptRequest, CreateRequest, RootsService};
 
 /// A boundary set fixed at construction — the server's implementation
 /// reads a live grant registry, but the rule under test is the same.
@@ -22,6 +22,37 @@ impl LocationBoundaries for Granted {
     fn permitted(&self) -> Vec<PathBuf> {
         self.0.clone()
     }
+
+    fn located(&self) -> Vec<(uuid::Uuid, PathBuf)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, dir)| (location_id(i), dir.clone()))
+            .collect()
+    }
+}
+
+/// The id the `i`th granted directory goes by.
+fn location_id(i: usize) -> uuid::Uuid {
+    uuid::Uuid::from_u128(0x10c4_7100 + i as u128)
+}
+
+async fn create_on(
+    b: &FilesBackend,
+    location: Option<uuid::Uuid>,
+    dir: &str,
+) -> Result<files_proto::FileRootInfo, String> {
+    RootsService::create_on(
+        b,
+        location,
+        CreateRequest {
+            dir: dir.to_owned(),
+            name: dir.to_owned(),
+            flavor: RootFlavor::Media,
+        },
+    )
+    .await
+    .map_err(|e| format!("{e:?}"))
 }
 
 struct Fixture {
@@ -151,4 +182,67 @@ async fn a_traversal_out_of_a_granted_location_is_still_refused() {
     create_at(&b, &escape, "escape")
         .await
         .expect_err("`..` must not escape a granted location");
+}
+
+#[tokio::test]
+async fn a_client_with_no_server_path_makes_a_root_on_its_granted_location() {
+    // What an app uploading a library needs: a root on the org's media
+    // volume, asked for by where in it, never by a path on the server.
+    let f = fixture();
+    let b = backend(&f, vec![f.location.clone()]);
+
+    let made = create_on(&b, None, "session/drive-to-la")
+        .await
+        .expect("the org's one location hosts it");
+    let at = PathBuf::from(made.path.clone().expect("a live tree"));
+    assert_eq!(
+        at,
+        f.location
+            .join("session/drive-to-la")
+            .canonicalize()
+            .expect("made")
+    );
+
+    let again = create_on(&b, Some(location_id(0)), "session/drive-to-la")
+        .await
+        .expect("asking again is finding it");
+    assert_eq!(again.id, made.id, "the same root, not a second");
+    assert_eq!(RootsService::list(&b).await.expect("list").len(), 1);
+}
+
+#[tokio::test]
+async fn creating_on_a_location_refuses_what_create_refuses_and_an_unnamed_choice() {
+    let f = fixture();
+    let none = backend(&f, vec![]);
+    let err = create_on(&none, None, "session/a")
+        .await
+        .expect_err("no grant");
+    assert!(err.contains("no Storage Location grant"), "{err}");
+
+    let other = f.elsewhere.clone();
+    let two = backend(&f, vec![f.location.clone(), other]);
+    let err = create_on(&two, None, "session/a")
+        .await
+        .expect_err("which one?");
+    assert!(err.contains("name one"), "{err}");
+    create_on(&two, Some(location_id(1)), "session/a")
+        .await
+        .expect("named, it is made");
+    let err = create_on(&two, Some(uuid::Uuid::nil()), "session/b")
+        .await
+        .expect_err("not granted");
+    assert!(err.contains("granted"), "{err}");
+
+    let one = backend(&f, vec![f.location.clone()]);
+    std::fs::create_dir_all(f.location.join("taken")).expect("mkdir");
+    let err = create_on(&one, None, "taken")
+        .await
+        .expect_err("not a root");
+    assert!(err.contains("Exists"), "{err}");
+    create_on(&one, None, "../escape")
+        .await
+        .expect_err("`..` is no directory of its own");
+    create_on(&one, None, ".fts-files")
+        .await
+        .expect_err("hidden");
 }

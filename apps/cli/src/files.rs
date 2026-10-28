@@ -329,6 +329,10 @@ pub(crate) enum FilesRootCmd {
         name: Option<String>,
         #[arg(long, value_enum, default_value_t = FlavorArg::Media)]
         flavor: FlavorArg,
+        /// On a granted Storage Location instead of the files area: its
+        /// id, or nothing for the org's one location (`--location`).
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        location: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -864,8 +868,20 @@ async fn run_files_root(cmd: FilesRootCmd, vox_url: &str) -> eyre::Result<()> {
             dir,
             name,
             flavor,
+            location,
             json,
-        } => crate::files_bytes::ensure_root(vox_url, &dir, name, flavor.into(), json).await?,
+        } => {
+            let location = match location.as_deref() {
+                None => None,
+                Some("") => Some(None),
+                Some(id) => Some(Some(
+                    id.parse::<uuid::Uuid>()
+                        .map_err(|e| eyre::eyre!("--location {id}: {e}"))?,
+                )),
+            };
+            crate::files_bytes::ensure_root(vox_url, &dir, name, flavor.into(), location, json)
+                .await?;
+        }
         FilesRootCmd::List { json } => {
             let roots = roots
                 .list()
