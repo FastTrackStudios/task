@@ -92,6 +92,16 @@ pub fn anchor_within(held: Option<&str>, place: &str) -> bool {
         })
 }
 
+/// Client-side optimistic cache identity (`architect::Store`): keyed by
+/// the stable `id`.
+#[cfg(feature = "atom")]
+impl architect::StoreEntity for Thread {
+    type Key = uuid::Uuid;
+    fn key(&self) -> uuid::Uuid {
+        self.id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,15 +120,5 @@ mod tests {
         assert!(!anchor_within(Some("entries/ab"), "entries/a"));
         assert!(!anchor_within(None, "entries/a"));
         assert!(anchor_within(None, ""));
-    }
-}
-
-/// Client-side optimistic cache identity (`architect::Store`): keyed by
-/// the stable `id`.
-#[cfg(feature = "atom")]
-impl architect::StoreEntity for Thread {
-    type Key = uuid::Uuid;
-    fn key(&self) -> uuid::Uuid {
-        self.id
     }
 }
