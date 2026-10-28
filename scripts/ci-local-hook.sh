@@ -36,6 +36,14 @@ if [ "${NO_LOCAL_CI:-0}" = "1" ]; then
   exit 0
 fi
 
+# Builds run only in the canonical checkout (STA-567). A linked worktree has
+# no warm target/, so local CI there would be a cold build of the workspace.
+if [ "$(git rev-parse --absolute-git-dir)" != "$(git rev-parse --path-format=absolute --git-common-dir)" ]; then
+  echo >&2 "local-ci: this is a linked worktree; not building here (no warm target). The PR gets no Local CI status (not required)."
+  echo >&2 "          Run it in the canonical checkout instead: gate-submit <ISSUE> <canonical> <script> --sha <sha>."
+  exit 0
+fi
+
 sha="${PRE_COMMIT_TO_REF:-}"
 [ -n "$sha" ] || { echo >&2 "local-ci: no pushed commit (PRE_COMMIT_TO_REF); nothing to vouch for"; exit 0; }
 sha="$(git rev-parse "$sha")"
