@@ -6,7 +6,8 @@
 # Runs on airlock's `task-release-mac` pool, the same three runners as the
 # iOS workflow and the macOS node binary, so a release's Apple builds run
 # side by side instead of queueing behind each other. Each runner has its
-# own work folder (its own target/), and the build keychain is only read.
+# own work folder; target/ is airlock's shared macOS one (both jobs here),
+# and the build keychain is only read.
 #
 # The build script is apps/desktop/macos/deploy-testflight-macos.sh
 # (keychain unlock → ASC-API provisioning profile → dx build → App-Sandbox
@@ -127,6 +128,18 @@ jobs:
           clean: false
           fetch-depth: 0
 
+      # airlock's runners share one target dir per build kind
+      # (TASK_CI_TARGET_ROOT in each runner's .env), so a job that lands on
+      # another runner still builds warm. Unset: target/ stays in-tree.
+      - name: Shared target dir
+        run: |
+          root="${TASK_CI_TARGET_ROOT:-}"
+          [ -n "$root" ] || { echo "TASK_CI_TARGET_ROOT unset: in-tree target/"; exit 0; }
+          mkdir -p "$root/macos"
+          if [ -d target ] && [ ! -L target ]; then rm -rf target; fi
+          ln -sfn "$root/macos" target
+          echo "target -> $root/macos"
+
       # Releases commit no version: on a release tag, write the tag's into
       # this checkout (the next checkout's --force discards it again).
       - name: Stamp the release version
@@ -198,8 +211,8 @@ jobs:
           export PATH="/opt/homebrew/bin:$PATH"
           bash scripts/apple-release.sh note "macOS (TestFlight)" "$MARKETING_VER" "$BUILD_NO"
 
-      # target/ persists (clean: false) and is shared with task-ios. Keep
-      # the latest build of each kind (macos, ios, desktop-release); the
+      # target/ persists and is shared by both macOS jobs on every runner.
+      # Keep the latest build of each kind (macos, desktop-release); the
       # 2 h protection covers a build of another kind still in flight.
       - name: Bound the target dir
         if: ${{ always() && !inputs.dry_run }}
@@ -207,7 +220,7 @@ jobs:
           command -v python3 >/dev/null || exit 0
           python3 scripts/target-sweep.py sweep --protect-hours 2 || true
           python3 scripts/target-sweep.py status || true
-          du -sh target || true
+          du -sh target/ || true
 
       - name: Summary
         if: always()
@@ -315,6 +328,19 @@ jobs:
         with:
           clean: false
           fetch-depth: 0
+
+      # airlock's runners share one target dir per build kind
+      # (TASK_CI_TARGET_ROOT in each runner's .env), so a job that lands on
+      # another runner still builds warm. Unset: target/ stays in-tree.
+      - name: Shared target dir
+        if: ${{ steps.plan.outputs.skip != 'true' }}
+        run: |
+          root="${TASK_CI_TARGET_ROOT:-}"
+          [ -n "$root" ] || { echo "TASK_CI_TARGET_ROOT unset: in-tree target/"; exit 0; }
+          mkdir -p "$root/macos"
+          if [ -d target ] && [ ! -L target ]; then rm -rf target; fi
+          ln -sfn "$root/macos" target
+          echo "target -> $root/macos"
           ref: ${{ steps.plan.outputs.ref }}
 
       # Releases commit no version: write the tag's into this checkout, so

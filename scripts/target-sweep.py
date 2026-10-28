@@ -49,11 +49,18 @@ Two policies, one tool:
 
 The target dir is $CARGO_TARGET_DIR, else `--target-dir`, else ./target
 at the workspace root. Manifests live in <target>/.sweep/<kind>/.
+
+`run` and `sweep` hold <target>/.sweep/lock, so one target dir serves one
+of them at a time. airlock's release runners share a target dir per build
+kind: cargo's own lock covers compiling, but not dx bundling, the atime
+bookkeeping here, or a sweep under a build still in flight.
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -177,6 +184,20 @@ def manifests(target: Path) -> dict[str, list[Path]]:
             if kind.is_dir():
                 out[kind.name] = sorted(kind.glob("*.json"))
     return out
+
+
+@contextlib.contextmanager
+def target_lock(target: Path):
+    d = target / ".sweep"
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "lock", "w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log(f"waiting for {d / 'lock'}: another build is using {target}")
+            fcntl.flock(f, fcntl.LOCK_EX)
+            log("lock acquired")
+        yield
 
 
 def cmd_run(a) -> int:
@@ -376,7 +397,10 @@ def main() -> int:
     a = p.parse_args()
     if a.cmd == "run" and a.command and a.command[0] == "--":
         a.command = a.command[1:]
-    return {"run": cmd_run, "sweep": cmd_sweep, "status": cmd_status}[a.cmd](a)
+    if a.cmd == "status":
+        return cmd_status(a)
+    with target_lock(find_target(a.target_dir)):
+        return {"run": cmd_run, "sweep": cmd_sweep}[a.cmd](a)
 
 
 if __name__ == "__main__":
