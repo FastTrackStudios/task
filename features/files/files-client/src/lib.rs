@@ -7,7 +7,7 @@
 //!
 //! | want | call |
 //! |---|---|
-//! | somewhere to keep things | [`FilesClient::ensure_root`] |
+//! | somewhere to keep things | [`FilesClient::ensure_root`] (or [`FilesClient::ensure_root_on`] a granted Storage Location) |
 //! | save bytes, safely | [`FilesClient::put`] / [`FilesClient::put_reader`] with [`Save`] |
 //! | read them back | [`FilesClient::get`] / [`FilesClient::read_range`] / [`FilesClient::read_to`] |
 //! | follow a manifest's reference | [`FilesClient::resolve`] / [`FilesClient::get_ref`] |
@@ -225,6 +225,31 @@ impl FilesClient {
                 name: name.to_string(),
                 flavor,
             })
+            .await?)
+    }
+
+    /// [`Self::ensure_root`] on one of the org's granted Storage
+    /// Locations instead of its files area: `<location>/<prefix>/<dir>`.
+    /// `location` is the location's id, or `None` for the org's one
+    /// location that hosts live trees. Safe to call again: the root that
+    /// is there comes back.
+    pub async fn ensure_root_on(
+        &self,
+        location: Option<uuid::Uuid>,
+        dir: &str,
+        name: &str,
+        flavor: RootFlavor,
+    ) -> Result<FileRootInfo> {
+        Ok(self
+            .roots
+            .create_on(
+                location,
+                CreateRequest {
+                    dir: dir.to_string(),
+                    name: name.to_string(),
+                    flavor,
+                },
+            )
             .await?)
     }
 

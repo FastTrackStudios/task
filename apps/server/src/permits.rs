@@ -437,6 +437,9 @@ table!(FILES_ROOTS, "files-roots", "files/**", [
     // Additive like `adopt`; the lane itself refuses callers whose role
     // does not write.
     wr "create",
+    // `create_on` is `create` on a granted Storage Location instead of
+    // the files area: the same new, empty directory, adopted.
+    wr "create_on",
     // `wa`, matching `release`: it changes which roots this org's
     // servers hold, and although it moves no byte and destroys nothing,
     // "who hosts what" is the same class of fact as "who can find

@@ -1684,12 +1684,11 @@ async fn live_files(
         .filter(|i| i.node.kind == collection::NodeKind::Song)
         .filter_map(|item| {
             let slug = item.node.id.clone();
-            let dir = format!("session/{slug}");
-            let root = roots.iter().find(|r| {
-                r.path
-                    .as_deref()
-                    .is_some_and(|p| p.trim_end_matches('/').ends_with(&dir))
-            })?;
+            let root = roots
+                .iter()
+                .filter_map(|r| song_root_rank(r.path.as_deref(), &r.name, &slug).map(|n| (n, r)))
+                .min_by_key(|(n, _)| *n)?
+                .1;
             Some((slug, root.id))
         })
         .collect();
@@ -2175,6 +2174,76 @@ fn urlencoding_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// How well a root (its live tree's `path`, its `name`) is the session of
+/// the song `slug`, best first — `None` when it is not one. The rule
+/// Studio's library finds a song's root by (`session::library::
+/// session_root_for`): a root at `…/session/<slug>` (what `studio
+/// ingest` makes), else one whose folder is named for the song, a
+/// track number before it or not (`Projects/Crescendum/05 Empty Focus`,
+/// how albums were uploaded before), else one whose own name is the
+/// song's title. A root with no tree here is never one.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn song_root_rank(path: Option<&str>, name: &str, slug: &str) -> Option<u8> {
+    let path = path?.trim_end_matches('/');
+    let mut segments = path.rsplit(['/', '\\']);
+    let folder = segments.next()?;
+    if folder == slug && segments.next() == Some("session") {
+        return Some(0);
+    }
+    let named = |s: &str| resources::asset::slug_for(&[], "", without_track_number(s)) == slug;
+    if named(folder) {
+        return Some(1);
+    }
+    named(name).then_some(2)
+}
+
+/// `name` without a leading track number (`05 `, `05 - `, `05_`); as it
+/// is when it has none or is only a number.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn without_track_number(name: &str) -> &str {
+    let name = name.trim();
+    let digits = name.len() - name.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 || digits > 3 {
+        return name;
+    }
+    let rest = name[digits..].trim_start_matches([' ', '-', '_', '.']);
+    if rest.is_empty() || rest.len() == name.len() - digits {
+        name
+    } else {
+        rest
+    }
+}
+
+#[cfg(all(test, feature = "plugin-fasttrackstudio"))]
+mod song_root_tests {
+    use super::song_root_rank;
+
+    #[test]
+    fn a_song_s_session_root_is_found_before_an_album_folder_named_for_it() {
+        let rank = |path: &str, name: &str| song_root_rank(Some(path), name, "empty-focus");
+        assert_eq!(
+            rank("/mnt/storage/Task/fta/session/empty-focus", "x"),
+            Some(0)
+        );
+        assert_eq!(
+            rank(
+                "/mnt/storage/Task/fta/Projects/Crescendum/05 Empty Focus",
+                "x"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            rank(
+                "/mnt/storage/Task/fta/Projects/Crescendum/ef",
+                "Empty focus"
+            ),
+            Some(2)
+        );
+        assert_eq!(rank("/mnt/storage/Task/fta/xsession/other", "Other"), None);
+        assert_eq!(song_root_rank(None, "Empty Focus", "empty-focus"), None);
+    }
 }
 
 #[cfg(test)]

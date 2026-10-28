@@ -411,12 +411,13 @@ Plugin: `core` — schema stamp: `17f8a666e6a2a9b3`
 
 ## `files-roots` (RootsService)
 
-Plugin: `core` — schema stamp: `ea25ae0da11f5a2d`
+Plugin: `core` — schema stamp: `7850019fd18e8830`
 
 | method | args | permit | notes |
 |---|---|---|---|
 | `adopt` | `request` | `write` on `files/**` | — |
 | `create` | `request` | `write` on `files/**` | — |
+| `create_on` | `location_id`, `request` | `write` on `files/**` | — |
 | `browse_area` | `path` | `write` on `files/**` | — |
 | `resume_adoption` | `root_id` | `write` on `files/**` | — |
 | `pause_adoption` | `root_id` | `write` on `files/**` | — |

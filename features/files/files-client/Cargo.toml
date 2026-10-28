@@ -13,6 +13,8 @@ files-proto = { workspace = true, features = ["vox"] }
 architect = { workspace = true, features = ["vox"] }
 futures = { workspace = true }
 thiserror = { workspace = true }
+# A Storage Location is named by its id (`ensure_root_on`).
+uuid = { workspace = true }
 
 [dev-dependencies]
 files = { workspace = true }
