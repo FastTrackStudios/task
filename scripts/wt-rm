@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# wt-rm — remove a wt-new worktree and its target dir.
+# wt-rm — remove a wt-new worktree.
 #
 #   wt-rm <name> [--force]
 #
-# The target is a reflink clone, so removing it frees only the blocks this
-# worktree wrote itself (its rebuilt units); the canonical copy is untouched.
 # Refuses when the worktree has uncommitted changes unless --force.
 set -euo pipefail
 [ $# -ge 1 ] || { sed -n '2,4p' "$0" >&2; exit 2; }

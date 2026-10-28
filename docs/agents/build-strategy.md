@@ -1,4 +1,4 @@
-# Build strategy: target dirs, worktrees, the build lease
+# Build strategy: one canonical checkout, one warm target
 
 How agents (and the Captain) build Task on THEBATTLESHIP, and why. Every
 number here was measured on THEBATTLESHIP (32 threads, 192 GB RAM, the dev
@@ -11,16 +11,18 @@ drive on btrfs `compress=zstd:1`), Rust 1.98.1, Task @ 145c8c9, October
   build alone keeps the machine at 85% CPU. Five at once took 1446 s
   each; the same five one after another took 1137 s in total. Two at once
   gained 6% throughput and nearly doubled each agent's wait.
-- **Work in your own worktree, seeded from the canonical target by
-  reflink**: `wt-new <card> [base]`, build there, `wt-rm <card>` when the
-  card is done. The seed takes ~4 s for a 95 GB target and costs almost no
-  disk until it diverges, and you rebuild only what your branch changed —
-  no one else's branch switching invalidates your tree.
-- **Never point two checkouts at one target dir** (`CARGO_TARGET_DIR`).
-- **The canonical tree is the seed.** Keep `/run/media/Development/task`
-  at `origin/main`, warm (check + test build). Worktrees from branches on
-  the same release version reuse every dependency and every crate their
-  diff doesn't reach.
+- **Every build runs in the one canonical checkout,**
+  `/run/media/Development/task`, with its in-tree `target/` (Captain,
+  STA-565). Write in a light worktree if you like (`wt-new <card>`, no
+  `target/`), but never build there: check your branch out in the canonical
+  tree, or `gate-submit` the canonical tree with `--sha`.
+- **There is no build lease** (removed in STA-567). Cargo's own
+  build-directory lock serialises builds in the shared `target/`; a second
+  build waits on `Blocking waiting for file lock on build directory`.
+  `gate-submit` runs one gate at a time per tree and refuses a linked
+  worktree.
+- **Never point a second checkout at the target dir** (`CARGO_TARGET_DIR`),
+  and never seed or copy a target into a worktree.
 - Third-party dependencies build **without debuginfo**
   (`[profile.dev.package."*"] debug = false`); our crates keep line tables.
 - Target dirs are bounded by **build kinds** (`scripts/target-sweep.py`):
@@ -56,11 +58,15 @@ rebuild:
 files are *newer* than the target's fingerprints, or *identical* to the
 files it was built from. A target dropped into an older checkout makes
 cargo trust artifacts built from other sources. We saw this happen: crates
-reported `Fresh` that didn't compile. So `wt-new` always checks out,
-syncs mtimes, *then* reflinks the target, and you never re-seed an
-existing worktree: `wt-rm` it and run `wt-new` again.
+reported `Fresh` that didn't compile. This is one more reason worktrees no
+longer get a target.
 
 ## Numbers
+
+These measurements (card t_025e85f1) led to reflink-seeded worktrees,
+which the Captain later dropped (STA-565): each worktree still rebuilt
+what its diff touched under its own fingerprints, and the cache never
+merged back. They still show why one build at a time is the default.
 
 Cold canonical build, from an empty target:
 
@@ -117,37 +123,22 @@ Relinking didn't get faster, because `split-debuginfo = "unpacked"`
 already kept the DWARF out of the link. The win is disk and cold-build
 time.
 
-## The build lease (`build-lease`)
-
-`build-lease` now counts: N slots, set host-wide with `build-lease slots
-N` (stored in `/run/media/Development/.build-lease.slots`). **N is 1** and
-behaves exactly like the old exclusive lease. Slot 0 is the old lease path,
-so existing scripts are unaffected.
-
-Raise N to **2** only when agents build in their own `wt-new` worktrees.
-Two holders in one tree would switch branches under each other's builds,
-and cargo would serialise them on the target lock anyway. 2 is the useful
-maximum: a second slot lets a check or clippy run beside a test build (the
-check leaves most cores idle), but a second test build gains nothing.
-**3 is the safe ceiling** on resources: ~20 GB RAM per test build on top
-of the Captain's desktop, ~20 GB disk per worktree. Above that, every
-build slows down by the same factor.
-
-## Agent workflow (once slots = 2)
+## Agent workflow
 
 ```bash
-wt-new t_1234abcd origin/main -b fix/sta-123-thing    # worktree + warm target, ~10 s
-cd /run/media/Development/wt/t_1234abcd
-build-lease acquire t_1234abcd               # a slot, not the whole host
-nix develop --command just ci
-build-lease release t_1234abcd
+wt-new sta-123 origin/main -b fix/sta-123-thing   # write-only worktree, no target/
+# … write the whole change, commit; no compiling here …
+cd /run/media/Development/task
+git status --porcelain                            # must be empty; else stop and ask
+pgrep -af 'cargo|rustc'                           # wait if someone is building
+git checkout --detach <your-sha>
+nix develop --command cargo check --workspace --all-targets
+git checkout -                                    # put the tree back
+# or, for anything that may wait or outlast your run:
+gate-submit STA-123 /run/media/Development/task ./gate.sh --sha <your-sha>
 # … PR, review, merge …
-wt-rm t_1234abcd                              # frees what this card wrote
+wt-rm sta-123
 ```
-
-The canonical tree is never a card's working copy. A refresh job
-(after each merge to main, under the lease) checks it out at `origin/main`
-and runs check + the test build, so the next `wt-new` starts warm.
 
 ## Bounding target dirs (`scripts/target-sweep.py`)
 
@@ -165,7 +156,7 @@ unit no kind's latest build used.
   cold. (checks.yml's lint, tests and wasm run on GitHub-hosted runners
   with a throwaway `./target` and a rust-cache saved from main, so they
   need no sweep.)
-- **Local trees** (canonical, worktrees): `just sweep-local`, which is
+- **Local trees** (the canonical checkout): `just sweep-local`, which is
   `sweep --keep-days 7 --flycheck-max-gb 40`. The Captain's `dx serve`, the
   IDE and bare `cargo run` aren't wrapped as kinds, so anything any build
   read in the last 7 days stays. Measured on a reflinked canonical copy
