@@ -328,6 +328,7 @@ jobs:
         with:
           clean: false
           fetch-depth: 0
+          ref: ${{ steps.plan.outputs.ref }}
 
       # airlock's runners share one target dir per build kind
       # (TASK_CI_TARGET_ROOT in each runner's .env), so a job that lands on
@@ -341,7 +342,6 @@ jobs:
           if [ -d target ] && [ ! -L target ]; then rm -rf target; fi
           ln -sfn "$root/macos" target
           echo "target -> $root/macos"
-          ref: ${{ steps.plan.outputs.ref }}
 
       # Releases commit no version: write the tag's into this checkout, so
       # the app reports the release (the next checkout's --force discards
