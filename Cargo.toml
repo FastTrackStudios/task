@@ -632,6 +632,10 @@ eyre = "0.6"
 tracing = { version = "0.1", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# A span's OTel parent, set from a W3C `traceparent` header (task-server's
+# HTTP spans). The version architect-telemetry's OTel layer is built on:
+# a second copy would not see that layer's spans.
+tracing-opentelemetry = "0.31"
 # Sentry error/crash telemetry — rustls (not native-tls) for iOS.
 sentry = { version = "0.44", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
 # In-process CPU sampling for the operator profiling endpoint

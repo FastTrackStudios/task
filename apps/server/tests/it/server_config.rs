@@ -51,6 +51,7 @@ const NAMES: &[&str] = &[
     "TASK_API_BIBLE_KEY",
     "API_BIBLE_KEY",
     "TASK_API_BIBLE_NIV_ID",
+    "TASK_LOG_CONSOLE",
 ];
 
 /// The value the test sets each variable to: its own name, so a field
@@ -132,6 +133,7 @@ async fn every_name_and_default_is_unchanged() {
         api_bible_key: sentinel("TASK_API_BIBLE_KEY"),
         api_bible_key_fallback: sentinel("API_BIBLE_KEY"),
         api_bible_niv_id: sentinel("TASK_API_BIBLE_NIV_ID"),
+        log_console: sentinel("TASK_LOG_CONSOLE"),
     };
     assert_eq!(set, expected);
 }

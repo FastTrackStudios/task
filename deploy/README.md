@@ -148,6 +148,7 @@ sane defaults (`TASK_DATA_ROOT=/data`, `TASK_SERVER_BIND=0.0.0.0:8080`).
 | `HERMES_BASE_URL` / `HERMES_SESSION_TOKEN` / `HERMES_DEFAULT_BOARD` / `HERMES_DEFAULT_PROFILE` / `HERMES_WEBHOOK_SECRET` | hermes agent-dispatch integration (optional) |
 | `TASK_SERVER_VAULT_ROOT` / `TASK_SERVER_CRDT_ROOT` / `TASK_SERVER_WIKI_ROOT` / `TASK_SERVER_MAIL_ROOT` | per-area path overrides; default under the data root — leave alone in containers |
 | `RUST_LOG` | tracing filter (default `info` in the image) |
+| `TASK_LOG_CONSOLE` | a second filter for the terminal (stdout) only, e.g. `warn`: what `RUST_LOG` lets through still goes to OTLP, but stdout keeps just this. Unset = stdout prints everything `RUST_LOG` allows. Leave it unset where stdout is the log path (the cluster's Loki scrapes it) |
 | `TASK_SENTRY_DSN` | Sentry error reporting (optional; unset = no reporting) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | **opt-in** OpenTelemetry export — traces, logs, and metrics over OTLP `http/protobuf` (e.g. `http://otel-collector-opentelemetry-collector.observability.svc:4318`). Unset = the server emits no telemetry at all |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_RESOURCE_ATTRIBUTES` | standard OTLP knobs, honoured by the SDK when the endpoint is set |

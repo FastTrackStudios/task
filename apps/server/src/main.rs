@@ -15,6 +15,7 @@ use std::net::SocketAddr;
 use eyre::WrapErr;
 use task_server::{AppState, router};
 use tracing::info;
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -43,13 +44,31 @@ async fn main() -> eyre::Result<()> {
     // Sentry error/crash telemetry — hold the guard for all of `main`.
     let _sentry = architect_telemetry::init("task-server");
 
+    // Every variable the server reads is a field of `ServerConfig`
+    // (`task_server::config`), under its old name. Read before the
+    // subscriber, which takes the terminal's filter from it.
+    let config = task_server::config::ServerConfig::load();
+
     // What is logged without RUST_LOG — and, below, what is exported.
     const LOG_DEFAULT: &str = "task_server=info,tower_http=info";
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| LOG_DEFAULT.into());
+    // The terminal's own filter, on top of RUST_LOG: TASK_LOG_CONSOLE=warn
+    // leaves the INFO lines to the collector. Unset (or unparsable), the
+    // terminal prints everything RUST_LOG lets through.
+    let console_filter = config.log_console.as_deref().map(|directives| {
+        tracing_subscriber::EnvFilter::builder()
+            .parse(directives)
+            .map_err(|e| e.to_string())
+    });
+    let (console_filter, console_filter_error) = match console_filter {
+        Some(Ok(filter)) => (Some(filter), None),
+        Some(Err(error)) => (None, Some(error)),
+        None => (None, None),
+    };
     let registry = tracing_subscriber::registry()
         .with(env_filter)
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_filter(console_filter))
         .with(architect_telemetry::tracing_layer());
     // OTLP traces/logs/metrics — inert unless OTEL_EXPORTER_OTLP_ENDPOINT
     // is set (the cluster points it at the collector; local runs stay
@@ -66,10 +85,10 @@ async fn main() -> eyre::Result<()> {
             None
         }
     };
+    if let Some(error) = console_filter_error {
+        tracing::warn!(%error, "TASK_LOG_CONSOLE does not parse; the terminal follows RUST_LOG");
+    }
 
-    // Every variable the server reads is a field of `ServerConfig`
-    // (`task_server::config`), under its old name.
-    let config = task_server::config::ServerConfig::load();
     let bind: SocketAddr = config
         .listen_bind()
         .parse()
@@ -146,12 +165,14 @@ async fn main() -> eyre::Result<()> {
                     .get::<axum::extract::MatchedPath>()
                     .map(|p| p.as_str().to_owned())
                     .unwrap_or_else(|| "<unmatched>".to_owned());
-                tracing::info_span!(
+                let span = tracing::info_span!(
                     "http.request",
                     method = %req.method(),
                     route,
                     status = tracing::field::Empty,
-                )
+                );
+                adopt_caller_trace(&span, req.headers());
+                span
             })
             .on_response(
                 |res: &axum::http::Response<_>,
@@ -172,6 +193,36 @@ async fn main() -> eyre::Result<()> {
     drop(iroh);
     scope.close().await;
     Ok(())
+}
+
+/// A request carrying a W3C `traceparent` header opens its span as the
+/// caller's child, so a client's trace runs on into the server's (the
+/// HTTP half of what `architect::trace_context` does for vox calls).
+/// Without the header, or with OTLP off (no propagator installed), the
+/// span starts a trace of its own, as before.
+fn adopt_caller_trace(span: &tracing::Span, headers: &axum::http::HeaderMap) {
+    use architect_telemetry::otel::opentelemetry::{
+        global, propagation::Extractor, trace::TraceContextExt as _,
+    };
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    struct Headers<'a>(&'a axum::http::HeaderMap);
+    impl Extractor for Headers<'_> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|v| v.to_str().ok())
+        }
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(axum::http::HeaderName::as_str).collect()
+        }
+    }
+
+    if !headers.contains_key("traceparent") {
+        return;
+    }
+    let cx = global::get_text_map_propagator(|p| p.extract(&Headers(headers)));
+    if cx.span().span_context().is_valid() {
+        span.set_parent(cx);
+    }
 }
 
 /// Per-request RED metrics: `http.server.request.duration` (histogram,
