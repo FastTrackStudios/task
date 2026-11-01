@@ -13,8 +13,8 @@ the hook posts the **`Local CI`** commit status, with how long it took.
 **GitHub** runs one free job on a PR, then the full suite once per merge
 to main. PR jobs run on GitHub's free hosted runners; everything that runs
 after code is on main (the post-merge suite) or on a release tag (images,
-node binaries, the Linux desktop) runs on THEBATTLESHIP's self-hosted pools, `task-main` and
-`task-release`, whose target dirs stay warm. Their job gate refuses any
+node binaries, the Linux desktop) runs on THEBATTLESHIP's shared pools, `thebattleship` and
+`thebattleship-release`, with repo-scoped caches and slot-local targets backed by kache. Their job gate refuses any
 PR job: the repo is public.
 
 One green run on the top of a stack vouches for every layer below it,
@@ -34,9 +34,9 @@ worktree with its own `target/` costs a cold build.
 | `git commit` | prek pre-commit (`prek.toml`) | your machine | rustfmt, shellcheck, actionlint on the **staged** files |
 | `git push` | prek pre-push → `scripts/ci-local-hook.sh` → `just ci-local` | your machine | the PR gate's expensive half; posts **`Local CI`** |
 | PR into main | `PR / PR checks` (`pr.yml`) | free hosted, rustup + cargo-rail, no nix | fmt, change files, rail route cases |
-| push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | Lint/Tests/Wasm on THEBATTLESHIP `task-main` (warm target dir per kind); Plan, Dependency cache, `CI passed` free hosted | the full suite (tests narrowed by rail evidence), once per merge; a newer merge cancels the older run |
+| push to main | `CI` (`checks.yml`): Plan, Lint, Tests, Wasm, Dependency cache, **`CI passed`** | Lint/Tests/Wasm on THEBATTLESHIP `thebattleship` (warm target dir per kind); Plan, Dependency cache, `CI passed` free hosted | the full suite (tests narrowed by rail evidence), once per merge; a newer merge cancels the older run |
 | PR into `release/**` | `CI` | free hosted, nix `.#ci` + a rust-cache per build kind saved on main | a hotfix: the full suite |
-| push of a `v*` tag (`just release`) | `Deploy` (Tag guard, Images, GitHub Release, node binaries, release assets, Desktop cache, Verify live), `task-ios`, `task-macos` | Images and Desktop cache on THEBATTLESHIP `task-release` (release-profile artifacts only); Deploy's own jobs, node binaries and release assets free hosted; the Apple builds on airlock | the release, from the tag alone; every build stamps the tag's version first; no tests (the tag guard checks `CI passed`) |
+| push of a `v*` tag (`just release`) | `Deploy` (Tag guard, Images, GitHub Release, node binaries, release assets, Desktop cache, Verify live), `task-ios`, `task-macos` | Images and Desktop cache on THEBATTLESHIP `thebattleship-release` (release-profile artifacts only); Deploy's own jobs, node binaries and release assets free hosted; the Apple builds on airlock | the release, from the tag alone; every build stamps the tag's version first; no tests (the tag guard checks `CI passed`) |
 | `git pull` onto main | prek post-merge → `scripts/rail-evidence-hook.sh` | your machine, in the background | rail evidence for the new HEAD, so the next `ci-local` narrows |
 
 **Main requires:** `PR checks` only (ruleset 25572114). `Local CI` is an
@@ -201,7 +201,7 @@ gh api -X PUT repos/FastTrackStudios/task/rulesets/25572114 --input /tmp/rs-put.
 
 ### 7. Main is green
 
-Each merge to main starts a `CI` run on the `task-main` pool: warm
+Each merge to main starts a `CI` run on the `thebattleship` pool: warm
 target dirs, so it compiles what the merge changed, and Tests runs only
 the tests the diff affects since the last commit whose tests passed
 there (rail evidence in the pool's store). A newer merge CANCELS the

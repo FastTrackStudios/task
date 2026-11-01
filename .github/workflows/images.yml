@@ -121,7 +121,7 @@ jobs:
     # what changed since the last one instead of the whole server and web
     # bundle. Production rolls once these images are on GHCR, so a release
     # reaches it as fast as this build.
-    runs-on: [self-hosted, task-release-images]
+    runs-on: [self-hosted, thebattleship-release]
     timeout-minutes: 180
     permissions:
       contents: read
@@ -135,6 +135,7 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/shared-tools
       # Releases commit no version: write the tag's into this checkout, so
       # the server and the web bundle report the release. (A pre-warm
       # builds the ref as it is.)
@@ -171,7 +172,7 @@ jobs:
           # warm only for the ~/.cargo and checkout paths that built it;
           # .github/actions/battleship-nix-rust); a hosted runner's home if
           # this ever runs off the pool.
-          dir="${TASK_CACHE_DIR:-$HOME/cargo-target}/release-${RUNNER_NAME}"
+          dir="${CI_CACHE_DIR:?not a shared runner}/images/$RUNNER_NAME/target"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           export CARGO_TARGET_DIR="$dir"

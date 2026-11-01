@@ -15,7 +15,7 @@
 #                  passed alone but break together, and its green
 #                  `CI passed` is what `just release` requires.
 #
-# WHERE EACH JOB RUNS. The builds run on THEBATTLESHIP's `task-main`
+# WHERE EACH JOB RUNS. The builds run on THEBATTLESHIP's shared `thebattleship`
 # runner pool (self-hosted; ~/.flake hosts/THEBATTLESHIP/github-runners.nix),
 # whose target dir stays warm from one merge to the next, so a merge
 # compiles what it changed rather than the whole workspace (a cold build
@@ -26,16 +26,14 @@
 #
 #   plan            ubuntu-latest   rustup + cargo-rail (rust-rail), to narrow only
 #   deps-cache      ubuntu-latest   main only: saves cargo's dependencies for pr.yml
-#   lint            task-main-lint   fmt, the static guards, clippy
-#   tests           task-main-tests  the nextest build + rail evidence
-#   wasm            task-main-wasm   the wasm32 check
+#   lint            thebattleship   fmt, the static guards, clippy
+#   tests           thebattleship   the nextest build + rail evidence
+#   wasm            thebattleship   the wasm32 check
 #
-# The `task-release` pool holds only release-profile artifacts (images.yml
-# and desktop-cache.yml, built from a release tag); every check runs on
-# `task-main`. Three instances, one per kind (the labels above), so a run's
-# lint, tests and wasm build at once, each on the same instance every time
-# and on the target dir it left warm ($TASK_CACHE_DIR/<kind>-<runner name>;
-# .github/actions/battleship-nix-rust says why per instance).
+# The `thebattleship-release` pool is reserved for release builds. Normal
+# jobs claim any available shared slot. The gate supplies repo-scoped
+# CI_CACHE_DIR and CARGO_HOME; each kind/slot keeps its own target directory,
+# and kache shares compiled artifacts across slots without a Cargo lock.
 #   checks-passed   ubuntu-latest   the aggregator
 #
 # (A hotfix PR runs lint/tests/wasm on ubuntu-latest instead, restoring
@@ -278,7 +276,7 @@ jobs:
   # side, each with its own rust-cache entry.
   lint:
     name: Lint
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main-lint"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","thebattleship"]') }}
     timeout-minutes: 90
     needs: plan
     steps:
@@ -331,7 +329,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
-            df -h "${TASK_CACHE_DIR:-/}" | tail -1
+            df -h "${CI_CACHE_DIR:-/}" | tail -1
           else
             du -sh target ~/.cargo /nix/store 2>/dev/null || true
             df -h / | tail -1
@@ -339,7 +337,7 @@ jobs:
 
   tests:
     name: Tests
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main-tests"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","thebattleship"]') }}
     # A cold workspace build on 4 vCPUs (dependencies from the rust-cache).
     timeout-minutes: 120
     needs: plan
@@ -368,15 +366,15 @@ jobs:
       # only means later plans against this commit widen.
       #
       # On a THEBATTLESHIP pool the evidence also goes to the pool's shared
-      # store ($TASK_CACHE_DIR/rail-evidence/<sha>.json), but only once this
+      # store ($CI_CACHE_DIR/rail-evidence/<sha>.json), but only once this
       # commit's tests PASSED. A merge to main then plans its tests against
       # the newest first-parent ancestor in that store, the last commit
       # whose tests passed here (a cancelled or red run leaves no evidence,
       # so its changes stay in the diff), and runs only the tests the diff
       # affects; a docs-only merge runs none. Evidence binds to the cargo
-      # environment (CARGO_TARGET_DIR = $TASK_CACHE_DIR/tests-<runner name>,
-      # and the instance's own ~/.cargo), which holds because Tests is
-      # pinned to one instance (`task-main-tests`). Release commits, hotfix
+      # environment (the gate's shared CARGO_HOME and a slot-local target).
+      # If evidence from another slot does not match, the plan widens safely.
+      # Release commits, hotfix
       # branches and dispatches still run every test. No evidence, a failed
       # plan or a CI input in the diff all mean every test.
       - name: Tests
@@ -411,8 +409,8 @@ jobs:
           fi
 
           pool=""
-          if [ -n "${TASK_CACHE_DIR:-}" ]; then
-            pool="$TASK_CACHE_DIR/rail-evidence"
+          if [ -n "${CI_CACHE_DIR:-}" ]; then
+            pool="$CI_CACHE_DIR/rail-evidence"
             mkdir -p "$pool"
           fi
           if [ -n "$pool" ] && [ "${NARROW}" = "true" ]; then
@@ -482,7 +480,7 @@ jobs:
         if: ${{ always() }}
         run: |
           if [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
-            df -h "${TASK_CACHE_DIR:-/}" | tail -1
+            df -h "${CI_CACHE_DIR:-/}" | tail -1
           else
             du -sh target ~/.cargo /nix/store 2>/dev/null || true
             df -h / | tail -1
@@ -490,7 +488,7 @@ jobs:
 
   wasm:
     name: Wasm
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","task-main-wasm"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","thebattleship"]') }}
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.wasm == 'true' }}

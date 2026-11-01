@@ -5,6 +5,12 @@ description: How a change reaches production in Task (tag-from-main, the same fl
 
 # Release workflow in Task (tag-from-main)
 
+Linux CI uses the shared `thebattleship` label; Linux release builds use
+`thebattleship-release`. GitHub assigns a free slot automatically. The host
+gate provides repo-scoped `CI_CACHE_DIR` and `CARGO_HOME`, and kache restores
+compiled artifacts across slots. Apple and ARM builds keep their platform
+runners; public pull requests remain on hosted runners.
+
 Task releases **from the tag**, exactly as studio does. Any commit on
 `main` whose `CI passed` is green can be released by pushing a CalVer tag,
 and the tag alone starts the release builds. There is no release PR and no
@@ -29,8 +35,8 @@ hotfix: release/v26.10.2 (from the tag) <-- cherry-pick -x PR -- CI passed -- ju
 | push of a PR branch | the pre-push hook: `just ci-local` (fmt, change files, and the clippy / tests / wasm that `cargo rail plan` from the merge-base says are affected) on the local warm tree; when green it posts the **`Local CI`** status on the pushed commits: an indicator, not required. Without the hook: `gh workflow run checks.yml --ref <branch>` posts it |
 | PR into `main` | `PR` (pr.yml), job **`PR checks`**, the only required check: a minimal free hosted backstop on rustup, no nix (fmt, `cargo rail change check`, rail route cases; the static guards run in `just ci-local`) |
 | PR into `release/v*` (hotfix) | the FULL `CI` |
-| push to `main` or `release/v*` | FULL `CI` on THEBATTLESHIP's self-hosted `task-main` pool (warm dev target dirs; a newer merge cancels the older run, and Tests narrow by the pool's rail evidence) + rail evidence for the commit. `just release` tags only a commit whose `CI passed` is green. Nothing ships |
-| tag `vYY.M.MICRO` | every job checks out the tag and runs `scripts/release.sh stamp` first, then the tag guard (vX.Y.Z on main or `release/v*`, `CI passed` green; the suite is not run again). `deploy`: Images (task-server + task-web `:X.Y.Z`, `sha-<short>`, `latest` for the highest, on the `task-release` pool) and, beside it, the GitHub Release → node binaries, and after the images the web bundle + Linux AppImage; Verify live (informational: waits for production to serve the tag, fails nothing). `task-ios`, `task-macos`: TestFlight, and the macOS app attached to the same release. One `v*` release carries everything the version ships |
+| push to `main` or `release/v*` | FULL `CI` on THEBATTLESHIP's self-hosted `thebattleship` pool (warm dev target dirs; a newer merge cancels the older run, and Tests narrow by the pool's rail evidence) + rail evidence for the commit. `just release` tags only a commit whose `CI passed` is green. Nothing ships |
+| tag `vYY.M.MICRO` | every job checks out the tag and runs `scripts/release.sh stamp` first, then the tag guard (vX.Y.Z on main or `release/v*`, `CI passed` green; the suite is not run again). `deploy`: Images (task-server + task-web `:X.Y.Z`, `sha-<short>`, `latest` for the highest, on the `thebattleship-release` pool) and, beside it, the GitHub Release → node binaries, and after the images the web bundle + Linux AppImage; Verify live (informational: waits for production to serve the tag, fails nothing). `task-ios`, `task-macos`: TestFlight, and the macOS app attached to the same release. One `v*` release carries everything the version ships |
 
 Production is the latest `v*` tag: starcommand's argocd-image-updater
 rolls the `task` app to the highest `X.Y.Z` image on GHCR (the chart,

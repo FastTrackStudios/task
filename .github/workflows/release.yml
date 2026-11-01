@@ -29,7 +29,7 @@ jobs:
     # In a called workflow `github` is the CALLER's context: the tag push
     # that started deploy.yml, or this file's own dispatch on a tag.
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, thebattleship-release]
     timeout-minutes: 5
     permissions:
       contents: write
@@ -41,6 +41,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+      - uses: ./.github/actions/shared-tools
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
