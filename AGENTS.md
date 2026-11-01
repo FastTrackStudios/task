@@ -154,8 +154,8 @@ follows `skills/ship-stack.md`. In short:
   `gh workflow run checks.yml --ref <branch>` instead:
   it posts `Local CI` when green. PRs squash-merge, and the full set
   (clippy, wasm, the tests the merge affects) runs after every merge to
-  `main` on THEBATTLESHIP's self-hosted `task-main` pool, whose target
-  dirs stay warm between merges (`task-release` builds only the release
+  `main` on THEBATTLESHIP's shared `thebattleship` pool, whose targets
+  are restored across slots by kache (`thebattleship-release` builds only the release
   artifacts: images, node binaries and the Linux desktop; `~/.flake`
   hosts/THEBATTLESHIP/github-runners.nix).
   A newer merge cancels the older run. After pulling `main`, the

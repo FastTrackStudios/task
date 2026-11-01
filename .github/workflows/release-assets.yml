@@ -227,7 +227,7 @@ jobs:
     # the instance's warm target dir ($TASK_CACHE_DIR/desktop-<runner>), and one build is
     # packaged twice by scripts/desktop/linux.sh (which says what each
     # package carries and why its glibc floor is the Nix toolchain's).
-    runs-on: [self-hosted, task-release-desktop]
+    runs-on: [self-hosted, thebattleship-release]
     timeout-minutes: 120
     permissions:
       contents: write
@@ -242,12 +242,14 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
         run: bash scripts/release.sh stamp "$TAG"
 
+      - uses: ./.github/actions/shared-tools
+
       - name: Build the AppImage and the Flatpak
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          export CARGO_TARGET_DIR="$TASK_CACHE_DIR/desktop-$RUNNER_NAME" OUT_DIR="$PWD/dist"
+          export CARGO_TARGET_DIR="${CI_CACHE_DIR:?not a shared runner}/desktop/$RUNNER_NAME/target" OUT_DIR="$PWD/dist"
           rm -rf dist
           bash scripts/desktop/linux.sh
           ls -la dist

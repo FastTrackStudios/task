@@ -1,9 +1,9 @@
-# Set up a THEBATTLESHIP `task-main` runner (self-hosted NixOS) for one
+# Set up a shared THEBATTLESHIP runner (self-hosted NixOS) for one
 # build kind of checks.yml: the hosted twin is
 # .github/actions/hosted-nix-rust.
 #
 # Nothing to install and nothing to restore: nix is the host's, the nix
-# store is warm, and the pool's cache ($TASK_CACHE_DIR, on the dev drive,
+# store is warm, and the repo's cache ($CI_CACHE_DIR, on the dev drive,
 # kept across jobs, restarts and reboots; ~/.flake
 # hosts/THEBATTLESHIP/github-runners.nix) holds one target dir PER BUILD
 # KIND PER RUNNER INSTANCE. A merge therefore compiles only the crates it
@@ -21,10 +21,9 @@
 # run), and two overlapping runs waited on each other's target-dir lock
 # and then rebuilt each other's work (22-27 minute Tests jobs).
 #
-# And each kind is pinned to one instance (checks.yml's runs-on labels
-# task-main-tests / -lint / -wasm; ~/.flake hosts/THEBATTLESHIP/
-# github-runners.nix), so the same runner builds it every time, on the dir
-# it left warm. Two runs of one kind queue for that runner.
+# GitHub assigns any free slot with the `thebattleship` label. Kache
+# restores artifacts across slots; each slot keeps its own mutable target.
+# The job gate supplies repo-scoped CI_CACHE_DIR and CARGO_HOME.
 name: THEBATTLESHIP nix + warm target
 description: Enter .#ci on a THEBATTLESHIP Task runner and point cargo at the pool's warm target dir for this build kind.
 inputs:
@@ -42,6 +41,7 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/shared-tools
     - name: Warm target dir
       shell: bash
       env:
@@ -50,8 +50,8 @@ runs:
         MAX_GB: ${{ inputs.max-gb }}
       run: |
         set -euo pipefail
-        [ -n "${TASK_CACHE_DIR:-}" ] || { echo "::error::no TASK_CACHE_DIR: not a Task pool runner (~/.flake hosts/THEBATTLESHIP/github-runners.nix)"; exit 1; }
-        dir="$TASK_CACHE_DIR/$KIND-$RUNNER_NAME"
+        [ -n "${CI_CACHE_DIR:-}" ] || { echo "::error::no CI_CACHE_DIR: not a shared THEBATTLESHIP runner"; exit 1; }
+        dir="$CI_CACHE_DIR/$KIND/$RUNNER_NAME/target"
         if [ "$FRESH" = "true" ]; then
           echo "fresh: emptying $dir"
           rm -rf "$dir"
@@ -65,7 +65,7 @@ runs:
         fi
         echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
         echo "$KIND: target $dir (${gb} GB warm)"
-        df -h "$TASK_CACHE_DIR" | tail -1
+        df -h "$CI_CACHE_DIR" | tail -1
 
     - name: Enter .#ci
       uses: nicknovitski/nix-develop@v1
