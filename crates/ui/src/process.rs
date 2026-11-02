@@ -24,7 +24,7 @@
 //! maintenance hour can find it.
 
 use architect_ui::lucide_dioxus::{
-    Archive, ArrowRight, Check, Clock, FileText, FolderKanban, Hourglass, Play, Trash2, X,
+    Archive, ArrowRight, Check, Clock, FileText, FolderKanban, Hourglass, Play, Trash, X,
 };
 use chrono::{Datelike, Duration, Local, Utc};
 use dioxus::prelude::*;
@@ -557,7 +557,7 @@ pub fn ProcessCard(
                             r#type: "button",
                             class: "flex h-10 items-center gap-1.5 rounded-full px-3 text-[14px] text-rose-400 active:bg-rose-500/10 hover:bg-rose-500/10",
                             onclick: move |_| decide.call(Decision::Delete),
-                            Trash2 { size: 15 }
+                            Trash { size: 15 }
                             "Delete"
                         }
                         if skippable {

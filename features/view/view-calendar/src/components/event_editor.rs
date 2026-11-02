@@ -9,7 +9,7 @@
 //! Edits apply as they are made (each is a [`CalendarMutation`]), so
 //! Done only closes.
 
-use architect_ui::lucide_dioxus::{Check, Trash2};
+use architect_ui::lucide_dioxus::{Check, Trash};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 use dioxus::prelude::*;
 
@@ -188,7 +188,7 @@ pub fn EventEditor(props: EventEditorProps) -> Element {
                             on_event.call(CalendarMutation::Remove { id });
                             on_close.call(());
                         },
-                        Trash2 { size: 17 }
+                        Trash { size: 17 }
                         "Delete event"
                     }
                 }

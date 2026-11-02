@@ -134,7 +134,7 @@ fn named_icon(key: &str, size: u32) -> Element {
         "pencil" => rsx! { lucide::Pencil { size } },
         "lightbulb" => rsx! { lucide::Lightbulb { size } },
         "palette" => rsx! { lucide::Palette { size } },
-        "music" => rsx! { lucide::Music { size } },
+        "music" => rsx! { lucide::AudioLines { size } },
         "film" => rsx! { lucide::Film { size } },
         "gamepad" => rsx! { lucide::Gamepad2 { size } },
         "camera" => rsx! { lucide::Camera { size } },

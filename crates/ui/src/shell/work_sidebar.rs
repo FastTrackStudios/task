@@ -219,7 +219,7 @@ pub fn WorkSidebar(current: Route) -> Element {
                                         class: row(false),
                                         span { class: icon,
                                             match fav.kind.as_str() {
-                                                "project" => rsx! { i::Box {} },
+                                                "project" => rsx! { i::Package {} },
                                                 "page" => rsx! { i::FileText {} },
                                                 _ => rsx! { i::CircleCheck {} },
                                             }

@@ -35,7 +35,7 @@ use agent_proto::message::{ContentBlock, Message, Role};
 use agent_proto::question::QuestionRequest;
 use agent_proto::service::discovery::{CapabilityFlag, ModelInfo, SkillInfo};
 use agent_proto::session::{Session, SessionStatus};
-use architect_ui::lucide_dioxus::{Bot, ChevronLeft, Copy, FileText, Info, Trash2};
+use architect_ui::lucide_dioxus::{Bot, ChevronLeft, Copy, FileText, Info, Trash};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
@@ -1876,7 +1876,7 @@ fn Inspector(
                                 }
                             }
                         },
-                        Trash2 { size: 12 }
+                        Trash { size: 12 }
                         if confirm_delete() { "Really delete?" } else { "Delete" }
                     }
                 }

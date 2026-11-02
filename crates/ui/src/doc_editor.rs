@@ -488,10 +488,14 @@ fn toolbar_actions() -> Vec<(&'static str, fn() -> Element, editor::Command)> {
             numbers,
         ),
         ("Checklist", || rsx! { i::ListTodo { size: 20 } }, checklist),
-        ("Indent", || rsx! { i::IndentIncrease { size: 20 } }, indent),
+        (
+            "Indent",
+            || rsx! { i::ListIndentIncrease { size: 20 } },
+            indent,
+        ),
         (
             "Outdent",
-            || rsx! { i::IndentDecrease { size: 20 } },
+            || rsx! { i::ListIndentDecrease { size: 20 } },
             outdent,
         ),
         ("Quote", || rsx! { i::TextQuote { size: 20 } }, blockquote),

@@ -459,13 +459,13 @@ view-table = { path = "features/view/view-table" }
 #
 # The chart renderer registers itself through `editor_state::fence_renderer`
 # rather than editor-state depending on it. See docs/SPLIT.md in that repo.
-editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24", default-features = false }
-editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24" }
-editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24", default-features = false }
+editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.25", default-features = false }
+editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.25", default-features = false }
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -566,7 +566,7 @@ anyrender_vello = "0.15"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Render-to-string, for UI markup snapshots in tests (crates/ui toasts).
 dioxus-ssr ={ git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41" }
-dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", branch = "main" }
+dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", tag = "v0.1.0" }
 neo_frizbee = { version = "0.11", features = ["match_end_col"] }
 nucleo-matcher = "0.3"
 
@@ -773,17 +773,30 @@ branches = { path = "vendor/branches" }
 # and `keyflow-text` from the keyflow repo instead of carrying its own
 # copies (or the keyflow repo should stop carrying them). Until one of
 # those ships, this is that fix, applied at the consumer.
+#
+# Keyflow is pinned by `rev` to its architect v0.10.0 branch
+# (`build/41-architect-v0.10.0`, keyflow#42) until that lands as a tag;
+# move this rev, `editor-keyflow`'s and the `daw` block's to the tag
+# together. At that rev `engraver-proto`, `keyflow-text`,
+# `keyflow-chordpro` and `keyflow-syntax` are folded into `engraver` and
+# `keyflow-lang`, so only these two entries are left.
 [patch."https://github.com/FastTrackStudios/FastTrackStudio"]
-engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
 
 [patch."https://github.com/FastTrackStudios/daw"]
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+
+# ONE editor-state. Keyflow's architect v0.10.0 branch (keyflow#42, the
+# rev above) still takes `editor-state`/`editor-syntax` from editor
+# v0.1.24, and `editor_keyflow::Fences` must implement the same
+# `FenceRenderer` Task registers it with (crates/player-ui). The `www.`
+# host is the same repo under a different cargo source (a patch may not
+# point at the source it patches). Drop this block once keyflow pins
+# editor v0.1.25 and Task takes that keyflow tag.
+[patch."https://github.com/FastTrackStudios/editor"]
+editor-state = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+editor-syntax = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
 
 # The Dioxus crates from the FTS vendor fork, the same tag architect pins
 # (each one's reason is in its UPSTREAM.md): dioxus-native — the iOS
@@ -795,12 +808,14 @@ keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v
 # This replaces the Brahmastra-Labs dioxus-core patch (DioxusLabs/dioxus
 # #5668's suspense fixes), which sat on the old e1c6342 base and has no
 # counterpart on 430cfb56, where the virtual DOM is `dioxus-vdom`.
-# #5668 is still open and its core-suspense half is not in vendor's
-# dioxus-vdom yet: porting it there is FastTrackStudios/task#410.
+# #5668 is still open; vendor v0.7.1 (v0.7.0 + its core-suspense half,
+# FastTrackStudios/task#410) carries the fix in dioxus-vdom, so the
+# wasm-split web build keeps it. architect pins v0.7.0 until it takes
+# v0.7.1 too.
 [patch."https://github.com/DioxusLabs/dioxus"]
-dioxus-native = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
-dioxus-native-dom = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
-dioxus-vdom = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
+dioxus-native = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.1" }
+dioxus-native-dom = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.1" }
+dioxus-vdom = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.1" }
 
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]

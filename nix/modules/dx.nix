@@ -28,9 +28,10 @@
       # `assertion failed: !self.dead.contains(&id)` — dioxus#4769). The
       # branch is upstream main@e1c6342 + two commits, behind the
       # workspace's dioxus rev since architect v0.10.0 (430cfb56,
-      # 0.8.0-alpha.3); whether this dx still builds and serves that line
-      # is checked in FastTrackStudios/task#410. Move back to a published
-      # crate once the PR is in a release.
+      # 0.8.0-alpha.3). It warns "dx and dioxus versions are
+      # incompatible" but `just web-release` (--wasm-split) builds and the
+      # bundle boots (checked for task#376); hot reload is not checked.
+      # Move back to a published crate once the PR is in a release.
       fts.dx.cli = pkgsDx.dioxus-cli.overrideAttrs (old: rec {
         version = "0.8.0-alpha.0";
         src = pkgsDx.fetchFromGitHub {

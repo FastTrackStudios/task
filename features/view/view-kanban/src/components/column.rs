@@ -6,7 +6,7 @@
 //! double-click on the title (mirrors janhesters/shadcn-kanban-board
 //! UX — no rename menu item, no extra modal).
 
-use architect_ui::lucide_dioxus::{Ellipsis, Trash2};
+use architect_ui::lucide_dioxus::{Ellipsis, Trash};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -168,7 +168,7 @@ fn ColumnMenu(props: ColumnMenuProps) -> Element {
                     value: "delete".to_string(),
                     index: 0,
                     destructive: true,
-                    icon: rsx! { Trash2 { size: 14 } },
+                    icon: rsx! { Trash { size: 14 } },
                     on_select: move |_| {
                         on_event.call(KanbanEvent::RemoveColumn { column: column_id });
                     },

@@ -4,9 +4,9 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    Activity as ActivityIcon, BookOpen, BookUser, CalendarDays, CircleCheck, FolderKanban,
-    FolderOpen, Inbox as InboxIcon, Music, Notebook, RefreshCw, Settings as SettingsIcon, Star,
-    Timer, Users, Waypoints,
+    Activity as ActivityIcon, AudioLines as Music, BookOpen, BookUser, CalendarDays, CircleCheck,
+    FolderKanban, FolderOpen, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon,
+    Star, Timer, Users, Waypoints,
 };
 use dioxus::prelude::*;
 

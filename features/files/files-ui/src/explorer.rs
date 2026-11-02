@@ -17,8 +17,8 @@
 //! a sidebar.
 
 use architect_ui::lucide_dioxus::{
-    Box as BoxIcon, File, FileText, Film, Folder, Image as ImageIcon, LayoutGrid, List as ListIcon,
-    Music, PanelRight, X,
+    AudioLines as Music, File, FileText, Film, Folder, Image as ImageIcon, LayoutGrid,
+    List as ListIcon, Package as BoxIcon, PanelRight, X,
 };
 use architect_ui::prelude::*;
 use dioxus::prelude::*;

@@ -6,7 +6,7 @@
 //! far edge. Everything else is smaller and quieter.
 
 use architect_ui::lucide_dioxus::{
-    Ban, Check, CornerDownRight, Ellipsis, Flag, Hash, Play, Square, Trash2, Waypoints,
+    Ban, Check, CornerDownRight, Ellipsis, Flag, Hash, Play, Square, Trash, Waypoints,
 };
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -392,7 +392,7 @@ fn RowMenu(
                                 confirm_delete.set(true);
                             }
                         },
-                        Trash2 { size: 13 }
+                        Trash { size: 13 }
                         if confirm_delete() { "Confirm delete" } else { "Delete" }
                     }
                 }
