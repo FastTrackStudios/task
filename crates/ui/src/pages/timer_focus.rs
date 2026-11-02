@@ -178,7 +178,7 @@ pub fn TimerFocus() -> Element {
                 oninput: move |e| draft.set(e.value()),
                 onblur: move |_| save_blur(),
                 onkeydown: move |e: KeyboardEvent| {
-                    if e.key() == Key::Enter {
+                    if e.key() == Key::Named(NamedKey::Enter) {
                         save_key();
                         let _ = dioxus::document::eval("document.activeElement && document.activeElement.blur()");
                     }

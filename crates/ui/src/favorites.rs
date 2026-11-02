@@ -9,7 +9,7 @@
 //! Kept per device ([`crate::local_store`]) for now — FUTURE: the
 //! account's prefs, so a phone and a desk share one list.
 
-use architect_ui::lucide_dioxus::{Box as BoxIcon, FileText, Star};
+use architect_ui::lucide_dioxus::{FileText, Package as BoxIcon, Star};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 

@@ -109,7 +109,7 @@ pub fn MilestonesView() -> Element {
                     value: "{title}",
                     oninput: move |e| title.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },

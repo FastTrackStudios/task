@@ -35,7 +35,7 @@ use agent_proto::message::{ContentBlock, Message, Role};
 use agent_proto::question::QuestionRequest;
 use agent_proto::service::discovery::{CapabilityFlag, ModelInfo, SkillInfo};
 use agent_proto::session::{Session, SessionStatus};
-use architect_ui::lucide_dioxus::{Bot, ChevronLeft, Copy, FileText, Info, Trash2};
+use architect_ui::lucide_dioxus::{Bot, ChevronLeft, Copy, FileText, Info, Trash};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
@@ -508,7 +508,7 @@ fn ModelPicker(
                         value: "{search}",
                         oninput: move |e| search.set(e.value()),
                         onkeydown: move |e| {
-                            if e.key() == Key::Escape {
+                            if e.key() == Key::Named(NamedKey::Escape) {
                                 open.set(false);
                             }
                         },
@@ -1502,27 +1502,27 @@ pub(crate) fn ChatPane(
                             move |e| {
                                 if completion_open && !rows.is_empty() {
                                     match e.key() {
-                                        Key::ArrowDown => {
+                                        Key::Named(NamedKey::ArrowDown) => {
                                             e.prevent_default();
                                             completion_sel.set((sel + 1) % rows.len());
                                             return;
                                         }
-                                        Key::ArrowUp => {
+                                        Key::Named(NamedKey::ArrowUp) => {
                                             e.prevent_default();
                                             completion_sel.set(sel.checked_sub(1).unwrap_or(rows.len() - 1));
                                             return;
                                         }
-                                        Key::Tab => {
+                                        Key::Named(NamedKey::Tab) => {
                                             e.prevent_default();
                                             accept((completion_start, rows[sel].insert.clone()));
                                             return;
                                         }
-                                        Key::Enter if !e.modifiers().shift() => {
+                                        Key::Named(NamedKey::Enter) if !e.modifiers().shift() => {
                                             e.prevent_default();
                                             accept((completion_start, rows[sel].insert.clone()));
                                             return;
                                         }
-                                        Key::Escape => {
+                                        Key::Named(NamedKey::Escape) => {
                                             e.prevent_default();
                                             completion_dismissed.set(composer.peek().clone());
                                             return;
@@ -1533,13 +1533,13 @@ pub(crate) fn ChatPane(
                                 // Shell-style recall. Deliberately after
                                 // the autocomplete arm: while the popover
                                 // is open the arrows belong to it.
-                                if matches!(e.key(), Key::ArrowUp | Key::ArrowDown)
+                                if matches!(e.key(), Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown))
                                     && !e.modifiers().shift()
                                     && !e.modifiers().ctrl()
                                     && !e.modifiers().alt()
                                     && !e.modifiers().meta()
                                 {
-                                    let dir = if e.key() == Key::ArrowUp {
+                                    let dir = if e.key() == Key::Named(NamedKey::ArrowUp) {
                                         Recall::Older
                                     } else {
                                         Recall::Newer
@@ -1554,7 +1554,7 @@ pub(crate) fn ChatPane(
                                 // On a touch keyboard Return is the only
                                 // way to get a newline, so it must not
                                 // send. The Send button is the commit.
-                                if e.key() == Key::Enter && !e.modifiers().shift() && !touch {
+                                if e.key() == Key::Named(NamedKey::Enter) && !e.modifiers().shift() && !touch {
                                     e.prevent_default();
                                     send(());
                                 }
@@ -1876,7 +1876,7 @@ fn Inspector(
                                 }
                             }
                         },
-                        Trash2 { size: 12 }
+                        Trash { size: 12 }
                         if confirm_delete() { "Really delete?" } else { "Delete" }
                     }
                 }

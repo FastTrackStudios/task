@@ -35,7 +35,7 @@ mod tests {
     use std::path::PathBuf;
 
     use architect_ui::components::toast::{ToastOptions, use_toast};
-    use dioxus::dioxus_core::NoOpMutations;
+    use dioxus::core::NoOpMutations;
 
     use super::*;
 

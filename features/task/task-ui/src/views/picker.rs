@@ -167,24 +167,24 @@ pub fn PropertyPicker(
     let mut pick_kb = pick.clone();
     let options_kb = options.clone();
     let on_key = move |e: KeyboardEvent| match e.key() {
-        Key::Escape => {
+        Key::Named(NamedKey::Escape) => {
             e.prevent_default();
             e.stop_propagation();
             on_close.call(());
         }
-        Key::ArrowDown => {
+        Key::Named(NamedKey::ArrowDown) => {
             e.prevent_default();
             if total > 0 {
                 cursor.set((at + 1) % total);
             }
         }
-        Key::ArrowUp => {
+        Key::Named(NamedKey::ArrowUp) => {
             e.prevent_default();
             if total > 0 {
                 cursor.set((at + total - 1) % total);
             }
         }
-        Key::Enter => {
+        Key::Named(NamedKey::Enter) => {
             e.prevent_default();
             pick_kb(at);
         }

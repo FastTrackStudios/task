@@ -14,7 +14,7 @@
 //! button come from the primitive). The richer read surface lives in
 //! [`super::detail_full::TaskDetailFull`].
 
-use architect_ui::lucide_dioxus::{Check, Ellipsis, Play, Square, Trash2};
+use architect_ui::lucide_dioxus::{Check, Ellipsis, Play, Square, Trash};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -228,7 +228,7 @@ pub fn TaskDetail(props: TaskDetailProps) -> Element {
                                             confirm_delete.set(true);
                                         }
                                     },
-                                    Trash2 { size: 14 }
+                                    Trash { size: 14 }
                                     if confirm_delete() { "Confirm delete" } else { "Delete task" }
                                 }
                             }
@@ -248,7 +248,7 @@ pub fn TaskDetail(props: TaskDetailProps) -> Element {
                 onkeydown: {
                     let save = commit_if_changed.clone();
                     move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             e.prevent_default();
                             save();
                         }

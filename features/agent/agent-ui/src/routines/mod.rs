@@ -11,7 +11,7 @@
 //! and tested in [`logic`].
 
 use agent_proto::service::routines::{NewRoutine, Routine};
-use architect_ui::lucide_dioxus::{CalendarClock, Pause, Play, Plus, Trash2};
+use architect_ui::lucide_dioxus::{CalendarClock, Pause, Play, Plus, Trash};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
@@ -337,7 +337,7 @@ fn routine_row(r: &Routine, busy: bool, act: Callback<(String, RowAction)>) -> E
                         let id = id.clone();
                         move |_| act((id.clone(), RowAction::Delete))
                     },
-                    Trash2 { size: 12 }
+                    Trash { size: 12 }
                 }
             }
         }

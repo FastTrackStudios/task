@@ -888,7 +888,7 @@ pub fn EntityActivity(
                         value: "{draft}",
                         oninput: move |e| draft.set(e.value()),
                         onkeydown: move |e| {
-                            if e.key() == Key::Enter && !e.modifiers().shift() {
+                            if e.key() == Key::Named(NamedKey::Enter) && !e.modifiers().shift() {
                                 e.prevent_default();
                                 send();
                             }

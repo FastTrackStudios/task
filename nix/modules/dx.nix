@@ -26,10 +26,12 @@
       # demangled names, so nearly every shared function fell out of the
       # call graph and `dx build --wasm-split` died in walrus with
       # `assertion failed: !self.dead.contains(&id)` — dioxus#4769). The
-      # branch is upstream main@e1c6342 + two commits, one commit behind
-      # the workspace's dioxus rev (f717a8e, the Blitz beta.1 sync,
-      # which touches no CLI code). Move back to a published crate once
-      # the PR is in a release.
+      # branch is upstream main@e1c6342 + two commits, behind the
+      # workspace's dioxus rev since architect v0.10.0 (430cfb56,
+      # 0.8.0-alpha.3). It warns "dx and dioxus versions are
+      # incompatible" but `just web-release` (--wasm-split) builds and the
+      # bundle boots (checked for task#376); hot reload is not checked.
+      # Move back to a published crate once the PR is in a release.
       fts.dx.cli = pkgsDx.dioxus-cli.overrideAttrs (old: rec {
         version = "0.8.0-alpha.0";
         src = pkgsDx.fetchFromGitHub {

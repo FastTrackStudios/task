@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use architect_ui::lucide_dioxus::{ChevronRight, Music};
+use architect_ui::lucide_dioxus::{AudioLines as Music, ChevronRight};
 use architect_ui::prelude::*;
 use collection_proto::{Collection, CollectionServiceClient};
 use dioxus::prelude::*;

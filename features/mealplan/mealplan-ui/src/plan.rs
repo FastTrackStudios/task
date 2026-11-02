@@ -172,7 +172,7 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },
@@ -190,7 +190,7 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
                     disabled: importing(),
                     oninput: move |e| import_url.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             do_import();
                         }
                     },
@@ -385,7 +385,7 @@ fn PantrySection(slug: Memo<Option<String>>) -> Element {
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },
@@ -396,7 +396,7 @@ fn PantrySection(slug: Memo<Option<String>>) -> Element {
                     value: "{qty}",
                     oninput: move |e| qty.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },
@@ -407,7 +407,7 @@ fn PantrySection(slug: Memo<Option<String>>) -> Element {
                     value: "{unit}",
                     oninput: move |e| unit.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },

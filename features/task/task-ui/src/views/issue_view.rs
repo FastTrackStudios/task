@@ -308,7 +308,7 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                         commit_title();
                     },
                     onkeydown: move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             e.prevent_default();
                             commit_enter();
                         }
@@ -393,7 +393,7 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                                 onfocusin: move |_| editing.set(true),
                                 onfocusout: move |_| editing.set(false),
                                 onkeydown: move |e: KeyboardEvent| match e.key() {
-                                    Key::Enter => {
+                                    Key::Named(NamedKey::Enter) => {
                                         e.prevent_default();
                                         let t = sub_title.peek().trim().to_owned();
                                         if !t.is_empty() {
@@ -401,7 +401,7 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                                             sub_title.set(String::new());
                                         }
                                     }
-                                    Key::Escape => {
+                                    Key::Named(NamedKey::Escape) => {
                                         e.prevent_default();
                                         adding.set(false);
                                         sub_title.set(String::new());

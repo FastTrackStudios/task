@@ -264,7 +264,7 @@ pub fn PhoneProperties(doc: FocusedDoc) -> Element {
                             value: "{new_val}",
                             oninput: move |e| new_val.set(e.value()),
                             onkeydown: move |e| {
-                                if e.key() == Key::Enter {
+                                if e.key() == Key::Named(NamedKey::Enter) {
                                     add();
                                 }
                             },
@@ -385,7 +385,7 @@ fn PhoneList(doc: FocusedDoc, name: String, items: Vec<String>) -> Element {
                     value: "{draft}",
                     oninput: move |e| draft.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             push.call(());
                         }
                     },
@@ -462,7 +462,7 @@ pub fn PropertiesPanel(doc: FocusedDoc) -> Element {
                         value: "{new_val}",
                         oninput: move |e| new_val.set(e.value()),
                         onkeydown: move |e| {
-                            if e.key() == Key::Enter {
+                            if e.key() == Key::Named(NamedKey::Enter) {
                                 add();
                             }
                         },

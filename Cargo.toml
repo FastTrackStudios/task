@@ -459,13 +459,13 @@ view-table = { path = "features/view/view-table" }
 #
 # The chart renderer registers itself through `editor_state::fence_renderer`
 # rather than editor-state depending on it. See docs/SPLIT.md in that repo.
-editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24", default-features = false }
-editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24" }
-editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24", default-features = false }
+editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.25", default-features = false }
+editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.25", default-features = false }
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -483,31 +483,31 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
 # The Action List as an MCP server (named tools): Task's MCP lane runs its
 # pilot tools through it (`apps/server/src/actions/`).
-architect-mcp = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
+architect-mcp = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
 # The primitives architect-ui is built on — the same git source and
-# branch, so cargo unifies them. Task renders its own toasts from these
+# tag, so cargo unifies them. Task renders its own toasts from these
 # (`crates/ui/src/toasts.rs`) to show toast action buttons.
-dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", branch = "main", default-features = false }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
+dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", tag = "fts-upstream-2026-11", default-features = false }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
 # `crdt::docs`'s SeaORM catalog + persistence: each org's app docs.
-crdt-seaorm = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
+crdt-seaorm = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
 # The keymap engine (key trie, input processor, which-key) behind the
 # app-wide shortcuts (`crates/ui/src/shortcuts.rs`).
-architect-input = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.31" }
+architect-input = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
 # The device database engine (offline.md) — Turso's LOCAL engine only;
 # its sync is never used. Default features off: `mimalloc` would install
 # a global allocator from inside a library.
@@ -549,24 +549,24 @@ vox-codegen = "0.10.0-rc.7"
 # ── UI framework ──────────────────────────────────────────────────────
 # dioxus 0.8 line — git rev pinned; it must stay in lockstep across every
 # dioxus-* entry AND the FTS fork branches that pin the same rev.
-dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false, features = ["lib"] }
-dioxus-native = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", features = ["prelude", "system-fonts", "svg", "autofocus", "incremental", "data-uri"] }
-dioxus-router = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false }
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["lib"] }
+dioxus-native = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", features = ["prelude", "system-fonts", "svg", "autofocus", "data-uri"] }
+dioxus-router = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false }
 # The headless Blitz render (task-ui's / threads-ui's `shot` feature and
 # their `*_shot` examples): a dioxus VirtualDom into a Blitz document,
 # painted by Vello into a PNG — the same paint path a dioxus-native host
 # (Studio) takes. Behind a feature nothing enables by default, so neither
 # `cargo check --workspace` nor clippy's `--all-targets` builds wgpu.
-dioxus-native-dom = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc" }
-blitz-dom = "=0.3.0-beta.1"
-blitz-paint = "=0.3.0-beta.1"
-blitz-traits = "=0.3.0-beta.1"
-anyrender = "0.11"
-anyrender_vello = "0.12"
+dioxus-native-dom = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41" }
+blitz-dom = "=0.3.0-beta.4"
+blitz-paint = "=0.3.0-beta.4"
+blitz-traits = "=0.3.0-beta.4"
+anyrender = "0.14"
+anyrender_vello = "0.15"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Render-to-string, for UI markup snapshots in tests (crates/ui toasts).
-dioxus-ssr ={ git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc" }
-dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", branch = "main" }
+dioxus-ssr ={ git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41" }
+dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", tag = "v0.1.0" }
 neo_frizbee = { version = "0.11", features = ["match_end_col"] }
 nucleo-matcher = "0.3"
 
@@ -678,17 +678,29 @@ tempfile = "3"
 # Pinned by `rev`, never the branch: a patch that moves when somebody
 # pushes is a build that changes without a commit here saying so.
 vox-core = { git = "https://github.com/Codys-Wright/vox", rev = "08db2c4e8db643d235bf325462dd171dcb06cbaf" }
-# Blitz from the FTS fork (0.3.0-beta.1 line, upstream 02523b83 +
-# fts-focus: focus-follows-pointerdown for all focusable content —
-# upstream only click-focuses text inputs, leaving the editor's tabindex
-# div unfocusable by mouse). dioxus git pins `=0.3.0-beta.1`. One rev
-# across all blitz crates.
-blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
-blitz-traits = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
-blitz-paint = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
-blitz-shell = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
-blitz-net = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
-blitz-html = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+# Blitz from the FTS fork, the same tag architect pins: DioxusLabs/blitz
+# main (0.3.0-beta.4+) with the FTS work carried on top (fts-focus: focus
+# follows pointerdown for all focusable content, so the editor's tabindex
+# div takes a mouse focus; touch as pointer events; the iOS safe area and
+# pacing; layered compositing; the measure fix). The fork's FTS.md lists
+# where it departs from upstream. dioxus git pins `=0.3.0-beta.4`. One tag
+# across all blitz crates, and anyrender from the same tag.
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+blitz-traits = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+blitz-paint = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+blitz-shell = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+blitz-net = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+blitz-html = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+anyrender = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11" }
+# The renderer and windowing forks a Blitz app needs, at architect's
+# vendor tag (each one's reason is in vendor's README): Vello's window
+# renderer and the compositor, the hybrid renderer's resize, Vello's
+# surface on Metal, winit's UIKit backend, wgpu's Metal layer.
+anyrender_vello = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
+anyrender_vello_hybrid = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
+winit-uikit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
+wgpu-hal = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
+raw-window-metal = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.0" }
 # Vendored one-line fix: quote scalars containing `<`/`>` — upstream
 # styx-format emits them bare but styx-parse rejects them, so serialized
 # keybind configs (`keys "<C-s>"`) could not be re-parsed.
@@ -761,35 +773,49 @@ branches = { path = "vendor/branches" }
 # and `keyflow-text` from the keyflow repo instead of carrying its own
 # copies (or the keyflow repo should stop carrying them). Until one of
 # those ships, this is that fix, applied at the consumer.
+#
+# Keyflow is pinned by `rev` to its architect v0.10.0 branch
+# (`build/41-architect-v0.10.0`, keyflow#42) until that lands as a tag;
+# move this rev, `editor-keyflow`'s and the `daw` block's to the tag
+# together. At that rev `engraver-proto`, `keyflow-text`,
+# `keyflow-chordpro` and `keyflow-syntax` are folded into `engraver` and
+# `keyflow-lang`, so only these two entries are left.
 [patch."https://github.com/FastTrackStudios/FastTrackStudio"]
-engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
 
 [patch."https://github.com/FastTrackStudios/daw"]
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
 
-# dioxus-core with DioxusLabs/dioxus#5668's suspense fixes. With the
-# web bundle split into lazily loaded chunks every route sits behind a
-# SuspenseBoundary, and upstream core corrupts the render when a nested
-# boundary resolves while an ancestor is still suspended (click through
-# five routes in a second: `cannot reclaim ElementId(N)`, a blank page,
-# the chunk never requested). The fork is upstream main@e1c6342 + the
-# fix; the workspace rev f717a8e is main@e1c6342 + the Blitz beta.1
-# sync, which touches only packages/native*. The three in-repo deps of
-# dioxus-core (and subsecond's) ride along so there is one copy of each
-# type; they are byte-identical between the two revs. Drop this block
-# when the PR is merged and the dioxus rev is bumped past it.
+# ONE editor-state. Keyflow's architect v0.10.0 branch (keyflow#42, the
+# rev above) still takes `editor-state`/`editor-syntax` from editor
+# v0.1.24, and `editor_keyflow::Fences` must implement the same
+# `FenceRenderer` Task registers it with (crates/player-ui). The `www.`
+# host is the same repo under a different cargo source (a patch may not
+# point at the source it patches). Drop this block once keyflow pins
+# editor v0.1.25 and Task takes that keyflow tag.
+[patch."https://github.com/FastTrackStudios/editor"]
+editor-state = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+editor-syntax = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+
+# The Dioxus crates from the FTS vendor fork, the same tag architect pins
+# (each one's reason is in its UPSTREAM.md): dioxus-native — the iOS
+# simulator's renderer, winit beta.4 to match Blitz main;
+# dioxus-native-dom — `text_input_focused`, focus and measurements that
+# never panic on a busy document; dioxus-vdom (upstream's renamed
+# dioxus-core) — a dropped handler's owner is not a panic.
+#
+# This replaces the Brahmastra-Labs dioxus-core patch (DioxusLabs/dioxus
+# #5668's suspense fixes), which sat on the old e1c6342 base and has no
+# counterpart on 430cfb56, where the virtual DOM is `dioxus-vdom`.
+# #5668 is still open; vendor v0.7.1 (v0.7.0 + its core-suspense half,
+# FastTrackStudios/task#410) carries the fix in dioxus-vdom, so the
+# wasm-split web build keeps it. architect pins v0.7.0 until it takes
+# v0.7.1 too.
 [patch."https://github.com/DioxusLabs/dioxus"]
-dioxus-core = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
-dioxus-core-types = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
-generational-box = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
-subsecond = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
-subsecond-types = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
+dioxus-native = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.1" }
+dioxus-native-dom = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.1" }
+dioxus-vdom = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.7.1" }
 
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]

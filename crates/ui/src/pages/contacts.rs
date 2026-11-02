@@ -373,7 +373,7 @@ fn AddContactForm(slug: Memo<Option<String>>, on_added: EventHandler<()>) -> Ele
                         placeholder: "Ada Lovelace",
                         value: "{full_name}",
                         oninput: move |e| full_name.set(e.value()),
-                        onkeydown: move |e| if e.key() == Key::Enter { submit(); },
+                        onkeydown: move |e| if e.key() == Key::Named(NamedKey::Enter) { submit(); },
                     }
                 }
                 div { class: "grid gap-3 sm:grid-cols-2",

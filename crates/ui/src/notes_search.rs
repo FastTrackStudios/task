@@ -174,7 +174,7 @@ fn SearchSheet(on_close: EventHandler<()>) -> Element {
                             },
                             oninput: move |e| query.set(e.value()),
                             onkeydown: move |e| {
-                                if e.key() == Key::Escape {
+                                if e.key() == Key::Named(NamedKey::Escape) {
                                     on_close.call(());
                                 }
                             },

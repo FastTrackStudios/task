@@ -229,8 +229,8 @@ pub fn Calendar(props: CalendarProps) -> Element {
                     _ => {}
                 }
             }
-            Key::ArrowLeft => anchor.with_mut(|d| *d = step(*d, *view.read(), -1)),
-            Key::ArrowRight => anchor.with_mut(|d| *d = step(*d, *view.read(), 1)),
+            Key::Named(NamedKey::ArrowLeft) => anchor.with_mut(|d| *d = step(*d, *view.read(), -1)),
+            Key::Named(NamedKey::ArrowRight) => anchor.with_mut(|d| *d = step(*d, *view.read(), 1)),
             _ => {}
         }
     };

@@ -365,7 +365,7 @@ pub fn Gantt(props: GanttProps) -> Element {
         let key = e.data().key();
         let mods = e.data().modifiers();
         match key {
-            Key::Escape => {
+            Key::Named(NamedKey::Escape) => {
                 if linking_sig.peek().is_some() {
                     linking_sig.set(None);
                 } else {
@@ -375,7 +375,7 @@ pub fn Gantt(props: GanttProps) -> Element {
                     });
                 }
             }
-            Key::Delete | Key::Backspace => {
+            Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
                 if state.read().readonly {
                     return;
                 }
@@ -384,16 +384,20 @@ pub fn Gantt(props: GanttProps) -> Element {
                     on_event_kb.call(GanttEvent::DeleteTask { id });
                 }
             }
-            Key::Enter => {
+            Key::Named(NamedKey::Enter) => {
                 if let Some(id) = state.peek().selected.iter().next().copied() {
                     on_event_kb.call(GanttEvent::OpenEditor { id });
                 }
             }
-            Key::ArrowLeft | Key::ArrowRight => {
+            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
                 if state.read().readonly {
                     return;
                 }
-                let sign: i64 = if key == Key::ArrowLeft { -1 } else { 1 };
+                let sign: i64 = if key == Key::Named(NamedKey::ArrowLeft) {
+                    -1
+                } else {
+                    1
+                };
                 let s = state.peek();
                 let grid = s.build_grid();
                 let unit_secs =

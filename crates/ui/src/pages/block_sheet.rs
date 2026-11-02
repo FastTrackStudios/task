@@ -11,7 +11,7 @@
 //! Edits are held in the sheet and written on Done, so typing a name
 //! doesn't save on every keystroke.
 
-use architect_ui::lucide_dioxus::{FolderKanban, Play, Square, Trash2};
+use architect_ui::lucide_dioxus::{FolderKanban, Play, Square, Trash};
 use dioxus::prelude::*;
 use scheduling_proto::BlockCategory;
 use task_ui::{PickOption, PropertyPicker};
@@ -203,7 +203,7 @@ pub fn BlockSheet(
                     r#type: "button",
                     class: "flex min-h-[54px] w-full items-center gap-3 px-4 text-left text-[16px] text-red-400 active:bg-foreground/[0.04]",
                     onclick: move |_| on_delete.call(()),
-                    Trash2 { size: 17 }
+                    Trash { size: 17 }
                     "Remove from this day"
                 }
             }

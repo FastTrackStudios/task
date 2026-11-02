@@ -49,7 +49,7 @@ pub fn ChoiceMenu(
                     open.toggle();
                 },
                 onkeydown: move |e: KeyboardEvent| {
-                    if e.key() == Key::Escape {
+                    if e.key() == Key::Named(NamedKey::Escape) {
                         open.set(false);
                     }
                 },

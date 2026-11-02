@@ -347,7 +347,7 @@ fn MasterItem(item: DeliverableItem, slug: String, dir: String, project_title: S
 
 /// The medium's icon — the card's leading glyph.
 fn medium_icon(m: Medium) -> Element {
-    use architect_ui::lucide_dioxus::{FileText, Film, Image as ImageIcon, Music};
+    use architect_ui::lucide_dioxus::{AudioLines as Music, FileText, Film, Image as ImageIcon};
     match m {
         Medium::Audio => rsx! { Music { size: 14 } },
         Medium::Video => rsx! { Film { size: 14 } },

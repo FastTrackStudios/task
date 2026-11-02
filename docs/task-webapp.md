@@ -153,12 +153,14 @@ therefore come from that PR's branch (`nix/modules/dx.nix` builds
 resolve out of order — and a split app is nothing but nested boundaries:
 clicking through five routes in a second on a build without it gave
 `cannot reclaim ElementId(N)` and a blank screen whose chunk was never
-requested. So `dioxus-core` (with its in-repo deps, so every type has
-one copy) is `[patch]`ed onto the same fork rev in the root
-`Cargo.toml`; the rest of the workspace stays on upstream `f717a8e`,
-which is that PR's base plus the Blitz beta.1 sync (`packages/native*`
-only). Move dx and the patch back to upstream once the PR is in a
-release.
+requested. Task used to `[patch]` `dioxus-core` onto the same fork
+rev. Since architect v0.10.0 the workspace is on upstream `430cfb56`,
+where the virtual DOM is `dioxus-vdom` (from FastTrackStudios/vendor,
+the vendor tag architect pins), and the fork has no counterpart there,
+so that patch is gone. The suspense fix is ported to vendor's
+`dioxus-vdom` instead: Task takes the Dioxus crates from vendor v0.7.1
+(FastTrackStudios/task#410). Move dx back to upstream once the PR is in
+a release.
 
 `dx serve` (and `just live`) build without the feature or the flag, so
 the dev loop is one plain module and nothing about splitting touches it.

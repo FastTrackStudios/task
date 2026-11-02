@@ -432,7 +432,9 @@ fn key_down(keys: &InputHandle, key: KeyEvent) -> KeyPress {
 #[cfg(any(target_arch = "wasm32", test))]
 fn fired_action(command: InputCommand) -> Option<String> {
     match command {
-        InputCommand::Action(id) | InputCommand::ActionWithArgs { action: id, .. } => Some(id),
+        InputCommand::Action(id)
+        | InputCommand::ActionWithArgs { action: id, .. }
+        | InputCommand::Gesture { action: id, .. } => Some(id),
         _ => None,
     }
 }

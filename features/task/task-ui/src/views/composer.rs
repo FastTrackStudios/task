@@ -689,10 +689,10 @@ pub fn Composer(props: ComposerProps) -> Element {
                 class: "flex h-full w-full flex-col overflow-hidden bg-popover md:h-auto md:max-h-[80vh] md:max-w-2xl md:rounded-xl md:border md:border-border md:bg-popover md:shadow-2xl",
                 onclick: move |e| e.stop_propagation(),
                 onkeydown: move |e: KeyboardEvent| {
-                    if e.key() == Key::Enter && (e.modifiers().meta() || e.modifiers().ctrl()) {
+                    if e.key() == Key::Named(NamedKey::Enter) && (e.modifiers().meta() || e.modifiers().ctrl()) {
                         e.prevent_default();
                         create_key();
-                    } else if e.key() == Key::Escape {
+                    } else if e.key() == Key::Named(NamedKey::Escape) {
                         e.prevent_default();
                         props.on_close.call(());
                     }
@@ -741,7 +741,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                             },
                             onkeydown: move |e: KeyboardEvent| {
                                 if suggestions_key.is_empty() {
-                                    if e.key() == Key::Enter && !e.modifiers().meta() && !e.modifiers().ctrl() {
+                                    if e.key() == Key::Named(NamedKey::Enter) && !e.modifiers().meta() && !e.modifiers().ctrl() {
                                         // The title is one line. On a quick
                                         // note, Enter is done — write it down.
                                         e.prevent_default();
@@ -753,15 +753,15 @@ pub fn Composer(props: ComposerProps) -> Element {
                                 }
                                 let n = suggestions_key.len();
                                 match e.key() {
-                                    Key::ArrowDown => { e.prevent_default(); cursor.set((at + 1) % n); }
-                                    Key::ArrowUp => { e.prevent_default(); cursor.set((at + n - 1) % n); }
-                                    Key::Enter | Key::Tab => {
+                                    Key::Named(NamedKey::ArrowDown) => { e.prevent_default(); cursor.set((at + 1) % n); }
+                                    Key::Named(NamedKey::ArrowUp) => { e.prevent_default(); cursor.set((at + n - 1) % n); }
+                                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) => {
                                         e.prevent_default();
                                         if let Some(o) = suggestions_key.get(at).cloned() {
                                             resolve_key(o);
                                         }
                                     }
-                                    Key::Escape => {
+                                    Key::Named(NamedKey::Escape) => {
                                         e.prevent_default();
                                         e.stop_propagation();
                                         title.set(format!("{} ", title.peek()));
@@ -839,7 +839,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                                     onmounted: move |e| async move { let _ = e.set_focus(true).await; },
                                     oninput: move |e| sub_draft.set(e.value()),
                                     onkeydown: move |e: KeyboardEvent| match e.key() {
-                                        Key::Enter if !e.modifiers().meta() => {
+                                        Key::Named(NamedKey::Enter) if !e.modifiers().meta() => {
                                             e.prevent_default();
                                             let t = sub_draft.peek().trim().to_owned();
                                             if !t.is_empty() {
@@ -849,7 +849,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                                                 sub_draft.set(String::new());
                                             }
                                         }
-                                        Key::Escape => { e.prevent_default(); e.stop_propagation(); adding_sub.set(false); }
+                                        Key::Named(NamedKey::Escape) => { e.prevent_default(); e.stop_propagation(); adding_sub.set(false); }
                                         _ => {}
                                     },
                                 }
@@ -865,7 +865,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                             onmounted: move |e| async move { let _ = e.set_focus(true).await; },
                             oninput: move |e| link_draft.set(Some(e.value())),
                             onkeydown: move |e: KeyboardEvent| {
-                                if e.key() == Key::Enter {
+                                if e.key() == Key::Named(NamedKey::Enter) {
                                     e.prevent_default();
                                     let url = link_draft.peek().clone().unwrap_or_default();
                                     if !url.trim().is_empty() {
@@ -873,7 +873,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                                         description.set(if d.trim().is_empty() { url.trim().to_owned() } else { format!("{}\n\n{}", d.trim_end(), url.trim()) });
                                     }
                                     link_draft.set(None);
-                                } else if e.key() == Key::Escape {
+                                } else if e.key() == Key::Named(NamedKey::Escape) {
                                     e.prevent_default();
                                     e.stop_propagation();
                                     link_draft.set(None);

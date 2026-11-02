@@ -25,10 +25,10 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, Brain, Briefcase, Calendar, ChefHat, ChevronRight, Church, DollarSign, Dumbbell,
-    FileText, Flame, Globe, GraduationCap, Hash, Heart, HeartPulse, House, Leaf, ListTodo, MapPin,
-    Moon, Music, NotebookPen, Package, PenLine, Repeat, Sparkles, SquareKanban, Star, Sun, Users,
-    Utensils, Wrench,
+    AudioLines as Music, BookOpen, Brain, Briefcase, Calendar, ChefHat, ChevronRight, Church,
+    DollarSign, Dumbbell, FileText, Flame, Globe, GraduationCap, Hash, Heart, HeartPulse, House,
+    Leaf, ListTodo, MapPin, Moon, NotebookPen, Package, PenLine, Repeat, Sparkles, SquareKanban,
+    Star, Sun, Users, Utensils, Wrench,
 };
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
