@@ -21,7 +21,7 @@ Updated as slices land.
 | 🟡 Partial | 0 |
 | ❌ Out of scope | 1 |
 
-**30/30 functional surface either ✅ or ❌.** Vision-caption + LanceDB indexer ship as full code paths, gated on infra: a vision-capable LLM backend for the former, and a `QueryEmbedder` impl for the latter. Build needs `protoc` for the `vector` feature (`flake.nix`'s dev-shell provides it).
+**30/30 functional surface either ✅ or ❌.** Vision-caption + LanceDB indexer ship as full code paths, gated on infra: a vision-capable LLM backend for the former, and a `QueryEmbedder` impl for the latter. Build needs `protoc` for the `vector` feature (the dev shell doesn't carry it; add `protobuf` to `devenv.nix` to build it).
 
 ## Storage + bootstrap
 
@@ -71,7 +71,7 @@ Updated as slices land.
 | Feature | Status | Where |
 |---|---|---|
 | Token search | ✅ | `wiki-search::token`. CLI: `task wiki search`. |
-| Vector search (LanceDB) | ✅ | `wiki-search` `vector` feature: real `lancedb 0.29` backend. `index(&dyn DocEmbedder, &[IndexRow])` populates `<vault>/Wiki/_state/lancedb/`; `search_hybrid_with(&dyn QueryEmbedder, ...)` runs vector query + reciprocal-rank fusion against token. Build needs `protoc` (`flake.nix` dev-shell). |
+| Vector search (LanceDB) | ✅ | `wiki-search` `vector` feature: real `lancedb 0.29` backend. `index(&dyn DocEmbedder, &[IndexRow])` populates `<vault>/Wiki/_state/lancedb/`; `search_hybrid_with(&dyn QueryEmbedder, ...)` runs vector query + reciprocal-rank fusion against token. Build needs `protoc` (not in the `devenv.nix` dev shell). |
 | Image extraction | ✅ | `wiki-extract` crate. Office (`pptx`/`docx`/`zip`) + standalone images by default; PDFs behind `pdf` feature (pdfium-render). Mounted via `Multimodal` trait. |
 | Vision caption | ✅ | `agent-wiki::bridge::vision_caption_prompt(before, after)` returns the rendered prompt; pipe `ExtractedImage::bytes` into a vision-capable backend turn. |
 

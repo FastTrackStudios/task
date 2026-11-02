@@ -14,10 +14,10 @@
 # Editor repo documents — by the time Playwright starts, the bundle
 # is static bytes served by serve.js.
 #
-# Run inside the repo dev shell so the pinned Playwright browsers and
-# the wasm C toolchain resolve (there is no separate .#playwright
-# shell — the default one carries PLAYWRIGHT_BROWSERS_PATH):
-#   nix develop --command apps/task/tests/multiplayer/run.sh
+# Run inside the repo's devenv shell so the pinned Playwright browsers
+# (devenv.nix's PLAYWRIGHT_BROWSERS_PATH) and the wasm C toolchain
+# (devenv-fleet's `dioxus` CC_wasm32_unknown_unknown) resolve:
+#   devenv shell -- apps/tests/multiplayer/run.sh
 #
 # Env knobs:
 #   MP_SERVER_PORT (default 18091)  isolated task-server port
@@ -34,13 +34,13 @@ REPO_ROOT="$(cd ../../../.. && pwd)"
 MP_SERVER_PORT="${MP_SERVER_PORT:-18091}"
 
 if [[ "${MP_SKIP_BUILD:-}" != "1" ]]; then
-  # Outside the nix dev shell the wasm C toolchain is missing and
+  # Outside the dev shell the wasm C toolchain is missing and
   # arborium's tree-sitter grammars silently end up as unresolved
   # `env` imports — the app then fails to even load ("Failed to
   # resolve module specifier \"env\""). Fail fast instead.
   if [[ -z "${CC_wasm32_unknown_unknown:-}" ]]; then
     echo "error: CC_wasm32_unknown_unknown is unset — run inside the dev shell:" >&2
-    echo "  nix develop --command apps/task/tests/multiplayer/run.sh" >&2
+    echo "  devenv shell -- apps/tests/multiplayer/run.sh" >&2
     exit 1
   fi
 

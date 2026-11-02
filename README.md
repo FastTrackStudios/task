@@ -38,7 +38,7 @@ the web app.
 |---|---|
 | macOS (Apple silicon) | [Task-macos.dmg](https://github.com/FastTrackStudios/task/releases/latest/download/Task-macos.dmg). Open it and drag Task to Applications |
 | Linux (x86-64) | [Task-linux-x86_64.AppImage](https://github.com/FastTrackStudios/task/releases/latest/download/Task-linux-x86_64.AppImage). `chmod +x` it and run it |
-| NixOS | `nix run github:FastTrackStudios/task#task-desktop` (prebuilt on `fasttrackstudio.cachix.org`) |
+| NixOS | The same AppImage: `nix run nixpkgs#appimage-run -- Task-linux-x86_64.AppImage` |
 
 Installed apps update themselves: they check the latest release in the
 background and install the update on the next start. The tray's *Check for

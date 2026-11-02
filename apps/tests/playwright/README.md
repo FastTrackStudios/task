@@ -5,10 +5,10 @@ Smoke coverage for the Task web app (`apps/web`). Modeled on the sibling
 `packages/playwright-tests/` — a single `playwright.config.js` whose
 `webServer` boots `dx serve` (web platform) for the run.
 
-Everything is **self-contained in the flake**: the `playwright` dev
-shell (`flake.nix` → `devShells.playwright`) provides `nodejs`, `pnpm`,
-and a Nix-managed Chromium via `playwright-driver.browsers`, with
-`PLAYWRIGHT_BROWSERS_PATH` preset — so you never run
+Everything is **self-contained in the repo's devenv shell**: `devenv.nix`
+provides `nodejs`, `pnpm`, and a Nix-managed Chromium via
+`playwright-driver.browsers` (from the `nixpkgs-dx` input pinned in
+`devenv.yaml`), with `PLAYWRIGHT_BROWSERS_PATH` preset — so you never run
 `playwright install`.
 
 ## Layout
@@ -26,11 +26,12 @@ tests/playwright/
 
 ## Run
 
-From the repo root:
+From the repo root, in the dev shell (direnv loads it via `.envrc`, or
+`devenv shell`):
 
 ```sh
-nix develop .#playwright
-cd tests/playwright
+devenv shell            # skip if direnv already loaded it
+cd apps/tests/playwright
 pnpm install            # fetches @playwright/test only (no browser download)
 pnpm test               # headless; HTML report on failure
 ```
@@ -60,18 +61,19 @@ state when the vox endpoint is absent.
 
 ## Version pinning (important)
 
-`@playwright/test` in `package.json` **must match the flake's locked
-`playwright-driver`** (NOT your registry's `nixpkgs#…`, which is often
-newer and ships different browser revisions → "Executable doesn't
-exist" errors). Query the flake's actual version and bump to match:
+`@playwright/test` in `package.json` **must match the `playwright-driver`
+of the `nixpkgs-dx` input pinned in `devenv.yaml`** (NOT your registry's
+`nixpkgs#…`, which is often newer and ships different browser revisions
+→ "Executable doesn't exist" errors). Query that rev's actual version
+and bump to match:
 
 ```sh
-nix eval --raw --impure --expr \
-  '(builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}.playwright-driver.version'
-# currently 1.58.2  (ships chromium-1208)
+nix eval --raw "github:NixOS/nixpkgs/$(grep -A1 'nixpkgs-dx:' devenv.yaml | sed -n 's|.*nixpkgs/||p')#playwright-driver.version"
+# d99b013d… currently gives 1.59.1  (ships chromium-1217)
 ```
 
-After bumping nixpkgs in `flake.lock`, re-check this and re-pin.
+`nixpkgs-dx` is devenv-fleet's pin (`scripts/fleet-pins --write .`
+rewrites `devenv.yaml`); after it moves, re-check this and re-pin.
 
 ## Data-driven tests (opt-in, future)
 

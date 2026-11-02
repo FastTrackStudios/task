@@ -146,9 +146,11 @@ have kept unmatched symbols in the main module wrote to a map nobody
 read, and the walrus gc pass then walked ids already pruned. Dropping
 `codegen-units = 1` — the workaround suggested on the issue — does not
 help here (measured). The dev shell's and the hermetic build's `dx`
-therefore come from that PR's branch (`nix/modules/dx.nix` builds
-`packages/cli` from `Brahmastra-Labs/dioxus@19ea842`, upstream
-`main@e1c6342` + two commits). The PR's second commit fixes two
+therefore come from that PR's branch (devenv-fleet's `pkgs/dx.nix`,
+pinned in its `pins.json`, builds `packages/cli` from
+`Brahmastra-Labs/dioxus@19ea842`, upstream `main@e1c6342` + two commits;
+its `dioxus` module puts it in the devenv shell and `nix/modules/dx.nix`
+hands the same derivation to the hermetic build). The PR's second commit fixes two
 `dioxus-core` suspense bugs that corrupt renders when nested boundaries
 resolve out of order — and a split app is nothing but nested boundaries:
 clicking through five routes in a second on a build without it gave
@@ -167,15 +169,18 @@ the dev loop is one plain module and nothing about splitting touches it.
 
 ## Local preview/dev mode
 
-Use the Dioxus flake dev shell and keep preview data isolated from stable Task services:
+Use the repo's devenv shell (it carries dx and tailwindcss) and keep preview data isolated from stable Task services:
 
 ```bash
-nix --extra-experimental-features 'nix-command flakes' develop .#ui -c sh -lc '
-  tailwindcss -i apps/task/web/tailwind.css -o apps/task/web/assets/tailwind.css
-  cd apps/task/web
+devenv shell -- bash -c '
+  just css
+  cd apps/web
   dx serve --platform web
 '
 ```
+
+`devenv up` runs the same as its `web` process, beside the `server` it
+proxies to.
 
 ## FTS-ui integration status
 

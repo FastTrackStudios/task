@@ -38,7 +38,7 @@ nix build .#task-cli
 For development or manual administration:
 
 ```bash
-nix develop
+devenv shell        # or let direnv load it (.envrc)
 cargo check -p task-server
 cargo check -p task-cli
 ```

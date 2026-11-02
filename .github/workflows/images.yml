@@ -176,11 +176,21 @@ jobs:
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           export CARGO_TARGET_DIR="$dir"
-          nix develop --accept-flake-config .#ci -c \
-            cargo build --release -p task-server
+          # The tag's own dev shell: devenv's (asserted by fleet-doctor) from
+          # the devenv move on; before it (a re-publish of an older tag) the
+          # flake's `.#ci` for the server and `.#default` for dx.
+          if [ -f devenv.nix ]; then
+            devenv shell -- fleet-doctor
+            server_shell() { devenv shell -- "$@"; }
+            web_shell() { devenv shell -- "$@"; }
+          else
+            server_shell() { nix develop --accept-flake-config .#ci -c "$@"; }
+            web_shell() { nix develop --accept-flake-config .#default -c "$@"; }
+          fi
+          server_shell cargo build --release -p task-server
           # tailwind first: dx reads assets/ before cargo runs. (Older tags,
           # e.g. v0.2.4, predate architect-ui-link.sh.)
-          nix develop --accept-flake-config .#default -c bash -c '
+          web_shell bash -c '
             set -e
             if [ -f scripts/architect-ui-link.sh ]; then bash scripts/architect-ui-link.sh; fi
             (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)

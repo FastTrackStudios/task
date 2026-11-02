@@ -53,10 +53,15 @@ Notes that save time:
   topped up. To reseed from scratch, delete the demo data roots the script
   prints and serve again.
 - **ffmpeg must be on PATH when planting** or video deliverables stay
-  outstanding (the dev shell carries it; `nix/modules/toolchain.nix`).
-- **Stale shells**: if a `dx` launch fails with a compiler-wrapper error,
-  run it as `env -u RUSTC_WRAPPER dx ...` (sccache was removed; old shells
-  may still export the wrapper).
+  outstanding (the dev shell carries it; `devenv.nix`).
+- **The dev shell is devenv** (`devenv.nix`, devenv-fleet's modules; direnv
+  loads it, `devenv shell -- <cmd>` without direnv). `devenv up` (`just
+  dev`) is the other loop: one server on :18080, the web app and the
+  fleet's local Teley behind an OTLP collector on :4318, so not alongside
+  `just demo telemetry`. `fleet-doctor` names the rustc and wrapper.
+- **dx and kache**: the dev shell's dx (devenv-fleet's, with
+  `DX_NO_RUSTC_WRAPPER=1`) runs base builds through kache like plain cargo;
+  don't unset `RUSTC_WRAPPER` for it.
 - Run each process with `run_in_background` and tee output to the
   scratchpad (e.g. `serve.log`, `web.log`) so you can read it later.
 - Never `pkill -f "dx serve"` — the pattern matches the user's own panes.

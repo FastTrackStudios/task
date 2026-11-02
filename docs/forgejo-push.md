@@ -82,19 +82,19 @@ curl -s -u <user>:<token> -X POST -H 'Content-Type: application/json' \
 
 A 200 means merged. Forgejo will *not* let you self-approve your own PR (HTTP 422), so for solo work `force_merge` is the path. For team work, ping a reviewer and use the normal merge button.
 
-### Client-side (capn pre-push)
+### Client-side (prek pre-push)
 
-`apps/task/hooks/pre-push` (installed via `just install-hooks`, which sets `core.hooksPath`) runs [`capn pre-push`](https://github.com/anthropics/capn), which builds the workspace before letting the push through. Capn needs the system libs every workspace member pulls in — `pango`, `webkitgtk_4_1`, `gtk3`, `libsoup_3`, the gstreamer stack — because `apps/task/desktop` depends on `dioxus-desktop`.
+prek's pre-push hook (`local-ci` in `prek.toml`, installed via `just install-hooks`) runs `scripts/ci-local-hook.sh`, which runs local CI (`scripts/ci-local.sh`: fmt, then the clippy / tests / wasm `cargo rail plan` says the change affects) before letting the push through. That build needs the system libs every workspace member pulls in — `pango`, `webkitgtk_4_1`, `gtk3`, `libsoup_3` — because `apps/desktop` depends on `dioxus-desktop`.
 
-The hook handles this for you: outside a nix shell it re-enters `nix develop` before invoking capn, so the GTK + WebView dep list is on `PKG_CONFIG_PATH` automatically. Inside a nix shell (`IN_NIX_SHELL` set) it runs capn directly in the current env.
+The hook handles this for you: when this repo's devenv shell is already loaded (direnv via `.envrc`; the hook checks that `pkg-config` sees `pango` and `libsoup-3.0`, since `DEVENV_ROOT` may be another project's) it runs local CI directly in the current env; otherwise it re-enters the shell with `devenv shell --` from the repo root, so the GTK + WebView dep list is on `PKG_CONFIG_PATH` automatically.
 
-If capn still fails:
+If local CI still fails:
 
-1. **The failure is about your diff.** Fix it. Capn caught a real regression — clippy lint, format drift, broken test. This is the path 95% of the time.
-2. **A new workspace member needs a system lib that isn't in the dev shell.** Add it to dioxus-flake's `buildInputs` (or this repo's flake if we ever decouple). Don't paper over with `nix-shell -p <lib>` — the next agent will hit the same wall.
-3. **The error genuinely has nothing to do with your changes and isn't a dep gap** (e.g. transient compiler ICE, network hiccup pulling a registry). `NO_CAPN=1 git push …` bypasses capn for the one push. Reserve for actual infrastructure problems; never for "capn keeps complaining about my code."
+1. **The failure is about your diff.** Fix it. Local CI caught a real regression — clippy lint, format drift, broken test. This is the path 95% of the time.
+2. **A new workspace member needs a system lib that isn't in the dev shell.** Add it to `devenv.nix` (its `common` / `linux` lists, which also feed `LD_LIBRARY_PATH`), or to devenv-fleet's module if every fleet repo needs it. Don't paper over with `nix-shell -p <lib>` — the next agent will hit the same wall.
+3. **The error genuinely has nothing to do with your changes and isn't a dep gap** (e.g. transient compiler ICE, network hiccup pulling a registry). `SKIP=local-ci git push …` bypasses local CI for the one push. Reserve for actual infrastructure problems; never for "local CI keeps complaining about my code."
 
-The `--no-verify` / `NO_CAPN` escape is the last resort, not the first. The whole point of pre-push is to catch what CI would catch, before pushing — skipping it just moves the failure to PR review.
+The `--no-verify` / `SKIP=local-ci` escape is the last resort, not the first. The whole point of pre-push is to catch what CI would catch, before pushing — skipping it just moves the failure to PR review.
 
 ## Working from a non-`main` worktree
 

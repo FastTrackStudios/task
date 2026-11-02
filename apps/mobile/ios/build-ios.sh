@@ -6,7 +6,7 @@
 #   just mobile-sim                 # build + run on the booted simulator
 #   apps/mobile/ios/build-ios.sh [--sim <udid|booted>] [--no-build]
 #
-# Run from anywhere; it enters the nix dev shell itself. The env dance is
+# Run from anywhere; it enters the repo's devenv shell itself. The env dance is
 # REQUIRED (same as deploy-testflight.sh): nixpkgs ships a fake xcbuild
 # `xcrun` and its SDK env hides Xcode's, so iOS cross-compiles need the
 # real xcrun first on PATH and the nix SDK vars unset.
@@ -44,14 +44,15 @@ if [ "$BUILD" = 1 ]; then
     ln -sf /usr/bin/xcrun "$BIN_IOS/xcrun"
     # Tailwind v4's content detection is rooted at the working directory,
     # so the sheet is built from the input's own directory (apps/), as
-    # apps/tailwind_build.rs and deploy-testflight.sh do.
-    nix develop "$ROOT" -c bash -c "
+    # apps/tailwind_build.rs and deploy-testflight.sh do. devenv finds
+    # devenv.nix from the working directory, hence the cd to $ROOT.
+    (cd "$ROOT" && devenv shell -- bash -c "
         set -euo pipefail
         unset DEVELOPER_DIR SDKROOT RUSTC_WRAPPER
         export PATH='$BIN_IOS':\$PATH
         bash '$ROOT/scripts/architect-ui-link.sh'
         cd '$ROOT/apps' && tailwindcss -i tailwind.css -o mobile/assets/tailwind.css
-        cd '$ROOT/apps/mobile' && dx build --platform ios $( [ "$PROFILE" = release ] && echo --release )"
+        cd '$ROOT/apps/mobile' && dx build --platform ios $( [ "$PROFILE" = release ] && echo --release )")
 fi
 
 # dx names the bundle from the package (TaskAppMobile.app today; it has

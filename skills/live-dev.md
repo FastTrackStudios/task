@@ -46,7 +46,7 @@ next `Build completed` before reloading.
 Run it in the background with the log in the scratchpad:
 
 ```bash
-env -u RUSTC_WRAPPER just live > $SCRATCH/web.log 2>&1 &
+just live > $SCRATCH/web.log 2>&1 &
 ```
 
 ## 3. Drive the same server from the CLI as that account
