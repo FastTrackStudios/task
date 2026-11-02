@@ -34,7 +34,8 @@ on the CLI for idempotence + audit.
 
 - [`release-workflow.md`](release-workflow.md) — how a change reaches
   production (tag-from-main, studio's flow): branch from main, PR into
-  main with a cargo-rail change file, squash; a release is a CalVer tag
+  main with a cargo-rail change file (a lone PR squashes, a stack merges
+  with merge commits; notes from change files); a release is a CalVer tag
   `vYY.M.MICRO` that `just release` pushes on main's newest green commit,
   and the tag alone ships; no release PRs; hotfix lines, rollback, what
   runs where.

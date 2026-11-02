@@ -9,7 +9,14 @@ skill, which still describes release PRs); the logic is
 
 - `main` is the only long-lived branch. Branch from `origin/main`, PR into
   `main` with a conventional title and a cargo-rail change file
-  (`.changes/README`), squash. The full suite runs after every merge.
+  (`.changes/README`). A lone PR squash-merges; a stack merges with merge
+  commits titled with each PR's title and body, so the first-parent
+  history of `main` is one conventional commit per PR (`git log
+  --first-parent`, `git bisect start --first-parent`). PRs merge in
+  batches without waiting on CI per change; `main`'s full suite, which
+  runs after the merges, is the gate, checked once per batch and fixed
+  forward.
+- **Release notes come from the change files, never from commits.**
 - **A release is a CalVer tag `vYY.M.MICRO`** that `just release` pushes on
   `main`'s newest commit whose `CI passed` is green (or on a `release/v*`
   hotfix line). There is no release PR and no release commit: every
@@ -44,7 +51,9 @@ re-verify or re-publish, run the workflow with the tag as its ref
 
 ## Branch protection
 
-`main`: squash-only PRs, required check `PR checks` (pr.yml) only; `Local
+`main`: PRs only, required check `PR checks` (pr.yml) only; `Local
 CI` (the pre-push hook's status) is an indicator. No direct pushes, no
-force-push, no deletion. Repository settings: squash merges only, message
-= PR title + body, delete branch on merge, auto-merge on.
+force-push, no deletion. Repository settings: squash merges (a lone PR)
+and merge commits (a stack, `allow_merge_commit`), both titled with the
+PR title and body (`merge_commit_title=PR_TITLE`,
+`merge_commit_message=PR_BODY`), delete branch on merge, auto-merge on.

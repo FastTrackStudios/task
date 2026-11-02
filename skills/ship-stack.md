@@ -156,16 +156,25 @@ on GitHub for that branch, which posts `Local CI` when green:
 
 ### 6. Merge
 
-**Normal:** when `gh pr checks <n>` shows `PR checks` passing on every
-layer (and `Local CI`, if the push ran the hook):
+**Normal:** don't wait on CI per change. Once your local checks pass,
+push, mark the PRs ready and report. The orchestrator merges in batches,
+with no CI wait between merges, and holds a PR back only if a check has
+already failed or it really conflicts:
 
 ```bash
-gh stack merge <top pr> --yes --squash      # all-or-nothing, bottom-up
-gh pr merge <n> --squash                    # a single PR (one-layer "stacks" aren't stacked on GitHub)
+/run/media/Development/wt/.architect-issues/merge_batch.sh FastTrackStudios/task <pr>...   # a stack bottom-up, or a set of ready PRs
 ```
 
-A wake-up or notification that says the checks passed is a hint, not proof.
-Read `gh pr checks` yourself before merging.
+A stack merges with **merge commits**, each titled with its PR's title and
+body, so the layers above stay mergeable without a rebase; a lone PR is
+squash-merged. Either way `main`'s first-parent history is one
+conventional commit per PR: read it and bisect with `--first-parent`.
+Release notes come from the change files, never from commits. By hand:
+
+```bash
+gh stack merge <top pr> --yes --merge       # a stack: all-or-nothing, bottom-up, merge commits
+gh pr merge <n> --squash                    # a single PR (one-layer "stacks" aren't stacked on GitHub)
+```
 
 **Forced** (the user asked for it, or a required check can't be satisfied,
 e.g. while a required check is being renamed): bottom-up, one PR at a time,
@@ -176,11 +185,11 @@ each only once the one below has merged and this one is retargeted to
 gh pr ready <n>
 h=$(gh pr view <n> --json headRefOid -q .headRefOid)
 gh api -X PUT repos/FastTrackStudios/task/pulls/<n>/merge-async \
-  -f merge_action=direct_merge -f merge_method=squash -f sha="$h" -F bypass_rules=true
+  -f merge_action=direct_merge -f merge_method=merge -f sha="$h" -F bypass_rules=true
 ```
 
-A squash merge rewrites the layer below, so a PR further up may report
-`CONFLICTING`. Rebase the remaining layers onto the new main with
+`merge_method=merge` keeps the layers above mergeable. If a layer below was
+squashed instead, a PR further up may report `CONFLICTING`. Rebase the remaining layers onto the new main with
 `SKIP=local-ci gh stack sync` (it pushes; the rebased heads have no
 recorded pass and are force-merged next), then continue. A PR still
 `MERGEABLE` needs no sync.
@@ -217,7 +226,9 @@ gh run list -b main -w checks.yml -L 5 --json databaseId,status,headSha
 ```
 
 Done when the run on main's head commit has a green `CI passed`.
-`just release` requires it.
+`just release` requires it. After a merge batch, check that run **once**;
+a red `main` is fixed forward with one PR. To find the merge that broke
+it, `git bisect start --first-parent`: each first parent is one PR.
 
 ## Reference
 

@@ -179,8 +179,9 @@ release-desktop VERSION:
 #
 # Tag-from-main, the same flow as studio's (Task's specifics:
 # skills/release-workflow.md). `main` is the only long-lived branch: every
-# change is a squash-merged PR carrying a cargo-rail change file
-# (`.changes/*.md`). A release is a TAG `vYY.M.MICRO` (CalVer, computed)
+# change is a PR carrying a cargo-rail change file (`.changes/*.md`): a lone
+# PR squashes, a stack merges with merge commits; notes come from the
+# change files, never from commits. A release is a TAG `vYY.M.MICRO` (CalVer, computed)
 # that `release` pushes on main's newest commit whose `CI passed` is green.
 # Nothing is committed for it: every release build stamps the tag's
 # version into its own checkout. The tag builds and pushes the images

@@ -1,6 +1,6 @@
 ---
 name: release-workflow
-description: How a change reaches production in Task (tag-from-main, the same flow as studio's). Branch from main, PR into main with a cargo-rail change file, squash; a RELEASE is a CalVer tag vYY.M.MICRO that `just release` pushes on main's newest green commit. No release PR, no release commit; the tag alone builds the images (production follows), uploads TestFlight and publishes the GitHub Release. Task's specifics; they win over the fleet `release-workflow` skill where the two disagree. Use when opening, reviewing or merging any PR in this repo, when cutting a release or a hotfix, and when rolling back.
+description: How a change reaches production in Task (tag-from-main, the same flow as studio's). Branch from main, PR into main with a cargo-rail change file; a lone PR squashes, a stack merges with merge commits, release notes come from change files never commits; a RELEASE is a CalVer tag vYY.M.MICRO that `just release` pushes on main's newest green commit. No release PR, no release commit; the tag alone builds the images (production follows), uploads TestFlight and publishes the GitHub Release. Task's specifics; they win over the fleet `release-workflow` skill where the two disagree. Use when opening, reviewing or merging any PR in this repo, when cutting a release or a hotfix, and when rolling back.
 ---
 
 # Release workflow in Task (tag-from-main)
@@ -19,7 +19,7 @@ release commit. The fleet `release-workflow` skill holds the shared rules
 describes release PRs, so where it disagrees, this page wins.
 
 ```
-feat/sta-123-slug --PR (PR checks, change file)--squash--> main -- CI (`CI passed`) after every merge
+feat/sta-123-slug --PR (PR checks, change file)--squash (lone) / merge commit (stack)--> main -- CI (`CI passed`), checked once per merge batch
                       just release --> tag v26.10.2 on main's newest green commit
                                          | (the tag alone, deploy.yml + the Apple workflows:)
                                          |-- Images: ghcr.io/fasttrackstudios/task-{server,web}:26.10.2 --> image-updater --> production
@@ -55,9 +55,15 @@ just ci-changes                               # the same change check CI runs
 gh pr create --draft --base main --title "fix(files): stop sync stalling after offline edits"
 ```
 
-Fill in `.github/pull_request_template.md`. Squash-merge once `PR checks`
-is green and it is reviewed (`gh pr merge --squash --auto`). Change files:
-`.changes/README`. A local `just ci` is optional, never the gate.
+Fill in `.github/pull_request_template.md`. Don't wait on CI: once your
+local checks pass, push, mark the PR ready and report. The orchestrator
+merges in batches (`merge_batch.sh`, no CI wait between merges): a lone
+PR squashes, a stack merges with merge commits titled with each PR's
+title and body, so `main`'s first-parent history is one conventional
+commit per PR (read history and bisect with `--first-parent`). It then
+checks `main`'s CI once and fixes forward. Release notes come from the
+change files (`.changes/README`), never from commits. A local `just ci`
+is optional, never the gate.
 
 ## Cutting a release (no Captain approval)
 
@@ -102,7 +108,7 @@ just release-notes [vX.Y.Z]  # a tag's notes (default: the draft for origin/main
 
 ```bash
 just release-hotfix sta-130-sync-stall <sha on main>…   # release/v<latest> from the tag, fix/<name> cherry-picked (-x), PR into it
-# squash-merge it once its full suite is green; once release/v…'s CI passed is green:
+# merge it once its full suite is green; once release/v…'s CI passed is green:
 just release <merge sha>                                # tags the next CalVer there
 ```
 

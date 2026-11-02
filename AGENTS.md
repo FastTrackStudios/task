@@ -152,7 +152,14 @@ follows `skills/ship-stack.md`. In short:
   the push is instant (a long hook can outlast git's connection to
   GitHub). With no hook, a dirty tree or `SKIP=local-ci`, run
   `gh workflow run checks.yml --ref <branch>` instead:
-  it posts `Local CI` when green. PRs squash-merge, and the full set
+  it posts `Local CI` when green. A lone PR squash-merges; a stack merges
+  with merge commits titled with each PR's title and body, so `main`'s
+  first-parent history is one conventional commit per PR (read history
+  and bisect with `--first-parent`). Release notes come from the change
+  files, never from commits. Don't wait on CI: once your local checks
+  pass, push, mark the PR ready and report; the orchestrator merges in
+  batches (`merge_batch.sh`), checks `main`'s CI once per batch and fixes
+  forward. The full set
   (clippy, wasm, the tests the merge affects) runs after every merge to
   `main` on THEBATTLESHIP's shared `thebattleship` pool, whose targets
   are restored across slots by kache (`thebattleship-release` builds only the release
