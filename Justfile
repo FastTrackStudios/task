@@ -614,8 +614,8 @@ rail-evidence: css
 #                                           old artifacts; this drops them)
 #
 # The pool builds it, in its own environment and at its own paths: a copy
-# of a local target dir would not do. Local builds differ in flags (mold,
-# CARGO_INCREMENTAL), build scripts bake the target dir's absolute path into
+# of a local target dir would not do. Local builds differ in
+# CARGO_INCREMENTAL, build scripts bake the target dir's absolute path into
 # their outputs, and a runner checkout older than copied artifacts would
 # trust stale units.
 pre-warm-ci POOL="both" REF="main" FRESH="":

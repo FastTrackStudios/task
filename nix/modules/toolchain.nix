@@ -18,9 +18,6 @@
 #   onnxruntime — no `ort` (Chatterbox TTS lives in the FTS session
 #     guide, not here).
 #   avahi — vox-discover is not in this tree.
-#   mold — present in the CI shell only (shells/ci.nix); the workflow
-#     selects it per-target, and .cargo/config.toml stays neutral so a
-#     developer shell without mold still links.
 { ... }:
 {
   perSystem = { pkgs, lib, config, ... }:
@@ -44,12 +41,12 @@
       );
     in
     {
-      # Rust toolchain — a dated nightly (rust-toolchain.toml says the
-      # same: nightly-2026-10-23 + wasm32), with the iOS/Intel targets on
-      # darwin for apps/mobile and the macOS desktop builds. Nightly for
-      # the parallel front end (`-Zthreads`, .cargo/config.toml); dated so
-      # every machine and runner compiles with the same rustc.
-      fts.rustToolchain = pkgs.rust-bin.nightly."2026-10-23".default.override {
+      # Rust toolchain — the fleet's stable 1.99.1 (rust-toolchain.toml
+      # says the same: 1.99.1 + wasm32), with the iOS/Intel targets on
+      # darwin for apps/mobile and the macOS desktop builds. One release
+      # for every machine, runner and fleet repo, so kache shares their
+      # builds (rust-toolchain.toml says why).
+      fts.rustToolchain = pkgs.rust-bin.stable."1.99.1".default.override {
         extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         targets = [ "wasm32-unknown-unknown" ]
           ++ lib.optionals pkgs.stdenv.isDarwin [
@@ -105,6 +102,11 @@
         tailwindcss_4
       ]
       ++ lib.optionals pkgs.stdenv.isLinux [
+        # mold — the linker .cargo/config.toml selects for
+        # x86_64-unknown-linux-gnu (`-fuse-ld=mold`, the fleet's
+        # rustflags). Without it every link fails with "cannot find
+        # -fuse-ld=mold".
+        mold
         # cargo-sweep — reclaims stale target/ artifacts; cargo never GCs.
         cargo-sweep
         # ffmpeg — the server's rendition pipeline probes for it at boot
