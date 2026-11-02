@@ -29,7 +29,7 @@
     # `lib.toolchainFor` for the shell's rustc (nix/modules/toolchain.nix).
     # Move them only with devenv-fleet (its `scripts/fleet-pins` checks
     # this lock too).
-    devenv-fleet.url = "github:FastTrackStudios/devenv-fleet/v0.1.0";
+    devenv-fleet.url = "github:FastTrackStudios/devenv-fleet/6113b65b6d4211482ffe641972ed24c2cebc96a9";
     nixpkgs.follows = "devenv-fleet/nixpkgs";
     flake-parts.url = "github:hercules-ci/flake-parts";
 
