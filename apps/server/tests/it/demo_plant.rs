@@ -331,6 +331,7 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
 ///   the string a cross-org reader subscribes to. Drift there is a
 ///   reference that silently stops resolving, which is the failure ADR
 ///   0003 is most careful about.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
     use links_proto::NodeKind;
@@ -967,6 +968,7 @@ async fn demo_plants_the_orgs_named_wikis() -> eyre::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "plugin-wiki")]
 fn git_on_path() -> bool {
     std::process::Command::new("git")
         .arg("--version")
@@ -989,6 +991,7 @@ fn git_on_path() -> bool {
 /// Skipped with a warning where `git` is absent, the way the video
 /// deliverables are where `ffmpeg` is: the plant degrades, it does not
 /// fail, and this test asserts the degraded shape too.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn demo_plants_a_repo_sourced_wiki_over_a_seeded_repository() -> eyre::Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -1105,6 +1108,7 @@ async fn demo_plants_a_repo_sourced_wiki_over_a_seeded_repository() -> eyre::Res
 /// This is the test the seed existed for before any of it worked: the
 /// committed pages were written in ADR 0002's format from the start,
 /// so they were a failing test waiting for a resolver.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn seeded_references_resolve_against_the_readers_subscriptions() -> eyre::Result<()> {
     use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
@@ -1218,6 +1222,7 @@ async fn seeded_references_resolve_against_the_readers_subscriptions() -> eyre::
 /// t[verify wiki.resource.subscribe] — an asset group is subscribed to
 /// on the same terms as a wiki: it has a local presence, it refreshes,
 /// and what arrives is what the publisher holds.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_planted_song_shelf_is_subscribable_across_orgs() -> eyre::Result<()> {
     use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
@@ -1312,6 +1317,7 @@ async fn the_planted_song_shelf_is_subscribable_across_orgs() -> eyre::Result<()
 /// uses. The upstream side is the real vault sync backend over ACME's
 /// wiki directory — the same engine the product syncs vaults with, and
 /// the reason no second replication path had to be written.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_subscription_materializes_and_its_references_resolve() -> eyre::Result<()> {
     use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
@@ -1395,6 +1401,7 @@ async fn a_subscription_materializes_and_its_references_resolve() -> eyre::Resul
 /// what passes is the surface the app actually calls — including the
 /// refusals, which are the half most likely to be right in the library
 /// and missing over the wire.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_manages_its_own_subscriptions() -> eyre::Result<()> {
     use wiki_proto::service::subscriptions::Subscriptions as _;
@@ -1516,6 +1523,7 @@ async fn a_client_manages_its_own_subscriptions() -> eyre::Result<()> {
 ///
 /// t[verify wiki.edit.tracked] — both requests are issues on the org's
 /// board under their own ids, tagged `edit-request`.
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn demo_plants_the_edit_lane() -> eyre::Result<()> {
     use task::TaskService as _;
@@ -1613,6 +1621,7 @@ async fn demo_plants_the_edit_lane() -> eyre::Result<()> {
 
 /// Run `task-server admin adopt-principal --email <addr>` against
 /// `data_root` — the membership step `just demo` takes after planting.
+#[cfg(feature = "plugin-wiki")]
 fn adopt_principal(data_root: &std::path::Path, email: &str) -> eyre::Result<()> {
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_task-server"))
         .args(["admin", "adopt-principal", "--email", email])
@@ -1645,6 +1654,7 @@ fn adopt_principal(data_root: &std::path::Path, email: &str) -> eyre::Result<()>
 // t[verify sharing.grant.subtree]
 // t[verify sharing.grant.exclusions]
 // t[verify sharing.grant.preview]
+#[cfg(feature = "plugin-wiki")]
 #[tokio::test(flavor = "multi_thread")]
 async fn demo_plants_crescendum_shared_with_a_rockstars_person_and_nothing_beside_it()
 -> eyre::Result<()> {

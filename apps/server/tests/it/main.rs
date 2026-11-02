@@ -141,7 +141,10 @@ mod vault_graph_e2e;
 mod vault_sync_e2e;
 mod version_cli;
 mod watch_bridge_auth;
+#[cfg(feature = "plugin-scheduling")]
 mod watch_suggested_e2e;
 mod webdav_auth;
+#[cfg(feature = "plugin-wiki")]
 mod wiki_editor_e2e;
+#[cfg(feature = "plugin-wiki")]
 mod wiki_org_admin_e2e;
