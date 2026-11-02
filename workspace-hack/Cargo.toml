@@ -19,13 +19,13 @@ aead = { version = "0.5.2", default-features = false, features = ["alloc", "getr
 ahash = { version = "0.8.12", features = ["serde"] }
 aho-corasick = { version = "1.1.5" }
 arborium = { version = "2.18.1", default-features = false, features = ["lang-bash", "lang-javascript", "lang-json", "lang-markdown", "lang-python", "lang-rust", "lang-typescript"] }
-architect = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", features = ["action-list", "atom-turso", "client", "fake", "iroh", "local", "release", "server"] }
-architect-atom = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", features = ["turso"] }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", default-features = false, features = ["otel"] }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", features = ["router"] }
+architect = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["action-list", "atom-turso", "client", "fake", "iroh", "local", "release", "server"] }
+architect-atom = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["turso"] }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["otel"] }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["router"] }
 arrayvec = { version = "0.7.8" }
-auth = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", features = ["full"] }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", features = ["full"] }
+auth = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["full"] }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["full"] }
 axum = { version = "0.8.9", features = ["macros", "ws"] }
 axum-core = { version = "0.5.6", default-features = false, features = ["tracing"] }
 base16ct = { version = "1.0.0", default-features = false, features = ["alloc"] }
@@ -46,7 +46,7 @@ cipher = { version = "0.4.4", default-features = false, features = ["zeroize"] }
 color = { version = "0.3.3" }
 concurrent-queue = { version = "2.5.0" }
 crc32fast = { version = "1.5.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", features = ["dioxus"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["dioxus"] }
 crossbeam-epoch = { version = "0.9.21" }
 crossbeam-utils = { version = "0.8.23" }
 crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2.2", default-features = false, features = ["getrandom"] }
@@ -321,7 +321,7 @@ bytemuck = { version = "1.25.2", default-features = false, features = ["wasm_sim
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -455,7 +455,7 @@ bzip2-sys = { version = "0.1.13", default-features = false, features = ["static"
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -592,7 +592,7 @@ bzip2-sys = { version = "0.1.13", default-features = false, features = ["static"
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -700,7 +700,7 @@ bzip2-sys = { version = "0.1.13", default-features = false, features = ["static"
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "134791016e548a6e69c0f243879824d51226f8b2", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
