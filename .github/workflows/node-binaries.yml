@@ -197,7 +197,8 @@ jobs:
         if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' }}
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q pkg-config libssl-dev cmake clang
+          # mold: .cargo/config.toml links x86_64 linux with it.
+          sudo apt-get install -y -q pkg-config libssl-dev cmake clang mold
           # Point openssl-sys at the static archives (/usr/lib/<multiarch>/libssl.a,
           # libcrypto.a ship in libssl-dev) so it links them statically.
           m="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"

@@ -14,21 +14,63 @@ xtask = "run --package xtask --release --"
 [net]
 git-fetch-with-cli = true
 
-# The parallel front end (nightly; the toolchain is a dated nightly for
-# this, rust-toolchain.toml): type checking, borrow checking and the rest
-# of rustc's front half run on up to 8 threads per crate instead of one.
-# Under `cfg(all())` so it reaches every target, and because cargo JOINS
-# `target.<cfg>` rustflags with `target.<triple>` ones (the wasm cfg
-# below, CI's mold `CARGO_TARGET_*_RUSTFLAGS`), where `build.rustflags`
-# would be silently replaced by either. 8 is what the compiler team
-# recommends; past it the front end stops scaling.
-[target.'cfg(all())']
-rustflags = ["-Zthreads=8"]
+# ── The fleet's rustflags ─────────────────────────────────────────────
+# Everything below is the same, flag for flag and in the same order, in
+# Task, architect, studio, keyflow and frame (architect:
+# skills/architect/references/xtask-tooling.md, "Fleet toolchain").
+# kache keys every crate on rustc's version and every rustflag, so one
+# differing flag rebuilds the whole graph in each repo instead of sharing
+# one build of Dioxus, Blitz and architect across them. Change it in all
+# of them or in none. Never override it from CI with `RUSTFLAGS` or
+# `CARGO_TARGET_<triple>_RUSTFLAGS`: either replaces these tables.
 
-# getrandom 0.3 (transitive via fake -> rand) needs its backend selected
-# explicitly on wasm. Paired with the `wasm_js` feature in apps/web.
-# `dx` sets the same cfg on its own builds; declaring it here makes plain
-# `cargo check --target wasm32-unknown-unknown` agree.
-# See docs.rs/getrandom/#webassembly-support.
+# Frame pointers: originally for the (now retired) moire fork's trace
+# capture, kept because samply/perf profiling of the audio path on NixOS
+# glibc needs intact frame-pointer chains to unwind. Cheap; keep it.
+#
+# NOTE ON PRECEDENCE: `target.<triple>.rustflags` REPLACES `build.rustflags`
+# — cargo does not merge them. So the tables below must repeat the
+# frame-pointer flag. This `[build]` table is what the other targets
+# (aarch64 darwin and linux, iOS, musl) get.
+[build]
+rustflags = ["-C", "force-frame-pointers=yes"]
+
+# mold instead of the default `ld.bfd`. Linking is the serial tail of every
+# build here: a `nextest run --workspace` links ~330 test binaries, and GNU
+# ld does each serially. mold is multi-threaded and typically turns a
+# 30-60s link into a few seconds. Comes from every shell and nix build
+# (nix/modules/toolchain.nix, crane.nix); GCC accepts -fuse-ld=mold
+# natively.
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+  "-C", "force-frame-pointers=yes",
+  "-C", "link-arg=-fuse-ld=mold",
+  "-C", "target-cpu=x86-64-v3",
+]
+
+# x86-64-v3 (AVX2, FMA, BMI2 — Haswell, 2013, and later) on every x86-64
+# desktop target, for studio's DSP: the amps, the sampler and the FX
+# vectorise to 256 bits. A machine older than that cannot run these
+# builds, task-server's x86_64 release binary included. Apple Silicon
+# (aarch64) is unaffected.
+[target.x86_64-apple-darwin]
+rustflags = [
+  "-C", "force-frame-pointers=yes",
+  "-C", "target-cpu=x86-64-v3",
+]
+
+# getrandom 0.3 refuses wasm32-unknown-unknown unless told which entropy
+# source to use — the cargo *feature* alone is not enough, it gates on this
+# cfg. The browser answer is `wasm_js` (crypto.getRandomValues). Reached
+# transitively (fake -> rand, uuid, ahash, …), so it has to be set for the
+# whole target rather than by any one dependency; apps/web turns on the
+# `wasm_js` feature it pairs with, and `dx` sets the same cfg on its own
+# builds. See docs.rs/getrandom/#webassembly-support.
+#
+# Note the precedence rule above: this table REPLACES `build.rustflags`, so
+# the frame-pointer flag is repeated here.
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+rustflags = [
+  "-C", "force-frame-pointers=yes",
+  "--cfg", 'getrandom_backend="wasm_js"',
+]

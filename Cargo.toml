@@ -224,8 +224,6 @@ exclude = [
     # Patched iroh-blobs (see [patch.crates-io] below): a dependency, not
     # a member, so its own tests/examples stay out of workspace builds.
     "vendor/iroh-blobs",
-    # Patched branches (turso_core's; vendor/branches/PATCHED.md).
-    "vendor/branches",
 ]
 
 [workspace.package]
@@ -239,7 +237,7 @@ edition = "2024"
 # 1.90 rather than 1.87 because 1.90 is the later statement of intent:
 # 1.87 arrived with the monorepo import and clippy.toml's 1.90 with the
 # workspace refactor a day after. Nothing here has ever been built on
-# 1.87 — the toolchain is pinned, now at 1.98.1 — so the lower number
+# 1.87 — the toolchain is pinned, now at 1.99.1 — so the lower number
 # was a claim no run has tested rather than a floor anybody held.
 rust-version = "1.90"
 authors = ["FastTrack Studio"]
@@ -465,7 +463,7 @@ editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -743,10 +741,6 @@ tao = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.2" }
 # upstream main still builds its own, so this is a patch; in-tree because
 # it is a ~30-line diff over the published crate (vendor/iroh-blobs/PATCHED.md).
 iroh-blobs = { path = "vendor/iroh-blobs" }
-# branches 0.4.6 (turso_core's) with its nightly code path switched off:
-# on a nightly rustc upstream calls `core::intrinsics::abort`, which
-# current nightlies removed (vendor/branches/PATCHED.md).
-branches = { path = "vendor/branches" }
 # The editor's vendored mermaid-rs-renderer fork now lives in the editor
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.
@@ -774,29 +768,18 @@ branches = { path = "vendor/branches" }
 # copies (or the keyflow repo should stop carrying them). Until one of
 # those ships, this is that fix, applied at the consumer.
 #
-# Keyflow is pinned by `rev` to its architect v0.10.0 branch
-# (`build/41-architect-v0.10.0`, keyflow#42) until that lands as a tag;
-# move this rev, `editor-keyflow`'s and the `daw` block's to the tag
-# together. At that rev `engraver-proto`, `keyflow-text`,
-# `keyflow-chordpro` and `keyflow-syntax` are folded into `engraver` and
-# `keyflow-lang`, so only these two entries are left.
+# Keyflow is pinned to its v0.3.0 tag (architect v0.10.0, editor
+# v0.1.25, the same editor-state Task takes); move this tag,
+# `editor-keyflow`'s and the `daw` block's together. At that tag
+# `engraver-proto`, `keyflow-text`, `keyflow-chordpro` and
+# `keyflow-syntax` are folded into `engraver` and `keyflow-lang`, so only
+# these two entries are left.
 [patch."https://github.com/FastTrackStudios/FastTrackStudio"]
-engraver = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
 
 [patch."https://github.com/FastTrackStudios/daw"]
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
-
-# ONE editor-state. Keyflow's architect v0.10.0 branch (keyflow#42, the
-# rev above) still takes `editor-state`/`editor-syntax` from editor
-# v0.1.24, and `editor_keyflow::Fences` must implement the same
-# `FenceRenderer` Task registers it with (crates/player-ui). The `www.`
-# host is the same repo under a different cargo source (a patch may not
-# point at the source it patches). Drop this block once keyflow pins
-# editor v0.1.25 and Task takes that keyflow tag.
-[patch."https://github.com/FastTrackStudios/editor"]
-editor-state = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
-editor-syntax = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
 
 # The Dioxus crates from the FTS vendor fork, the same tag architect pins
 # (each one's reason is in its UPSTREAM.md): dioxus-native — the iOS
@@ -829,7 +812,7 @@ private_intra_doc_links = "allow"
 redundant_explicit_links = "allow"
 
 [workspace.lints.clippy]
-# The nightly toolchain's clippy (rust-toolchain.toml) lints Dioxus `rsx!`
+# Clippy (rust-toolchain.toml's) lints Dioxus `rsx!`
 # expansions: every `"{x}"` attribute or text node is a `format!` to it, and
 # every `attr: if a { … } else { … }` an oddly formatted else (182 hits,
 # none outside rsx!). Drop these two when clippy stops linting rsx's
@@ -981,16 +964,77 @@ strip = "none"
 opt-level = 1
 debug = false
 
-# phon's JIT engine — generates and runs the DSP graph itself. Reaches
-# this tree transitively through vox.
+# Dependencies kept at opt-level 3: the crates that run per sample, per
+# chunk or per frame. phon is vox's JIT DSP engine; blake3 hashes every
+# chunk the Files CAS ingests (every checkpoint and import); the rest is
+# studio's list (the audio path, sample-pack zstd, the Blitz/Vello
+# renderer and the Dioxus core under it), kept here for the crates this
+# tree also builds.
+#
+# This list, `package."*"` above and the build-override below are the
+# fleet's dev profile for dependencies, the same in Task, architect,
+# studio, keyflow and frame (architect:
+# skills/architect/references/xtask-tooling.md, "Fleet toolchain"). kache
+# keys a crate on its opt-level and debuginfo, and on the bytes of every
+# crate it links against, so one differing line rebuilds that crate and
+# everything above it in each repo instead of sharing one build.
+[profile.dev.package.blake3]
+opt-level = 3
 [profile.dev.package.phon]
+opt-level = 3
+[profile.dev.package.phon-engine]
 opt-level = 3
 [profile.dev.package.phon-jit]
 opt-level = 3
-
-# Files CAS: blake3 hashes every chunk on ingest, so it is on the hot path
-# of every checkpoint and every import.
-[profile.dev.package.blake3]
+[profile.dev.package.num-complex]
+opt-level = 3
+[profile.dev.package.zstd-safe]
+opt-level = 3
+[profile.dev.package.zstd-sys]
+opt-level = 3
+[profile.dev.package.dioxus-core]
+opt-level = 3
+[profile.dev.package.dioxus-native-dom]
+opt-level = 3
+[profile.dev.package.blitz-dom]
+opt-level = 3
+[profile.dev.package.blitz-paint]
+opt-level = 3
+[profile.dev.package.blitz-traits]
+opt-level = 3
+[profile.dev.package.anyrender]
+opt-level = 3
+[profile.dev.package.anyrender_vello]
+opt-level = 3
+[profile.dev.package.vello]
+opt-level = 3
+[profile.dev.package.vello_encoding]
+opt-level = 3
+[profile.dev.package.wgpu]
+opt-level = 3
+[profile.dev.package.wgpu-core]
+opt-level = 3
+[profile.dev.package.wgpu-hal]
+opt-level = 3
+[profile.dev.package.naga]
+opt-level = 3
+[profile.dev.package.stylo]
+opt-level = 3
+[profile.dev.package.selectors]
+opt-level = 3
+[profile.dev.package.taffy]
+opt-level = 3
+[profile.dev.package.parley]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.fontique]
+opt-level = 3
+[profile.dev.package.peniko]
+opt-level = 3
+[profile.dev.package.kurbo]
 opt-level = 3
 
 # Build scripts + proc macros and their deps. `package."*"` does NOT cover

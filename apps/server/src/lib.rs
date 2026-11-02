@@ -18,7 +18,7 @@
 //! editor layer (future); vault is the sole storage path.
 
 // Proving `AppState: Send + Sync` walks the whole org state (OrgAppState
-// -> LiveHost -> live_docs::Edits -> …), deeper than the nightly trait
+// -> LiveHost -> live_docs::Edits -> …), deeper than the trait
 // solver's default 128 allows ("overflow evaluating the requirement
 // `HomeOrgOperator: Sync`" under clippy). Same fix as `finance`.
 #![recursion_limit = "256"]

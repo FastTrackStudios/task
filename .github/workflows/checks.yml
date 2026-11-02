@@ -41,10 +41,13 @@
 # hosted-nix-rust. On task-main, .github/actions/battleship-nix-rust.)
 #
 # Toolchain comes from the repo flake: every job enters `.#ci` once (the
-# dated nightly pin, wasm target, clang env for ring, native headers,
-# tailwindcss, cargo-rail) and every later step runs inside it. The
-# parallel front end (`-Zthreads=8`) comes from .cargo/config.toml and
-# joins the mold flag below.
+# fleet's rust 1.99.1 pin, wasm target, mold, clang env for ring, native
+# headers, tailwindcss, cargo-rail) and every later step runs inside it.
+# The rustflags (mold, frame pointers, x86-64-v3) come from
+# .cargo/config.toml only, never from this workflow's env: a `RUSTFLAGS`
+# or `CARGO_TARGET_*_RUSTFLAGS` here would replace them and change every
+# crate's kache key, so nothing CI builds would be shared with a local
+# build or another fleet repo.
 #
 # CHANGE SELECTION: `cargo rail plan` (the version nix/modules/cargo-rail.nix
 # pins) through cargo's resolved reverse-dependency graph, turned into
@@ -134,11 +137,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # mold for the host target only -- 326 test binaries get linked on a
-  # `nextest run`, and GNU ld is the serial part of that. Scoped to the
-  # host triple so the wasm32 rustflags in .cargo/config.toml are
-  # untouched.
-  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
   # Terse, stable logs — this is CI, not a terminal.
   CARGO_TERM_COLOR: never
   # Incremental compilation helps repeated edits in one tree; a CI run is a

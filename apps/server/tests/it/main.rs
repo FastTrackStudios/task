@@ -1,7 +1,7 @@
 //! `task-server`'s end-to-end tests, as **one** test binary.
 //!
 //! (`recursion_limit` below: proving `Send` for futures that hold the
-//! server's state runs deeper than the nightly trait solver's default 128;
+//! server's state runs deeper than the trait solver's default 128;
 //! apps/server/src/lib.rs carries the same limit.)
 //!
 //! Same reasoning, same shape, as `tests/integration/tests/it/main.rs`:

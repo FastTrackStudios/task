@@ -1,18 +1,21 @@
-# A dated nightly, and must match nix/modules/toolchain.nix.
+# The fleet's toolchain: rust 1.99.1 stable, the same release architect,
+# studio, keyflow and frame pin, and must match nix/modules/toolchain.nix.
 #
-# Nightly for the parallel compiler front end (`-Zthreads`, set in
-# .cargo/config.toml): rustc's type checking and borrow checking spread
-# over threads instead of one per crate. Dated, never bare `nightly`, so
-# the dev shell, local CI, GitHub's runners and the release builds
-# (rustup reads this file) all compile with the same rustc.
+# One compiler across the fleet so kache (the rustc wrapper on the build
+# hosts) reuses a crate built for one repo in the others: its key holds
+# the rustc version and every rustflag (.cargo/config.toml), so a repo on
+# its own compiler rebuilds Dioxus, Blitz and architect from scratch.
+# Architect's skill lists the whole set (architect:
+# skills/architect/references/xtask-tooling.md, "Fleet toolchain").
 #
 # rust-overlay is this repo's own input rather than `dioxus-flake`'s, so
 # a compiler can be taken here without moving nixpkgs or `dx` (which
 # comes from the dedicated `nixpkgs-dx` pin — see nix/modules/dx.nix).
-# Bumping means: `nix flake update rust-overlay`, then this channel and
-# the date in nix/modules/toolchain.nix, which are two halves of one pin
-# and drift silently if only one moves.
+# Bumping means: `nix flake update rust-overlay` if the release is newer
+# than the lock, then this channel and the version in
+# nix/modules/toolchain.nix, which are two halves of one pin and drift
+# silently if only one moves.
 [toolchain]
-channel = "nightly-2026-10-23"
+channel = "1.99.1"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = ["wasm32-unknown-unknown"]

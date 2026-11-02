@@ -117,7 +117,7 @@
 //! after that reader got them wrong.
 
 // Proving `Send`/`Sync` for the server's state (task_server::AppState ->
-// OrgAppState -> LiveHost -> …) runs deeper than the nightly trait
+// OrgAppState -> LiveHost -> …) runs deeper than the trait
 // solver's default 128; apps/server/src/lib.rs carries the same limit.
 #![recursion_limit = "256"]
 

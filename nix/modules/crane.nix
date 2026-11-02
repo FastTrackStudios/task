@@ -90,7 +90,11 @@
         src = taskSrc;
         inherit cargoVendorDir;
         strictDeps = true;
-        nativeBuildInputs = with pkgs; [ pkg-config ];
+        # mold: .cargo/config.toml links x86_64-linux with
+        # `-fuse-ld=mold` (the fleet's rustflags), and a crane build has
+        # no devshell — without mold on PATH gcc's collect2 fails.
+        nativeBuildInputs = with pkgs; [ pkg-config ]
+          ++ lib.optional stdenv.isLinux mold;
         buildInputs = with pkgs; [ openssl ];
       };
 
