@@ -31,3 +31,6 @@ vox-phon = "0.10.0-rc.7"
 
 [lints]
 workspace = true
+
+[target.'cfg(not(any(target_family = "wasm", no_workspace_hack)))'.dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

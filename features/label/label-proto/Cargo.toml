@@ -26,3 +26,6 @@ server = ["architect/server-seaorm", "dep:sea-orm"]
 
 [lints]
 workspace = true
+
+[target.'cfg(not(any(target_family = "wasm", no_workspace_hack)))'.dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
