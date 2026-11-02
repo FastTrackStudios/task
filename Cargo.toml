@@ -463,7 +463,7 @@ editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -768,29 +768,18 @@ iroh-blobs = { path = "vendor/iroh-blobs" }
 # copies (or the keyflow repo should stop carrying them). Until one of
 # those ships, this is that fix, applied at the consumer.
 #
-# Keyflow is pinned by `rev` to its architect v0.10.0 branch
-# (`build/41-architect-v0.10.0`, keyflow#42) until that lands as a tag;
-# move this rev, `editor-keyflow`'s and the `daw` block's to the tag
-# together. At that rev `engraver-proto`, `keyflow-text`,
-# `keyflow-chordpro` and `keyflow-syntax` are folded into `engraver` and
-# `keyflow-lang`, so only these two entries are left.
+# Keyflow is pinned to its v0.3.0 tag (architect v0.10.0, editor
+# v0.1.25, the same editor-state Task takes); move this tag,
+# `editor-keyflow`'s and the `daw` block's together. At that tag
+# `engraver-proto`, `keyflow-text`, `keyflow-chordpro` and
+# `keyflow-syntax` are folded into `engraver` and `keyflow-lang`, so only
+# these two entries are left.
 [patch."https://github.com/FastTrackStudios/FastTrackStudio"]
-engraver = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
 
 [patch."https://github.com/FastTrackStudios/daw"]
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", rev = "77786d904cf99f268befb78b409135b602122e54" }
-
-# ONE editor-state. Keyflow's architect v0.10.0 branch (keyflow#42, the
-# rev above) still takes `editor-state`/`editor-syntax` from editor
-# v0.1.24, and `editor_keyflow::Fences` must implement the same
-# `FenceRenderer` Task registers it with (crates/player-ui). The `www.`
-# host is the same repo under a different cargo source (a patch may not
-# point at the source it patches). Drop this block once keyflow pins
-# editor v0.1.25 and Task takes that keyflow tag.
-[patch."https://github.com/FastTrackStudios/editor"]
-editor-state = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
-editor-syntax = { git = "https://www.github.com/FastTrackStudios/editor", tag = "v0.1.25" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.3.0" }
 
 # The Dioxus crates from the FTS vendor fork, the same tag architect pins
 # (each one's reason is in its UPSTREAM.md): dioxus-native — the iOS

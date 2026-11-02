@@ -5811,7 +5811,7 @@ dependencies = [
 [[package]]
 name = "editor-keyflow"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?rev=77786d904cf99f268befb78b409135b602122e54#77786d904cf99f268befb78b409135b602122e54"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.3.0#82159b27efa6c3260cf2dcd5ebd22c64877a9cd2"
 dependencies = [
  "editor-state",
  "engraver",
@@ -5823,7 +5823,7 @@ dependencies = [
 [[package]]
 name = "editor-state"
 version = "0.1.0"
-source = "git+https://www.github.com/FastTrackStudios/editor?tag=v0.1.25#665040a60a80aaeb38291db51171ece0e2eb9633"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.25#665040a60a80aaeb38291db51171ece0e2eb9633"
 dependencies = [
  "editor-syntax",
  "editor-typst",
@@ -5837,7 +5837,7 @@ dependencies = [
 [[package]]
 name = "editor-syntax"
 version = "0.1.0"
-source = "git+https://www.github.com/FastTrackStudios/editor?tag=v0.1.25#665040a60a80aaeb38291db51171ece0e2eb9633"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.25#665040a60a80aaeb38291db51171ece0e2eb9633"
 dependencies = [
  "arborium",
  "arborium-theme",
@@ -5847,7 +5847,7 @@ dependencies = [
 [[package]]
 name = "editor-typst"
 version = "0.1.0"
-source = "git+https://www.github.com/FastTrackStudios/editor?tag=v0.1.25#665040a60a80aaeb38291db51171ece0e2eb9633"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.25#665040a60a80aaeb38291db51171ece0e2eb9633"
 dependencies = [
  "chrono",
  "comemo",
@@ -6264,7 +6264,7 @@ dependencies = [
 [[package]]
 name = "engraver"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?rev=77786d904cf99f268befb78b409135b602122e54#77786d904cf99f268befb78b409135b602122e54"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.3.0#82159b27efa6c3260cf2dcd5ebd22c64877a9cd2"
 dependencies = [
  "bitflags 2.13.1",
  "color-eyre",
@@ -11530,7 +11530,7 @@ dependencies = [
 [[package]]
 name = "keyflow-lang"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?rev=77786d904cf99f268befb78b409135b602122e54#77786d904cf99f268befb78b409135b602122e54"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.3.0#82159b27efa6c3260cf2dcd5ebd22c64877a9cd2"
 dependencies = [
  "keyflow-proto",
  "thiserror 2.0.20",
@@ -11540,7 +11540,7 @@ dependencies = [
 [[package]]
 name = "keyflow-proto"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/keyflow?rev=77786d904cf99f268befb78b409135b602122e54#77786d904cf99f268befb78b409135b602122e54"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.3.0#82159b27efa6c3260cf2dcd5ebd22c64877a9cd2"
 dependencies = [
  "architect",
  "color-palette",
