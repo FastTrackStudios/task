@@ -75,7 +75,7 @@ pub trait StorageAgentService {
 
     /// Every directive the coordinator issues. Directives carry their
     /// `agent_id`; a subscriber keeps its own and ignores the rest —
-    /// the monorepo's `#[subscribe]`-stream idiom (root CLAUDE.md),
+    /// the monorepo's `#[subscribe]`-stream idiom (root AGENTS.md),
     /// not a per-agent channel. Directives name paths, never contents,
     /// so the stream itself carries nothing an agent could not already
     /// read from `list_locations`.

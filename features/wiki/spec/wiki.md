@@ -902,7 +902,7 @@ where the page is read — a tidying list, never a gate.
 
 ## What this asks of the seed
 
-Per `CLAUDE.md`, the planted world is part of the feature. Every rule above is
+Per `AGENTS.md`, the planted world is part of the feature. Every rule above is
 exercised from the seed through the integration suite, not from the UI alone.
 The seeded world is:
 

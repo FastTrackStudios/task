@@ -1,7 +1,7 @@
 # Working in this repo
 
-This file is the one set of agent instructions for the repo. `CLAUDE.md`
-is a symlink to it, because Claude Code reads that name; edit this file.
+This file is the one set of agent instructions for the repo. There is no
+`CLAUDE.md`: Claude Code, Codex and the other agents all read `AGENTS.md`.
 
 ## What this is for
 

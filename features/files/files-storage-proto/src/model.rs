@@ -312,7 +312,7 @@ pub struct ConfinedPath {
 
 /// Work the coordinator hands to an agent. Directives carry their
 /// `agent_id` and subscribers filter client-side — the monorepo's
-/// `#[subscribe]`-stream idiom (root CLAUDE.md), not a per-agent channel.
+/// `#[subscribe]`-stream idiom (root AGENTS.md), not a per-agent channel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
 pub struct AgentDirective {

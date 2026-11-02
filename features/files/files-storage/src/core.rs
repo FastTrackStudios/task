@@ -59,7 +59,7 @@ pub struct StorageCore {
     /// `&PubSub`, so the per-org backend holds a clone of its own hub.
     org_hubs: Mutex<HashMap<String, architect::PubSub<StorageEvent>>>,
     /// The agent lane's single directive hub. Directives carry their
-    /// `agent_id` and agents filter client-side (root CLAUDE.md's
+    /// `agent_id` and agents filter client-side (root AGENTS.md's
     /// `#[subscribe]` idiom).
     directives: architect::PubSub<AgentDirective>,
 }
