@@ -40,17 +40,20 @@
 # dependencies from a rust-cache saved on main: .github/actions/
 # hosted-nix-rust. On task-main, .github/actions/battleship-nix-rust.)
 #
-# Toolchain comes from the repo flake: every job enters `.#ci` once (the
-# fleet's rust 1.99.1 pin, wasm target, mold, clang env for ring, native
-# headers, tailwindcss, cargo-rail) and every later step runs inside it.
+# Toolchain comes from the repo's devenv shell (devenv.nix over
+# devenv-fleet's `rust` and `dioxus`: the fleet's rust 1.99.1 pin, wasm
+# target, mold, clang env for ring, native headers, tailwindcss,
+# cargo-rail). Each build job's setup action evaluates it once and asserts
+# `fleet-doctor`; every `run` step then runs inside it (`defaults.run.shell:
+# devenv shell -- bash -e {0}`), with the same rustc store path as a local
+# shell, so kache shares CI's builds with local ones.
 # The rustflags (mold, frame pointers, x86-64-v3) come from
 # .cargo/config.toml only, never from this workflow's env: a `RUSTFLAGS`
 # or `CARGO_TARGET_*_RUSTFLAGS` here would replace them and change every
 # crate's kache key, so nothing CI builds would be shared with a local
 # build or another fleet repo.
 #
-# CHANGE SELECTION: `cargo rail plan` (the version nix/modules/cargo-rail.nix
-# pins) through cargo's resolved reverse-dependency graph, turned into
+# CHANGE SELECTION: `cargo rail plan` (the version devenv-fleet pins) through cargo's resolved reverse-dependency graph, turned into
 # gates plus a nextest filterset by scripts/ci-rail-plan.py. The local hook
 # uses it for every PR; here only a dispatch with `base` narrows. Only which
 # tests RUN narrows; the test BUILD stays --workspace so the warm target
@@ -277,6 +280,9 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","thebattleship"]') }}
     timeout-minutes: 90
     needs: plan
+    defaults:
+      run:
+        shell: devenv shell -- bash -e {0}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -322,9 +328,11 @@ jobs:
       # nothing else depends on. `just ci-docs` still runs it by hand.
       # A hosted runner's disk is the build's limit; on a THEBATTLESHIP pool
       # `du` of /nix/store alone is hundreds of GB and minutes of IO, so the
-      # pool only reports its cache disk.
+      # pool only reports its cache disk. Plain bash: it reports even when
+      # the dev shell failed.
       - name: Disk
         if: ${{ always() }}
+        shell: bash
         run: |
           if [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
             df -h "${CI_CACHE_DIR:-/}" | tail -1
@@ -340,6 +348,9 @@ jobs:
     timeout-minutes: 120
     needs: plan
     if: ${{ needs.plan.outputs.tests == 'true' }}
+    defaults:
+      run:
+        shell: devenv shell -- bash -e {0}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -473,9 +484,11 @@ jobs:
           retention-days: 7
       # A hosted runner's disk is the build's limit; on a THEBATTLESHIP pool
       # `du` of /nix/store alone is hundreds of GB and minutes of IO, so the
-      # pool only reports its cache disk.
+      # pool only reports its cache disk. Plain bash: it reports even when
+      # the dev shell failed.
       - name: Disk
         if: ${{ always() }}
+        shell: bash
         run: |
           if [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
             df -h "${CI_CACHE_DIR:-/}" | tail -1
@@ -490,12 +503,15 @@ jobs:
     timeout-minutes: 60
     needs: plan
     if: ${{ needs.plan.outputs.wasm == 'true' }}
+    defaults:
+      run:
+        shell: devenv shell -- bash -e {0}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.ref }}
-      # wasm32 target + ring's clang env come from the flake CI shell,
-      # entered once for every later step; target dir ./target.
+      # wasm32 target + ring's clang env come from the devenv shell, which
+      # every later step runs in; target dir ./target.
       - uses: ./.github/actions/hosted-nix-rust
         if: ${{ runner.environment == 'github-hosted' }}
         with:

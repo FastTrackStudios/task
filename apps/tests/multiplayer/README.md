@@ -11,9 +11,9 @@ one browser context = one presence peer. Tracked issue `dd824506`.
 ```sh
 just mp-test
 # or, equivalently:
-nix develop --command tests/multiplayer/run.sh
+devenv shell -- apps/tests/multiplayer/run.sh
 # reuse already-built artifacts (server, CLI, wasm bundle):
-nix develop --command bash -c 'cd tests/multiplayer && MP_SKIP_BUILD=1 npx playwright test'
+devenv shell -- bash -c 'cd apps/tests/multiplayer && MP_SKIP_BUILD=1 npx playwright test'
 ```
 
 `run.sh` builds `task-server` + `task-cli` (debug) and the web
@@ -34,7 +34,7 @@ The whole stack is isolated per run (`global-setup.js`):
 - fail-fast guards: ports must be free (a squatter would be silently
   tested instead), the wasm must contain the expected baked vox URL,
   the `__taskVault` hook, and no unresolved `env` imports (a bundle
-  built outside the nix shell loses the tree-sitter C grammars).
+  built outside the dev shell loses the tree-sitter C grammars).
 
 Identity model: each context seeds `localStorage["task.auth.active"]`
 before boot, so the app's boot restore performs the REAL dev-account

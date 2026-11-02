@@ -11,7 +11,7 @@
 //     test server port — see run.sh).
 //
 // NEVER points at the dev server on :18080. Build + run:
-//   nix develop --command ./run.sh
+//   devenv shell -- apps/tests/multiplayer/run.sh   (from the repo root)
 //
 // The suites are real-time conformance checks: retries are OFF on
 // purpose (a flake IS a finding); convergence waits use bounded

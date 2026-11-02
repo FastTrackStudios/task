@@ -12,7 +12,9 @@
 #
 #   services.task-email-watcher = {
 #     enable = true;
-#     package = inputs.task.packages.${pkgs.system}.task-cli;
+#     # Any package with bin/task: the flake builds no task-cli
+#     # (`just deploy-task-watcher` ships a release binary instead).
+#     package = my-task-cli;
 #     nextcloud = {
 #       url = "https://cloud.starcommand.live";
 #       user = "curator";

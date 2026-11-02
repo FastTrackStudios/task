@@ -1,16 +1,17 @@
 # Set up a GitHub-HOSTED runner for a job that runs cargo but compiles
 # nothing of Task's (the plan job, the PR checks): no nix, which costs
-# ~80 s to install and enter the 3 GB `.#ci` shell.
+# minutes to install and evaluate the devenv shell on a cold runner.
 #
 #   rustc / cargo / rustfmt  rustup (preinstalled on the image), the
 #                            channel `rust-toolchain.toml` pins, minimal
 #                            profile + rustfmt. RUSTUP_TOOLCHAIN is set so
 #                            the toolchain file doesn't auto-install its
 #                            other components (clippy, rust-src, wasm32).
-#                            rust-toolchain.toml and nix/modules/toolchain.nix
-#                            are one pin, so this is the shell's compiler.
+#                            rust-toolchain.toml and devenv-fleet's
+#                            toolchain are one pin, so this is the shell's
+#                            compiler.
 #   cargo-rail               the RELEASED binary at exactly the version
-#                            nix/modules/cargo-rail.nix builds,
+#                            devenv-fleet's pkgs/cargo-rail.nix builds,
 #                            checksum-verified, so rail never drifts from
 #                            the shell's.
 #   just                     prebuilt (taiki-e/install-action), so steps
@@ -40,12 +41,15 @@ runs:
         [ -n "$channel" ] || { echo "::error::no channel in rust-toolchain.toml"; exit 1; }
         rustup toolchain install "$channel" --profile minimal --component rustfmt --no-self-update
         echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
-    - name: cargo-rail (the nix pin's release binary)
+    - name: cargo-rail (the fleet pin's release binary)
       shell: bash
+      env:
+        # devenv-fleet's pkgs/cargo-rail.nix version (v0.1.0). Bump both
+        # together.
+        RAIL: "0.32.0"
       run: |
         set -euo pipefail
-        rail="$(sed -n 's/^ *version = "\([^"]*\)";.*/\1/p' nix/modules/cargo-rail.nix | head -1)"
-        [ -n "$rail" ] || { echo "::error::no cargo-rail version in nix/modules/cargo-rail.nix"; exit 1; }
+        rail="$RAIL"
         dl="${RUNNER_TEMP}/cargo-rail"
         mkdir -p "$dl"
         url="https://github.com/loadingalias/cargo-rail/releases/download/v${rail}"

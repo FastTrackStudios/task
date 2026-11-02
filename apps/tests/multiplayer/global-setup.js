@@ -114,13 +114,13 @@ module.exports = async () => {
       "wasm bundle predates the __taskVault test hook (crates/task/ui/src/pages/note_view.rs) — rebuild via ./run.sh",
     );
   }
-  // A bundle built OUTSIDE the nix dev shell links the tree-sitter
+  // A bundle built OUTSIDE the dev shell links the tree-sitter
   // grammars as unresolved `env` imports and the app fails to load.
   const glue = fs.readFileSync(path.join(publicDir, "wasm", "task-app-web.js"), "utf8");
   if (glue.includes('from "env"')) {
     throw new Error(
       "wasm glue imports from \"env\" (tree-sitter C grammars didn't compile for wasm) — " +
-        "rebuild inside the dev shell: nix develop --command tests/multiplayer/run.sh",
+        "rebuild inside the dev shell: devenv shell -- apps/tests/multiplayer/run.sh",
     );
   }
 

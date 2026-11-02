@@ -5,7 +5,7 @@
 # features can be published as aspects and consumed from the system
 # flake (and vice versa) without copy-paste.
 #
-# Today the heavy outputs (shells, crane packages, images) are ordinary
+# Today the heavy outputs (crane packages, images) are ordinary
 # perSystem modules speaking the `fts.*` schema (options.nix). The
 # headless node's systemd service is exported as a plain NixOS module,
 # `nixosModules.task-server` (nixos-modules.nix, over

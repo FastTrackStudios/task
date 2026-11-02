@@ -25,6 +25,10 @@ in
   flake.nixosModules = {
     task-server = taskServer;
     default = taskServer;
+    # `task email watch` as a service (nix/nixos/task-email-watcher.nix).
+    # No package default: this flake builds no task-cli, so the host
+    # passes the package holding bin/task.
+    task-email-watcher = ../nixos/task-email-watcher.nix;
   };
 
   # The module evaluates and renders the unit the docs describe. Cheap: it

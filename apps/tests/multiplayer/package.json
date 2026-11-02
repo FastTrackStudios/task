@@ -2,7 +2,7 @@
   "name": "task-multiplayer-conformance",
   "version": "0.0.0",
   "private": true,
-  "description": "Multiplayer conformance suites: 5-way editor convergence + 20-peer presence churn. Run from the repo dev shell (`nix develop`) via `./run.sh` (builds server/CLI/wasm first) or `pnpm test` against prebuilt artifacts.",
+  "description": "Multiplayer conformance suites: 5-way editor convergence + 20-peer presence churn. Run from the repo dev shell (direnv or `devenv shell`) via `./run.sh` (builds server/CLI/wasm first) or `pnpm test` against prebuilt artifacts.",
   "scripts": {
     "test": "playwright test",
     "test:convergence": "playwright test convergence.spec.js",
@@ -10,7 +10,7 @@
     "test:headed": "playwright test --headed",
     "report": "playwright show-report"
   },
-  "playwrightPinNote": "@playwright/test must match nixpkgs#playwright-driver.version, which supplies PLAYWRIGHT_BROWSERS_PATH in the dev shell — a mismatched pin looks for a browser build that isn't in the store and every test fails at launch. Same pin as features/editor/tests. Check with `nix eval --raw nixpkgs#playwright-driver.version`.",
+  "playwrightPinNote": "@playwright/test must match the playwright-driver of the nixpkgs-dx input pinned in devenv.yaml, which supplies PLAYWRIGHT_BROWSERS_PATH in the dev shell — a mismatched pin looks for a browser build that isn't in the store and every test fails at launch. Same pin as features/editor/tests. Check with `nix eval --raw github:NixOS/nixpkgs/<devenv.yaml nixpkgs-dx rev>#playwright-driver.version` (see apps/tests/playwright/README.md).",
   "devDependencies": {
     "@playwright/test": "1.59.1"
   }

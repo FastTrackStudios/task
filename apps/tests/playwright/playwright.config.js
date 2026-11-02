@@ -13,8 +13,8 @@ const { defineConfig, devices } = require("@playwright/test");
  * loading/empty states when the vox endpoint is absent.
  *
  * Run (from the repo root):
- *   nix develop <repo-root>
- *   cd tests/playwright && pnpm install
+ *   devenv shell          # or let direnv load it (.envrc)
+ *   cd apps/tests/playwright && pnpm install
  *   pnpm test            # or: pnpm test:headed / pnpm test:ui
  *
  * The dev shell pins Chromium via `playwright-driver.browsers`, so you

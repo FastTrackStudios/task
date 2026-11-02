@@ -1,6 +1,6 @@
 # This repo's git hooks, run by prek (https://github.com/j178/prek; the
-# dev shell carries the pinned release, nix/modules/prek.nix, bumped by
-# `just prek-bump`). Install once per clone: `just install-hooks`.
+# dev shell carries the release devenv-fleet pins, and installs the hooks
+# on entering). By hand, once per clone: `just install-hooks`.
 #
 #   commit   rustfmt, shellcheck and actionlint on the STAGED files only.
 #            prek stashes unstaged edits while hooks run, so a hook sees
