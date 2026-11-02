@@ -58,13 +58,6 @@ bash "$ROOT/scripts/apple-release.sh" check-build "$BUILD_NO"
 # shellcheck disable=SC1090,SC1091
 [ -f "$HOME/.appstoreconnect/config.env" ] && source "$HOME/.appstoreconnect/config.env"
 
-NIX="${NIX:-}"
-if [ -z "$NIX" ]; then
-    for c in /run/current-system/sw/bin/nix /nix/var/nix/profiles/default/bin/nix "$(command -v nix 2>/dev/null || true)"; do
-        [ -n "$c" ] && [ -x "$c" ] && { NIX="$c"; break; }
-    done
-fi
-
 KEYCHAIN="${KEYCHAIN:-login.keychain-db}"
 KEYCHAIN_PW="${KEYCHAIN_PW:-}"
 [ -n "$KEYCHAIN_PW" ] && security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
@@ -97,13 +90,13 @@ else
     # The inner script is expanded twice on purpose: single-quoted paths are
     # baked in here, escaped \$(…) runs in the dev shell.
     # shellcheck disable=SC2016
-    "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
+    (cd "$ROOT" && devenv shell -- bash -c "
         set -euo pipefail
         cd '$ROOT/$DX_APP_DIR'
         ${DX_TAILWIND:+bash '$ROOT/scripts/architect-ui-link.sh'}
         ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" && tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css')}
         dx build --platform macos --release
-    " > /tmp/task-macos-dmg-build.log 2>&1 || true
+    ") > /tmp/task-macos-dmg-build.log 2>&1 || true
     tail -3 /tmp/task-macos-dmg-build.log
 fi
 # shellcheck disable=SC2086,SC2012
@@ -139,11 +132,8 @@ BIN_TARGET=aarch64-apple-darwin
 BIN_PROFILE=desktop-release
 BIN_DIR="$ROOT/target/$BIN_TARGET/$BIN_PROFILE"
 echo "=== building the sync agent and the task CLI ==="
-"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
-    set -euo pipefail
-    cd '$ROOT'
-    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p $DX_PACKAGE --bin fts-files-daemon --bin task
-"
+(cd "$ROOT" && devenv shell -- \
+    cargo build --profile "$BIN_PROFILE" --target "$BIN_TARGET" -p "$DX_PACKAGE" --bin fts-files-daemon --bin task)
 cp "$BIN_DIR/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
 cp "$BIN_DIR/task" "$APP/Contents/MacOS/task"
 

@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 if [ -z "${NODE_IN_SHELL:-}" ]; then
-  exec nix develop --accept-flake-config "$ROOT#ci" --command env NODE_IN_SHELL=1 bash "$0" "$@"
+  exec devenv shell -- env NODE_IN_SHELL=1 bash "$0" "$@"
 fi
 rev="$(python3 -c "import json;print(json.load(open('flake.lock'))['nodes']['nixpkgs']['locked']['rev'])")"
 pk="github:NixOS/nixpkgs/$rev"

@@ -55,13 +55,14 @@ jobs:
       # member without its hack line, fails here; and every member's line
       # is gated off on wasm (architect's `cargo xtask fleet-deps --check`
       # does the same; this greps for it). Compiles nothing.
-      # The dev shell's cargo-hakari (nixpkgs), which writes the section:
-      # another version writes it differently. Bump both together.
+      # The dev shell's cargo-hakari (devenv-fleet's `rust`, from its
+      # nixpkgs pin), which writes the section: another version writes it
+      # differently. Bump both together.
       - name: install cargo-hakari
         if: ${{ !cancelled() }}
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-hakari@0.9.36
+          tool: cargo-hakari@0.9.38
       - name: hakari
         if: ${{ !cancelled() }}
         run: just ci-hakari

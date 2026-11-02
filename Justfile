@@ -31,8 +31,9 @@ task *args:
 # Binds 0.0.0.0 so the starcommand nginx reverse proxy reaches it via
 # the 10G LAN.
 #
-# Assumes direnv/.envrc already loaded the `.#ui` dev shell. If you're
-# running outside direnv, prefix with `nix develop .#ui --command`.
+# Assumes direnv/.envrc already loaded the dev shell (`use devenv`). If
+# you're running outside direnv, prefix with `devenv shell --`. `devenv up
+# web` runs the same thing as a process, beside the server (`just dev`).
 #
 # NOTE: serve WITHOUT hot-patching — `dx serve`'s default hot-patch
 # path breaks wasm builds (LinkError / subsecond panic on edit).
@@ -43,15 +44,16 @@ web: css
 # (nix/modules/packages/web-bundles.nix): `[profile.wasm-release]` from
 # the root Cargo.toml, DWARF dropped, and the binary split into a main
 # chunk plus one lazily fetched chunk per route and per plugin app
-# (needs the dev shell's dx — the #5668 fork from nix/modules/dx.nix;
+# (needs the dev shell's dx — devenv-fleet's #5668 fork, nix/modules/dx.nix;
 # the published 0.8.0-alpha.0 panics splitting this app, see
 # docs/task-webapp.md). Output: target/dx/task-app-web/release/web/public/.
 # Prints the chunk sizes at the end so a size regression is visible
-# without deploying.
+# without deploying. kache stays on: the shell's dx (DX_NO_RUSTC_WRAPPER=1)
+# builds a release as plain cargo does.
 web-release: css
     #!/usr/bin/env bash
     set -euo pipefail
-    cd apps/web && env -u RUSTC_WRAPPER dx build --release --platform web \
+    cd apps/web && dx build --release --platform web \
         --debug-symbols false --wasm-split --features wasm-split
     cd ../..
     du -h target/dx/task-app-web/release/web/public/assets/*.wasm | sort -h
@@ -237,21 +239,17 @@ ci-release: ci ci-docs
 ios-typing *ARGS:
     bash apps/mobile/ios/typing-test.sh {{ARGS}}
 
-# Canonical server. Default bind is 0.0.0.0:9090; override with
-# TASK_SERVER_BIND. See `.env.example` for the full env surface.
+# The server alone, as `devenv up` runs it (devenv.nix `processes.server`):
+# 127.0.0.1:18080, where the web app's dev proxy points; .env's
+# TASK_SERVER_BIND wins. See `.env.example` for the full env surface.
 server:
-    TASK_SERVER_BIND="0.0.0.0:9090" cargo run --release -p task-server
+    devenv up server
 
-# Launch server + web side-by-side; Ctrl+C kills both. Server lines
-# prefixed [srv], web lines [web].
+# Server + web + the local Teley and OTLP collector (devenv.nix's
+# processes, devenv-fleet's `telemetry`), in devenv's process TUI; Ctrl+C
+# stops them all. `devenv up -d` runs them detached (`devenv down`).
 dev:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    trap 'kill 0' EXIT
-    TASK_SERVER_BIND="0.0.0.0:9090" \
-        cargo run --release -p task-server 2>&1 | sed 's/^/[srv] /' &
-    just web 2>&1 | sed 's/^/[web] /' &
-    wait
+    devenv up
 
 # ── Dev seed ─────────────────────────────────────────────────────────────
 
@@ -310,12 +308,10 @@ sermon-sync *ARGS:
 # ── Build & Test ─────────────────────────────────────────────────────────
 
 # All recipes assume the dev shell is already loaded (`.envrc` does
-# `use flake`, so direnv handles this on `cd`). On hosts without
-# direnv, run `nix develop` first, or prefix any recipe with
-# `nix develop . --command just <recipe>`. The root flake exposes `default`, `ci`, and
-# `reaper-test` — there is no `.#ui` or `.#playwright` shell; the
-# default shell already carries tailwindcss, dx, and
-# PLAYWRIGHT_BROWSERS_PATH.
+# `use devenv`, so direnv handles this on `cd`). On hosts without
+# direnv, run `devenv shell` first, or prefix any recipe with
+# `devenv shell -- just <recipe>`. There is one shell (devenv.nix); it
+# carries tailwindcss, dx, and PLAYWRIGHT_BROWSERS_PATH.
 check:
     cargo check --workspace
 
@@ -334,7 +330,7 @@ test:
 # so Chromium + node come from Nix (it sets
 # PLAYWRIGHT_BROWSERS_PATH):
 #
-#   nix develop . --command just test-browser
+#   devenv shell -- just test-browser
 #
 # First run does a `pnpm install` for @playwright/test (the repo
 # commits pnpm-lock.yaml, not package-lock.json — no browser
@@ -375,7 +371,7 @@ test-browser-fresh:
 # :18080. See apps/tests/multiplayer/README.md for the suite status table
 # and the current findings. ~5 min warm, longer on a cold build.
 mp-test *ARGS:
-    nix develop . --command apps/tests/multiplayer/run.sh {{ARGS}}
+    devenv shell -- apps/tests/multiplayer/run.sh {{ARGS}}
 
 # ── Lint / format / CI ───────────────────────────────────────────────────
 
@@ -550,28 +546,6 @@ install-hooks:
 # changing prek.toml.
 hooks-all:
     prek run --all-files
-
-# Move nix/modules/prek.nix to prek's newest release (or VERSION, e.g.
-# 0.5.7): rewrites the version and every platform's sha256 from the
-# release's own `.sha256` files. Then re-enter the shell and
-# `just install-hooks` (the shims name the prek they were installed with).
-prek-bump VERSION="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    v="{{VERSION}}"
-    if [ -z "$v" ]; then
-        v="$(curl -fsSL https://api.github.com/repos/j178/prek/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')"
-    fi
-    [ -n "$v" ] || { echo "could not read prek's latest release" >&2; exit 1; }
-    f=nix/modules/prek.nix
-    sed -i "s/version = \"[^\"]*\";/version = \"$v\";/" "$f"
-    for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
-        sum="$(curl -fsSL "https://github.com/j178/prek/releases/download/v$v/prek-$t.tar.gz.sha256" | cut -d' ' -f1)"
-        [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "no sha256 for $t at v$v" >&2; exit 1; }
-        sed -i "s|target = \"$t\"; sha256 = \"[0-9a-f]*\"|target = \"$t\"; sha256 = \"$sum\"|" "$f"
-    done
-    git diff --stat -- "$f"
-    echo "prek -> $v"
 
 # The PR gate's clippy + tests + wasm, for what the change affects (`cargo
 # rail plan` from BASE, default the merge-base with origin/main). The

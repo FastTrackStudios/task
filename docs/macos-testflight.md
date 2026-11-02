@@ -45,10 +45,11 @@ App Store Connect API key in `~/.appstoreconnect/`.
 2. Mint/refresh the **Mac App Store provisioning profile**
    (`MAC_APP_STORE` type) for the bundle id via the ASC API — re-minted
    every run, like the iOS flow.
-3. `nix develop` → tailwind (`apps/task/tailwind.css`, the shared input)
-   → `dx build --platform macos --release` for `task-app-desktop`.
-   No `DEVELOPER_DIR` override — on the macOS-27 host, build scripts must
-   link the flake apple-sdk (the iOS flow's host-SDK trap applies here too).
+3. `devenv shell` (from the repo root) → tailwind (`apps/task/tailwind.css`,
+   the shared input) → `dx build --platform macos --release` for
+   `task-app-desktop`. No `DEVELOPER_DIR` override — on the macOS-27 host,
+   build scripts must link the dev shell's apple-sdk (the darwin stdenv's;
+   the iOS flow's host-SDK trap applies here too).
 4. Patch `Contents/Info.plist`: product name "Task", versions, category
    (`public.app-category.productivity`), export-compliance false, and the
    `DT*` SDK-metadata keys Xcode would have stamped (App Store Connect

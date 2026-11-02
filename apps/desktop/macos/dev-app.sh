@@ -13,7 +13,7 @@
 #   bash apps/desktop/macos/dev-app.sh            # build + run
 #   SKIP_BUILD=1 bash apps/desktop/macos/dev-app.sh   # rerun the last build
 #
-# Run from anywhere; it enters the nix dev shell itself for the build.
+# Run from anywhere; it enters the dev shell (devenv) itself for the build.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"     # apps/desktop/macos
@@ -24,17 +24,14 @@ ICON_1024="${ICON_1024:-$ROOT/apps/mobile/ios/Assets.xcassets/AppIcon.appiconset
 APP_GLOB="$ROOT/target/dx/task-app-desktop/debug/macos/*.app"
 ICON_CACHE="$ROOT/target/dev-app/AppIcon.icns"
 
-NIX="${NIX:-$(command -v nix 2>/dev/null || echo /nix/var/nix/profiles/default/bin/nix)}"
-
 if [ -z "${SKIP_BUILD:-}" ]; then
     # The stylesheet is generated (and git-ignored): rebuild it with the app.
-    "$NIX" develop "$ROOT" -c bash -c "
+    (cd "$ROOT" && devenv shell -- bash -c "
         set -euo pipefail
-        unset RUSTC_WRAPPER
         bash '$ROOT/scripts/architect-ui-link.sh' >/dev/null
         cd '$ROOT/apps' && tailwindcss -i tailwind.css -o desktop/assets/tailwind.css >/dev/null
         cd '$ROOT/apps/desktop' && dx build --platform macos
-    "
+    ")
 fi
 
 # shellcheck disable=SC2086

@@ -103,14 +103,14 @@ From the Task repository on THEBATTLESHIP:
 ```bash
 cd /home/cody/Development/Task
 nix --extra-experimental-features 'nix-command flakes' build --no-write-lock-file .#task-cli .#task-server
-nix --extra-experimental-features 'nix-command flakes' develop -c cargo test -p task-server
+devenv shell -- cargo test -p task-server
 ```
 
 For a broader pre-release check:
 
 ```bash
 cd /home/cody/Development/Task
-nix --extra-experimental-features 'nix-command flakes' develop -c cargo test --workspace
+devenv shell -- cargo test --workspace
 ```
 
 The stable Starcommand service should consume the reviewed `task-server` flake package, not a mutable dev checkout.
@@ -127,7 +127,7 @@ export SERVER_NAME=starcommand-preview
 export SERVER_ID=starcommand-task-preview
 export TASK_DB_PATH=/var/lib/task-preview/task.sqlite
 export TASK_SEED_DEMO=0
-nix --extra-experimental-features 'nix-command flakes' develop -c cargo run -p task-server
+devenv shell -- cargo run -p task-server
 ```
 
 Operator-managed preview should be run through the Starcommand Nix/systemd unit instead of a long-lived manual shell:

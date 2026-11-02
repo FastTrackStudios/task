@@ -1,5 +1,5 @@
 name: Shared runner tools
-description: Expose pinned GitHub CLI and Python on shared NixOS slots.
+description: Expose pinned GitHub CLI, Python and devenv on shared NixOS slots.
 runs:
   using: composite
   steps:
@@ -11,3 +11,15 @@ runs:
           dirname "$(command -v gh)" >> "$GITHUB_PATH"
           dirname "$(command -v python3)" >> "$GITHUB_PATH"
         '
+    # devenv 2.4.0 from the nixpkgs revision devenv-fleet's pins.json names
+    # (`devenv.nixpkgs`), until the runner units carry devenv themselves. A
+    # store path the host already has, so this is an evaluation, not a build.
+    # The build steps and scripts enter the dev shell with `devenv shell`.
+    - name: devenv
+      shell: bash
+      run: |
+        set -euo pipefail
+        out=$(nix build --no-link --print-out-paths \
+          github:NixOS/nixpkgs/e62746b0b472753ef019baceab6f1e2e52014980#devenv)
+        echo "$out/bin" >> "$GITHUB_PATH"
+        "$out/bin/devenv" version

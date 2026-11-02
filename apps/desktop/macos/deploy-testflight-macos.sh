@@ -51,13 +51,6 @@ ICON_1024="${ICON_1024:-$ROOT/apps/mobile/ios/Assets.xcassets/AppIcon.appiconset
 # shellcheck disable=SC1090
 source "$HOME/.appstoreconnect/config.env"
 
-NIX="${NIX:-}"
-if [ -z "$NIX" ]; then
-    for c in /run/current-system/sw/bin/nix /nix/var/nix/profiles/default/bin/nix "$(command -v nix 2>/dev/null || true)"; do
-        [ -n "$c" ] && [ -x "$c" ] && { NIX="$c"; break; }
-    done
-fi
-
 KEYCHAIN="${KEYCHAIN:-login.keychain-db}"
 KEYCHAIN_PW="${KEYCHAIN_PW:-}"
 [ -n "$KEYCHAIN_PW" ] && security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
@@ -100,9 +93,9 @@ else
     # shellcheck disable=SC2086
     rm -rf $APP_GLOB
     # No DEVELOPER_DIR override anywhere here: on the macOS-27 host, build
-    # scripts must link the flake apple-sdk, not the system SDK (see the
+    # scripts must link the dev shell's apple-sdk, not the system SDK (see the
     # airlock-ios skill; that trap bit the iOS flow's HOST build scripts).
-    "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
+    (cd "$ROOT" && devenv shell -- bash -c "
         set -euo pipefail
         cd '$ROOT/$DX_APP_DIR'
         # DX_TAILWIND is relative to DX_APP_DIR. Build it from the input's
@@ -112,7 +105,7 @@ else
         ${DX_TAILWIND:+bash '$ROOT/scripts/architect-ui-link.sh'}
         ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" && tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css')}
         dx build --platform macos --release
-    " > /tmp/task-macos-build.log 2>&1 || true
+    ") > /tmp/task-macos-build.log 2>&1 || true
     tail -3 /tmp/task-macos-build.log
 fi
 # shellcheck disable=SC2086
@@ -143,11 +136,8 @@ echo "=== app bundle: $APP ==="
 # a MAS build additionally needs the agent registered through SMAppService
 # with its plist under Contents/Library/LaunchAgents. Not wired yet.
 echo "=== building the sync agent ==="
-"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
-    set -euo pipefail
-    cd '$ROOT'
-    cargo build --release -p files-daemon --features daemon-bin --bin fts-files-daemon
-"
+(cd "$ROOT" && devenv shell -- \
+    cargo build --release -p files-daemon --features daemon-bin --bin fts-files-daemon)
 cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
 echo "agent: $APP/Contents/MacOS/fts-files-daemon"
 

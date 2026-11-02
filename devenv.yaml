@@ -1,0 +1,30 @@
+# The dev environment (devenv 2.4): `devenv shell`, or direnv through .envrc,
+# and `devenv up` for the server, the web app and the local telemetry stack.
+# nixpkgs, rust-overlay and nixpkgs-dx are devenv-fleet's pins.json
+# revisions, so this shell's rustc and dx are the same store paths as every
+# fleet repo's and CI's. Move them only with devenv-fleet: its
+# `scripts/fleet-pins --write .` rewrites this file and the lock.
+require_version: ">=2.4.0"
+# The telemetry module's Teley (8787) and collector (4318) are host
+# singletons on fixed ports: fail loudly rather than move them.
+strict_ports: true
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe
+  rust-overlay:
+    url: github:oxalica/rust-overlay/5b9f1198b59bcb31c5c3250b332e7d77590e6306
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+    overlays:
+      - default
+  nixpkgs-dx:
+    url: github:NixOS/nixpkgs/d99b013d5d1931ad77fe3912ed218170dec5d9a4
+  devenv-fleet:
+    url: github:FastTrackStudios/devenv-fleet/v0.1.0
+    flake: false
+imports:
+  - devenv-fleet/rust
+  - devenv-fleet/dioxus
+  - devenv-fleet/telemetry
+  - devenv-fleet/darwin

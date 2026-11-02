@@ -143,12 +143,12 @@ else
     # built from the input's own directory or it silently loses rules —
     # hence the `cd $(dirname …)`. Keep in step with
     # apps/tailwind_build.rs, which pins the same cwd.
-    "$NIX" develop "$ROOT" -c bash -c \
+    (cd "$ROOT" && devenv shell -- bash -c \
         "$XCODE_ENV; export PATH=$BIN_IOS:\$PATH; \
          cd '$ROOT/$DX_APP_DIR'; \
          ${DX_TAILWIND:+bash '$ROOT/scripts/architect-ui-link.sh';} \
          ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" \&\& tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css');} \
-         dx build --platform ios --device --release $DX_FEATURES" \
+         dx build --platform ios --device --release $DX_FEATURES") \
         > "$SCRATCH/build.log" 2>&1 || true
     tail -2 "$SCRATCH/build.log"
     # A failed cargo build used to surface as two lines of dx summary and
