@@ -24,7 +24,7 @@ The vocabulary:
 | **focus** | the context / tag names a steering block brings forward |
 
 Answers to charter
-[#2 A Single Trusted System](https://github.com/FastTrackStudios/task/issues/2).
+[#2 A Single Trusted System](../charter/02-single-trusted-system.md).
 
 ---
 

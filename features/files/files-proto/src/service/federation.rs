@@ -25,7 +25,7 @@
 //!
 //! Identity does not cross. The federation model — who a remote
 //! principal is, and which servers trust each other — belongs to charter
-//! [#22](https://github.com/FastTrackStudios/task/issues/22). This lane
+//! `docs/charter/22-self-host-federation-p2p.md`. This lane
 //! carries a secret that the origin minted and can withdraw, which is
 //! the smallest thing that works and does not pretend to be an identity
 //! system.
