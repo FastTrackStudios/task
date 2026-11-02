@@ -314,7 +314,7 @@ fn BodySection(slug: Memo<Option<String>>) -> Element {
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },
@@ -334,7 +334,7 @@ fn BodySection(slug: Memo<Option<String>>) -> Element {
                     value: "{unit}",
                     oninput: move |e| unit.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },
@@ -437,7 +437,7 @@ fn ExercisesSection(slug: Memo<Option<String>>) -> Element {
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },

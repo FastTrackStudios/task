@@ -585,7 +585,7 @@ fn WatchScreen(v: String, node_token: String, t: u32, info: ResourceInfo) -> Ele
                         placeholder: "Note at the current moment…",
                         value: "{note_text}",
                         oninput: move |e| note_text.set(e.value()),
-                        onkeydown: move |e| if e.key() == Key::Enter { add_note.call(()) },
+                        onkeydown: move |e| if e.key() == Key::Named(NamedKey::Enter) { add_note.call(()) },
                     }
                     Button {
                         on_click: move |_| add_note.call(()),
@@ -698,7 +698,7 @@ fn Landing() -> Element {
                     placeholder: "https://youtu.be/…",
                     value: "{url}",
                     oninput: move |e| url.set(e.value()),
-                    onkeydown: move |e| if e.key() == Key::Enter { go.call(()) },
+                    onkeydown: move |e| if e.key() == Key::Named(NamedKey::Enter) { go.call(()) },
                 }
                 Button { on_click: move |_| go.call(()), "Watch" }
             }

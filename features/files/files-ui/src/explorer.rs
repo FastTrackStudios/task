@@ -279,14 +279,14 @@ pub fn Explorer(props: ExplorerProps) -> Element {
                         return;
                     };
                     match evt.data().key() {
-                        Key::Escape => {
+                        Key::Named(NamedKey::Escape) => {
                             if previewing.peek().is_some() {
                                 previewing.set(None);
                             } else {
                                 selected.set(None);
                             }
                         }
-                        Key::Enter => {
+                        Key::Named(NamedKey::Enter) => {
                             if let Some(name) = selected.peek().clone()
                                 && let Some(entry) = rows.iter().find(|e| e.name == name).cloned()
                             {

@@ -337,10 +337,10 @@ pub fn SearchOverlay() -> Element {
                             onkeydown: move |e: KeyboardEvent| {
                                 let ctrl = e.modifiers().ctrl();
                                 let key = e.key();
-                                let down = key == Key::ArrowDown
+                                let down = key == Key::Named(NamedKey::ArrowDown)
                                     || (ctrl && key == Key::Character("n".into()))
                                     || (ctrl && key == Key::Character("j".into()));
-                                let up = key == Key::ArrowUp
+                                let up = key == Key::Named(NamedKey::ArrowUp)
                                     || (ctrl && key == Key::Character("p".into()))
                                     || (ctrl && key == Key::Character("k".into()));
                                 if down {
@@ -357,13 +357,13 @@ pub fn SearchOverlay() -> Element {
                                     if len > 0 {
                                         cursor.set((cur + len - 1) % len);
                                     }
-                                } else if key == Key::Enter {
+                                } else if key == Key::Named(NamedKey::Enter) {
                                     e.prevent_default();
                                     let cand = ranked.peek().get(*cursor.peek()).map(|r| r.cand.clone());
                                     if let Some(cand) = cand {
                                         activate.call(cand);
                                     }
-                                } else if key == Key::Escape {
+                                } else if key == Key::Named(NamedKey::Escape) {
                                     e.prevent_default();
                                     open.set(false);
                                 } else {

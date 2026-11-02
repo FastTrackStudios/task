@@ -248,7 +248,7 @@ pub fn TaskDetail(props: TaskDetailProps) -> Element {
                 onkeydown: {
                     let save = commit_if_changed.clone();
                     move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             e.prevent_default();
                             save();
                         }

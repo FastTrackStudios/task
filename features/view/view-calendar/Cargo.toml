@@ -15,7 +15,7 @@ license.workspace = true
 
 [dependencies]
 dioxus = { workspace = true }
-dioxus-sdk-time = { git = "https://github.com/FastTrackStudios/sdk", branch = "main" }
+dioxus-sdk-time = { git = "https://github.com/FastTrackStudios/sdk", tag = "fts-upstream-2026-11" }
 chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
 uuid = { workspace = true, features = ["v4", "js", "serde"] }
 serde = { workspace = true, features = ["derive"] }

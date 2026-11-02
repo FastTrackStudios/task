@@ -293,21 +293,21 @@ fn PaletteModal() -> Element {
                             cursor.set(0);
                         },
                         onkeydown: move |e| match e.key() {
-                            Key::ArrowDown => {
+                            Key::Named(NamedKey::ArrowDown) => {
                                 e.prevent_default();
                                 if count > 0 {
                                     cursor.set((sel + 1).min(count - 1));
                                 }
                             }
-                            Key::ArrowUp => {
+                            Key::Named(NamedKey::ArrowUp) => {
                                 e.prevent_default();
                                 cursor.set(sel.saturating_sub(1));
                             }
-                            Key::Enter => {
+                            Key::Named(NamedKey::Enter) => {
                                 e.prevent_default();
                                 go_key(sel);
                             }
-                            Key::Escape => close(),
+                            Key::Named(NamedKey::Escape) => close(),
                             _ => {}
                         },
                     }
@@ -490,21 +490,21 @@ pub fn OmniPicker() -> Element {
                             cursor.set(0);
                         },
                         onkeydown: move |e| match e.key() {
-                            Key::ArrowDown => {
+                            Key::Named(NamedKey::ArrowDown) => {
                                 e.prevent_default();
                                 if count > 0 {
                                     cursor.set((sel + 1).min(count - 1));
                                 }
                             }
-                            Key::ArrowUp => {
+                            Key::Named(NamedKey::ArrowUp) => {
                                 e.prevent_default();
                                 cursor.set(sel.saturating_sub(1));
                             }
-                            Key::Enter => {
+                            Key::Named(NamedKey::Enter) => {
                                 e.prevent_default();
                                 go_key(sel);
                             }
-                            Key::Escape => close(),
+                            Key::Named(NamedKey::Escape) => close(),
                             _ => {}
                         },
                     }

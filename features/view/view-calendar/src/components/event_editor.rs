@@ -64,7 +64,7 @@ pub fn EventEditor(props: EventEditorProps) -> Element {
             tabindex: "-1",
             onclick: move |e| e.stop_propagation(),
             onkeydown: move |e| {
-                if e.key() == Key::Escape {
+                if e.key() == Key::Named(NamedKey::Escape) {
                     on_close.call(());
                 }
             },

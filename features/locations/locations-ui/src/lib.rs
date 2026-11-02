@@ -145,7 +145,7 @@ pub fn LocationsView() -> Element {
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },
@@ -165,7 +165,7 @@ pub fn LocationsView() -> Element {
                     value: "{address}",
                     oninput: move |e| address.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },

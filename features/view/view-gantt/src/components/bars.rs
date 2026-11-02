@@ -382,7 +382,7 @@ fn Bar(props: BarProps) -> Element {
                             onclick: move |e: Event<MouseData>| e.stop_propagation(),
                             onkeydown: move |e: Event<KeyboardData>| {
                                 let k = e.data().key();
-                                if k == Key::Enter || k == Key::Escape {
+                                if k == Key::Named(NamedKey::Enter) || k == Key::Named(NamedKey::Escape) {
                                     // Browser will fire `onchange` on
                                     // blur after we close, so the
                                     // committed value flows through.

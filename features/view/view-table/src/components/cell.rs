@@ -144,9 +144,9 @@ fn CellEditor(props: CellEditorProps) -> Element {
                     "autofocus": true,
                     oninput: move |e: FormEvent| draft.set(e.value()),
                     onkeydown: move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             on_commit.call(CellValue::Text(draft()));
-                        } else if e.key() == Key::Escape {
+                        } else if e.key() == Key::Named(NamedKey::Escape) {
                             on_cancel.call(());
                         }
                     },
@@ -167,10 +167,10 @@ fn CellEditor(props: CellEditorProps) -> Element {
                     "autofocus": true,
                     oninput: move |e: FormEvent| draft.set(e.value()),
                     onkeydown: move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             let v = draft().parse::<f64>().ok();
                             on_commit.call(v.map_or(CellValue::Empty, CellValue::Number));
-                        } else if e.key() == Key::Escape {
+                        } else if e.key() == Key::Named(NamedKey::Escape) {
                             on_cancel.call(());
                         }
                     },
@@ -197,7 +197,7 @@ fn CellEditor(props: CellEditorProps) -> Element {
                         on_commit.call(parsed.map_or(CellValue::Empty, CellValue::Date));
                     },
                     onkeydown: move |e: KeyboardEvent| {
-                        if e.key() == Key::Escape {
+                        if e.key() == Key::Named(NamedKey::Escape) {
                             on_cancel.call(());
                         }
                     },

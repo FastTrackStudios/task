@@ -201,14 +201,14 @@ fn TitleField(
                 oninput: move |e| draft.set(e.value()),
                 onkeydown: move |e: KeyboardEvent| {
                     e.stop_propagation();
-                    if e.key() == Key::Enter {
+                    if e.key() == Key::Named(NamedKey::Enter) {
                         editing.set(false);
                         on_commit.call(draft.peek().clone());
                         focus_editor_body();
-                    } else if e.key() == Key::Escape {
+                    } else if e.key() == Key::Named(NamedKey::Escape) {
                         editing.set(false);
                         focus_editor_body();
-                    } else if e.key() == Key::ArrowDown {
+                    } else if e.key() == Key::Named(NamedKey::ArrowDown) {
                         // The document continues below the title —
                         // commit and drop focus back into it.
                         editing.set(false);

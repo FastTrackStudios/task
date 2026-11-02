@@ -354,7 +354,7 @@ pub fn RecallView() -> Element {
                     value: "{draft_front}",
                     oninput: move |e| draft_front.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             add_card();
                         }
                     },

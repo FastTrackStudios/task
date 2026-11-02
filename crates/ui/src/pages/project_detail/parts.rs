@@ -127,7 +127,7 @@ pub(super) fn PartsSection(project: ProjectInfo, slug: String) -> Element {
             div {
                 class: "flex max-w-md items-center gap-2 pt-2 opacity-70 transition-opacity focus-within:opacity-100 hover:opacity-100",
                 onkeydown: move |e: KeyboardEvent| {
-                    if e.key() == Key::Enter {
+                    if e.key() == Key::Named(NamedKey::Enter) {
                         add.call(());
                     }
                 },
@@ -173,7 +173,7 @@ pub(super) fn PartsSection(project: ProjectInfo, slug: String) -> Element {
             div {
                 class: "flex max-w-md items-center gap-2",
                 onkeydown: move |e: KeyboardEvent| {
-                    if e.key() == Key::Enter {
+                    if e.key() == Key::Named(NamedKey::Enter) {
                         add.call(());
                     }
                 },

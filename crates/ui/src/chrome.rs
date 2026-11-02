@@ -839,7 +839,7 @@ pub fn TimerWidget() -> Element {
                             value: "{draft}",
                             oninput: move |e| draft.set(e.value()),
                             onkeydown: move |e| {
-                                if e.key() == Key::Enter {
+                                if e.key() == Key::Named(NamedKey::Enter) {
                                     start();
                                 }
                             },

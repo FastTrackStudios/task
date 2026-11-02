@@ -350,7 +350,7 @@ pub fn VaultSearch(
                 spellcheck: "false",
                 oninput: move |e| query.set(e.value()),
                 onkeydown: move |e| {
-                    if e.key() == Key::Escape {
+                    if e.key() == Key::Named(NamedKey::Escape) {
                         query.set(String::new());
                     }
                 },

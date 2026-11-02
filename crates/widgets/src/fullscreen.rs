@@ -42,7 +42,7 @@ pub fn FullscreenExperience(
             tabindex: "0",
             autofocus: true,
             onkeydown: move |e| {
-                if handle_esc && e.key() == Key::Escape {
+                if handle_esc && e.key() == Key::Named(NamedKey::Escape) {
                     if *esc_armed.peek() {
                         e.prevent_default();
                         esc_armed.set(false);

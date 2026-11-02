@@ -158,7 +158,7 @@ pub fn InventoryView() -> Element {
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Named(NamedKey::Enter) {
                             create();
                         }
                     },

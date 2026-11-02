@@ -1456,7 +1456,7 @@ fn now_unix() -> i64 {
 /// get no task at all: there is nothing to refresh them with, and their
 /// session tokens are long-lived at the server.
 fn use_access_token_renewal(mut st: AuthState) {
-    let mut task: Signal<Option<dioxus::dioxus_core::Task>> = use_signal(|| None);
+    let mut task: Signal<Option<dioxus::core::Task>> = use_signal(|| None);
     use_effect(move || {
         let account = st.active.read().clone();
         if let Some(previous) = task.write().take() {
