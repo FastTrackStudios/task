@@ -1000,8 +1000,6 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.blitz-paint]
 opt-level = 3
-[profile.dev.package.blitz-shell]
-opt-level = 3
 [profile.dev.package.blitz-traits]
 opt-level = 3
 [profile.dev.package.anyrender]
