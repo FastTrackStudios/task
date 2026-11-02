@@ -76,6 +76,12 @@ in
     # prek's hooks for shell scripts and workflows (prek.toml).
     shellcheck
     actionlint
+    # The release scripts (scripts/release.sh, apple-release.sh) and the
+    # release jobs call gh, and THEBATTLESHIP's release pool has none on PATH.
+    gh
+    # fts.buildInputs on every system in the flake's shells: iconv, for the
+    # crates that link it.
+    libiconv
   ])
   ++ lib.optionals pkgs.stdenv.isLinux [
     # The server's rendition pipeline probes for ffmpeg at boot (media
@@ -108,6 +114,13 @@ in
     # white window): https://github.com/NixOS/nixpkgs/issues/32580
     WEBKIT_DISABLE_COMPOSITING_MODE = "1";
   };
+
+  # The flake's shells appended these to PATH, so cargo-installed tools and
+  # ~/.local/bin resolve. Appended, not prepended: the pinned rustc and the
+  # store's tools still come first (a runner's rustup stable must not win).
+  enterShell = ''
+    export PATH="$PATH:$HOME/.cargo/bin:$HOME/.local/bin"
+  '';
 
   fleet.banner = ''
     just css                  generated tailwind sheets

@@ -176,17 +176,13 @@ jobs:
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           export CARGO_TARGET_DIR="$dir"
-          # The tag's own dev shell: devenv's (asserted by fleet-doctor) from
-          # the devenv move on; before it (a re-publish of an older tag) the
-          # flake's `.#ci` for the server and `.#default` for dx.
-          if [ -f devenv.nix ]; then
-            devenv shell -- fleet-doctor
-            server_shell() { devenv shell -- "$@"; }
-            web_shell() { devenv shell -- "$@"; }
-          else
-            server_shell() { nix develop --accept-flake-config .#ci -c "$@"; }
-            web_shell() { nix develop --accept-flake-config .#default -c "$@"; }
-          fi
+          # The tag's own dev shell (devenv.nix), asserted by fleet-doctor. A
+          # tag from before devenv has no devenv.nix and no devenv shell here:
+          # publish from a tag that has one.
+          [ -f devenv.nix ] || { echo "::error::this tag has no devenv.nix: it predates the devenv shell"; exit 1; }
+          devenv shell -- fleet-doctor
+          server_shell() { devenv shell -- "$@"; }
+          web_shell() { devenv shell -- "$@"; }
           server_shell cargo build --release -p task-server
           # tailwind first: dx reads assets/ before cargo runs. (Older tags,
           # e.g. v0.2.4, predate architect-ui-link.sh.)

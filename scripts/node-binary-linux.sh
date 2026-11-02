@@ -6,7 +6,7 @@
 #
 # The binary must run on hosts without Nix, as ONE file (`task-server
 # self-update` and scripts/install-node.sh fetch exactly this asset). So
-# OpenSSL (pkgsStatic, from the nixpkgs the flake is locked to) and bzip2
+# OpenSSL (pkgsStatic, from the nixpkgs devenv.lock pins) and bzip2
 # (bzip2-sys's bundled source) are linked statically, and the interpreter is
 # taken off /nix/store: what remains is glibc and libgcc_s, which every distro
 # has. Its glibc floor follows the Nix toolchain (decision 2026-10-24), is
@@ -22,7 +22,7 @@ cd "$ROOT"
 if [ -z "${NODE_IN_SHELL:-}" ]; then
   exec devenv shell -- env NODE_IN_SHELL=1 bash "$0" "$@"
 fi
-rev="$(python3 -c "import json;print(json.load(open('flake.lock'))['nodes']['nixpkgs']['locked']['rev'])")"
+rev="$(python3 -c "import json;print(json.load(open('devenv.lock'))['nodes']['nixpkgs']['locked']['rev'])")"
 pk="github:NixOS/nixpkgs/$rev"
 if [ -z "${NODE_IN_TOOLS:-}" ]; then
   exec nix shell "$pk#patchelf" "$pk#binutils" --command env NODE_IN_TOOLS=1 bash "$0" "$@"
