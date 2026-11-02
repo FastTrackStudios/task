@@ -18,7 +18,7 @@
 //!   in-process.
 //!
 //! Every method is 4 params or fewer (Facet's `#[architect::rpc]`
-//! constraint, per the monorepo's root CLAUDE.md).
+//! constraint, per the monorepo's root AGENTS.md).
 
 pub mod admin;
 pub mod agent;

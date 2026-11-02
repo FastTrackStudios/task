@@ -144,7 +144,7 @@ Fixed two ways:
 - Per the user's standing instruction, pushing/PR is their call — don't push
   without being asked. When asked: `just ci` already passed against this
   exact tree, so `[skip checks]` on the PR is legitimate *if* it's the very
-  next commit and main hasn't moved (see CLAUDE.md's "The PR gate" section
+  next commit and main hasn't moved (see AGENTS.md's "The PR gate" section
   for the exact caveat).
 
 ## Known limitations / things a future agent should know before extending this
@@ -205,6 +205,6 @@ Fixed two ways:
 
 1. `git log -1 --stat` to see the full diff at a glance.
 2. `just ci` one more time if any time has passed (main may have moved).
-3. `gh pr create --fill && gh pr merge --auto --squash` per CLAUDE.md, or
+3. `gh pr create --fill && gh pr merge --auto --squash` per AGENTS.md, or
    ask the user how they want it merged if anything about the branch has
    changed since this doc was written.
