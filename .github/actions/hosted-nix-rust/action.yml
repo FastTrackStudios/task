@@ -60,8 +60,10 @@ runs:
         xargs -r nix copy --no-check-sigs --from "file://$cache" < "$cache/paths" \
           || echo "::warning::tool import failed; the shell builds them"
 
-    # devenv 2.4.0 from the nixpkgs revision devenv-fleet's pins.json names
-    # (`devenv.nixpkgs`).
+    # devenv 2.4.0 (cachix/devenv tag v2.4.0, b904dcb) from the nixpkgs
+    # revision devenv-fleet's pins.json names (`devenv.nixpkgs`). The CLI
+    # ships no release binary, so Nix builds it; the version check fails the
+    # job on any other devenv.
     - name: devenv
       shell: bash
       run: |
@@ -69,7 +71,9 @@ runs:
         out=$(nix build --no-link --print-out-paths \
           github:NixOS/nixpkgs/e62746b0b472753ef019baceab6f1e2e52014980#devenv)
         echo "$out/bin" >> "$GITHUB_PATH"
-        "$out/bin/devenv" version
+        v="$("$out/bin/devenv" version | awk '{print $2}')"
+        [ "$v" = 2.4.0 ] || { echo "::error::devenv $v from nixpkgs; this repo pins 2.4.0"; exit 1; }
+        echo "devenv $v"
     # Evaluates the shell once and asserts its rustc is devenv-fleet's
     # pinned store path. The toolchain's bin also goes on the job's PATH,
     # so rust-cache (a JS action, outside the shell) keys on that rustc and
