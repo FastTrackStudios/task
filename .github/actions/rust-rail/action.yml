@@ -44,8 +44,8 @@ runs:
     - name: cargo-rail (the fleet pin's release binary)
       shell: bash
       env:
-        # devenv-fleet's pkgs/cargo-rail.nix version (v0.1.0). Bump both
-        # together.
+        # devenv-fleet's pkgs/cargo-rail.nix version (pinned at 6113b65). Bump
+        # both together.
         RAIL: "0.32.0"
       run: |
         set -euo pipefail
