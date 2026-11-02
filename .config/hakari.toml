@@ -1,0 +1,30 @@
+# cargo-hakari: Task's workspace-hack (`workspace-hack/`). The same settings
+# as architect's (architect `skills/architect/references/xtask-tooling.md`,
+# "Fleet feature union"), so a crate both build resolves alike.
+# https://docs.rs/cargo-hakari/latest/cargo_hakari/config
+
+hakari-package = "workspace-hack"
+dep-format-version = "4"
+resolver = "2"
+
+# The targets the fleet builds: Linux servers, desktops and CI; the macOS
+# desktop (Apple Silicon and Intel); the iPhone app. Not wasm: the hack
+# line is off there (see below).
+platforms = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-apple-ios",
+]
+
+# The locked versions as carets (`1.1.10`, not `1`), like architect's.
+exact-versions = true
+
+# Host and target stay separate, as cargo builds them; every fleet repo
+# sets the same.
+unify-target-host = "none"
+
+# The codegen tooling depends on nothing the members build; with the hack
+# it would compile the whole union before `cargo xtask` could run.
+[traversal-excludes]
+workspace-members = ["xtask"]

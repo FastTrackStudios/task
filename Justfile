@@ -396,6 +396,24 @@ clippy: ci-clippy
 ci-fmt:
     cargo fmt --all -- --check
 
+# The workspace-hack (`workspace-hack/`, `.config/hakari.toml`) is current,
+# and every member's hack line sits under the gate that keeps it off wasm
+# (architect `skills/architect/references/xtask-tooling.md`, "Fleet feature
+# union"). After a dependency change: `cargo hakari generate`. A new member:
+# `cargo hakari manage-deps --yes`, then move its line under the gate.
+ci-hakari:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo hakari generate --diff
+    cargo hakari manage-deps --dry-run
+    gate="[target.'cfg(not(any(target_family = \"wasm\", no_workspace_hack)))'.dependencies]"
+    bad=$(git ls-files '*Cargo.toml' | grep -v '^workspace-hack/' | while read -r f; do
+      awk -v gate="$gate" '/^\[/ { t = $0 } /^workspace-hack *=/ && t != gate { print FILENAME; exit }' "$f"
+    done)
+    if [ -n "$bad" ]; then
+      echo "workspace-hack line not under $gate in:"; echo "$bad"; exit 1
+    fi
+
 # Task's token sheet is architect-ui's, imported through apps/.architect-ui
 # (no vendored copy). Fails on drift: a re-vendored copy, an import that
 # no longer goes through the link, or a link left on another pin. Depends

@@ -50,3 +50,16 @@ jobs:
       - name: rail route cases
         if: ${{ !cancelled() }}
         run: just rail-cases
+      # The workspace-hack is current (workspace-hack/Cargo.toml): a
+      # dependency change that skipped `cargo hakari generate`, or a new
+      # member without its hack line, fails here; and every member's line
+      # is gated off on wasm (architect's `cargo xtask fleet-deps --check`
+      # does the same; this greps for it). Compiles nothing.
+      - name: install cargo-hakari
+        if: ${{ !cancelled() }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari@0.9.39
+      - name: hakari
+        if: ${{ !cancelled() }}
+        run: just ci-hakari

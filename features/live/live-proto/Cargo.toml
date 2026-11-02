@@ -13,7 +13,7 @@ facet = { workspace = true }
 thiserror = { workspace = true }
 # Not the workspace entry: that one turns on iroh, and a wire contract
 # should not choose a peer's transport — a browser joins over WebSocket.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.10.0" }
+architect = { git = "https://github.com/FastTrackStudios/architect", rev = "4021e698a9b6cd3d02732a4ad1ccc1172e1d8dad" }
 serde = { workspace = true, features = ["derive"] }
 vox = { workspace = true, optional = true }
 
@@ -23,3 +23,6 @@ vox = ["dep:vox", "architect/vox"]
 
 [lints]
 workspace = true
+
+[target.'cfg(not(any(target_family = "wasm", no_workspace_hack)))'.dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

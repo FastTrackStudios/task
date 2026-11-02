@@ -100,6 +100,9 @@
         # time, so a plain `cargo check` needs it built first
         # (`just css`).
         tailwindcss_4
+        # cargo-hakari: the workspace-hack (`workspace-hack/`,
+        # `.config/hakari.toml`; `just ci-hakari`).
+        cargo-hakari
       ]
       ++ lib.optionals pkgs.stdenv.isLinux [
         # mold — the linker .cargo/config.toml selects for
