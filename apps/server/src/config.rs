@@ -171,6 +171,14 @@ pub struct ServerConfig {
     /// `TASK_API_BIBLE_NIV_ID`: the NIV edition's API.Bible id.
     #[architect(env = "TASK_API_BIBLE_NIV_ID")]
     pub api_bible_niv_id: Option<String>,
+
+    // ── logging ─────────────────────────────────────────────────────
+    /// `TASK_LOG_CONSOLE`: an `EnvFilter` for the terminal alone (`warn`,
+    /// `warn,task_server=info`), applied after `RUST_LOG`. Unset, the
+    /// terminal prints what `RUST_LOG` lets through, as it always has
+    /// (the cluster's Loki scrapes stdout). OTLP export is not affected.
+    #[architect(env = "TASK_LOG_CONSOLE")]
+    pub log_console: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -216,6 +224,7 @@ impl Default for ServerConfig {
             api_bible_key: None,
             api_bible_key_fallback: None,
             api_bible_niv_id: None,
+            log_console: None,
         }
     }
 }

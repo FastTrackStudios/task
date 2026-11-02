@@ -111,6 +111,11 @@ telemetry_env() {
     export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$OTLP_PORT"
     echo ">> telemetry: collector on :$OTLP_PORT — exporting traces/logs/metrics"
   fi
+  # Exporting: the collector has every line, so the terminal keeps only
+  # warnings and errors (a TASK_LOG_CONSOLE already set wins).
+  if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then
+    export TASK_LOG_CONSOLE="${TASK_LOG_CONSOLE:-warn}"
+  fi
 }
 DEMO_CAST="alice@acme.test:$PASSWORD:Alice:alice,sam@acme.test:$PASSWORD:Sam:sam,casey@client.test:$PASSWORD:Casey:casey,riley@rockstars.test:$PASSWORD:Riley:riley,taylor@fasttrackaudio.test:$PASSWORD:Taylor:taylor,jordan@rockstars.test:$PASSWORD:Jordan:jordan"
 
