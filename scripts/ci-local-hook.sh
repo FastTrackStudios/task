@@ -119,13 +119,13 @@ fi
 
 # ci-local needs the dev shell (cargo-rail, nextest, the desktop stack's
 # system libs). If `pkg-config` already sees pango + libsoup we are in
-# this repo's shell; otherwise re-enter it, even when IN_NIX_SHELL is set
-# (that may be some other project's shell).
+# this repo's shell; otherwise enter it (devenv.nix), even when
+# DEVENV_ROOT is set (that may be some other project's shell).
 if { command -v pkg-config >/dev/null 2>&1 && pkg-config --exists pango libsoup-3.0 2>/dev/null; } \
-  || ! command -v nix >/dev/null 2>&1; then
+  || ! command -v devenv >/dev/null 2>&1; then
   bash "$REPO_ROOT/scripts/ci-local.sh"
 else
-  nix develop "$REPO_ROOT" -c bash "$REPO_ROOT/scripts/ci-local.sh"
+  (cd "$REPO_ROOT" && devenv shell -- bash "$REPO_ROOT/scripts/ci-local.sh")
 fi
 
 post

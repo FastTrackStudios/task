@@ -132,7 +132,7 @@ cd /run/media/Development/task
 git status --porcelain                            # must be empty; else stop and ask
 pgrep -af 'cargo|rustc'                           # wait if someone is building
 git checkout --detach <your-sha>
-nix develop --command cargo check --workspace --all-targets
+devenv shell -- cargo check --workspace --all-targets
 git checkout -                                    # put the tree back
 # or, for anything that may wait or outlast your run:
 gate-submit STA-123 /run/media/Development/task ./gate.sh --sha <your-sha>

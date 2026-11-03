@@ -6,6 +6,11 @@
 result
 result-*
 .direnv/
+# devenv: state, the generated flake and per-machine overrides.
+.devenv/
+.devenv.flake.nix
+devenv.local.nix
+devenv.local.yaml
 .cache
 *.profraw
 .DS_Store

@@ -12,30 +12,14 @@
     options.fts = {
       rustToolchain = lib.mkOption {
         type = lib.types.package;
-        description = "FTS-wide pinned Rust toolchain (stable 1.94 + wasm32).";
+        description = "The fleet's pinned Rust toolchain (devenv-fleet: stable 1.99.1 + wasm32).";
       };
-      buildInputs = lib.mkOption {
-        type = lib.types.listOf lib.types.package;
-        description = "Native libraries every cargo build in the tree links against.";
-      };
-      nativeBuildInputs = lib.mkOption {
-        type = lib.types.listOf lib.types.package;
-        description = "Host tools for interactive builds (pkg-config, bindgen, dx…).";
-      };
-      shellEnv = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        description = "Env every dev/CI shell exports (bindgen, wasm CC, LD paths…).";
-      };
-      # dx toolchain trio from the nixpkgs-dx pin — shells and the
+      # dx toolchain trio from the nixpkgs-dx pin — the dev shell and the
       # hermetic web bundle must use the SAME dx/wasm-bindgen/binaryen.
       dx = {
         cli = lib.mkOption { type = lib.types.package; };
         wasmBindgen = lib.mkOption { type = lib.types.package; };
         binaryen = lib.mkOption { type = lib.types.package; };
-      };
-      pkgsDx = lib.mkOption {
-        type = lib.types.raw;
-        description = "The nixpkgs-dx package set (current-unstable).";
       };
       # crane build plumbing shared by all deployable packages.
       craneLib = lib.mkOption { type = lib.types.raw; };
@@ -56,14 +40,6 @@
       mkServerImage = lib.mkOption {
         type = lib.types.raw;
         description = "task-server OCI image factory: { server } — the package holding bin/task-server.";
-      };
-      cargoRail = lib.mkOption {
-        type = lib.types.nullOr lib.types.package;
-        description = "cargo-rail built from its release tag (null disables it in the shells).";
-      };
-      prek = lib.mkOption {
-        type = lib.types.nullOr lib.types.package;
-        description = "prek, the git hook manager, from its release binary (null on systems it doesn't ship for).";
       };
     };
   });

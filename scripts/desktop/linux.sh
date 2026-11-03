@@ -36,14 +36,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-# The repo's default dev shell (dx, tailwindcss, the GTK/WebKit build env),
-# then packaging tools from the nixpkgs the flake is locked to.
+# The repo's dev shell (devenv.nix: dx, tailwindcss, the GTK/WebKit build
+# env), then packaging tools from the nixpkgs devenv.lock pins (the dev
+# shell's too).
 if [ -z "${DESKTOP_IN_SHELL:-}" ]; then
-  exec nix develop --accept-flake-config "$ROOT#default" \
-    --command env DESKTOP_IN_SHELL=1 bash "$0" "$@"
+  exec devenv shell -- env DESKTOP_IN_SHELL=1 bash "$0" "$@"
 fi
 if [ -z "${DESKTOP_IN_TOOLS:-}" ]; then
-  rev="$(python3 -c "import json;print(json.load(open('flake.lock'))['nodes']['nixpkgs']['locked']['rev'])" 2>/dev/null || true)"
+  rev="$(python3 -c "import json;print(json.load(open('devenv.lock'))['nodes']['nixpkgs']['locked']['rev'])" 2>/dev/null || true)"
   pk="nixpkgs"
   [ -n "$rev" ] && pk="github:NixOS/nixpkgs/$rev"
   exec nix shell "$pk#patchelf" "$pk#squashfsTools" "$pk#binutils" "$pk#flatpak" "$pk#ostree" \

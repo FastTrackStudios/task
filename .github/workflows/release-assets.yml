@@ -255,14 +255,13 @@ jobs:
           ls -la dist
 
       - name: Manifest + attach
+        shell: devenv shell -- bash -e {0}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
           V: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          # gh is not on the runner's PATH; the flake's nixpkgs has it.
-          gh() { nix run --quiet nixpkgs#gh -- "$@"; }
           cd dist
           sha="$(sha256sum Task-linux-x86_64.AppImage | awk '{print $1}')"
           printf '{\n  "version": "%s",\n  "appimage": "https://github.com/%s/releases/download/%s/Task-linux-x86_64.AppImage",\n  "sha256": "%s"\n}\n' \

@@ -2,7 +2,7 @@
   "name": "task-playwright",
   "version": "0.0.0",
   "private": true,
-  "description": "Browser tests for the Task web app (apps/task/web). @playwright/test must match the FLAKE's locked playwright-driver (see README — query via builtins.getFlake, not nixpkgs#). Run from the repo-root dev shell: `nix develop <repo-root>` (it sets PLAYWRIGHT_BROWSERS_PATH).",
+  "description": "Browser tests for the Task web app (apps/task/web). @playwright/test must match the playwright-driver of the nixpkgs-dx input pinned in devenv.yaml (see README — query that rev, not nixpkgs#). Run from the repo-root dev shell: direnv or `devenv shell` (it sets PLAYWRIGHT_BROWSERS_PATH).",
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",

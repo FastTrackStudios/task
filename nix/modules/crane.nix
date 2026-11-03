@@ -19,7 +19,7 @@
       craneLib = (inputs.crane.mkLib pkgs).overrideToolchain config.fts.rustToolchain;
 
       # Two git-dep vendor fixes. Without them no pure package builds
-      # (task-desktop, task-server); the deploy and dev builds never saw
+      # (task-server, task-webapp); the deploy and dev builds never saw
       # it because they compile in the dev shell, where cargo checks out
       # git deps itself. (The FTS monorepo needs two others, for
       # reaper-low and libspa-sys; neither dep exists in this tree.)

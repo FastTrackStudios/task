@@ -25,7 +25,7 @@
 # restores artifacts across slots; each slot keeps its own mutable target.
 # The job gate supplies repo-scoped CI_CACHE_DIR and CARGO_HOME.
 name: THEBATTLESHIP nix + warm target
-description: Enter .#ci on a THEBATTLESHIP Task runner and point cargo at the pool's warm target dir for this build kind.
+description: Put the pinned devenv on PATH, evaluate the repo's devenv shell on a THEBATTLESHIP Task runner and point cargo at the pool's warm target dir for this build kind.
 inputs:
   kind:
     description: Build kind (lint, tests, wasm, release); names the target dir.
@@ -67,7 +67,13 @@ runs:
         echo "$KIND: target $dir (${gb} GB warm)"
         df -h "$CI_CACHE_DIR" | tail -1
 
-    - name: Enter .#ci
-      uses: nicknovitski/nix-develop@v1
-      with:
-        arguments: --accept-flake-config .#ci
+    # (devenv itself is on PATH from shared-tools, above.) The dev shell every checkout gets (devenv.nix, devenv-fleet's `rust`
+    # and `dioxus`): rust 1.99.1 with the wasm target, mold, the clang env
+    # for ring, the native headers, tailwindcss, cargo-rail. The job's steps
+    # run inside it (checks.yml: `shell: devenv shell -- bash -e {0}`); this
+    # step evaluates it once and asserts the rustc is devenv-fleet's pinned
+    # store path, the same one a local shell gets, so kache's CI and local
+    # entries are shared.
+    - name: dev shell
+      shell: devenv shell -- bash -e {0}
+      run: fleet-doctor

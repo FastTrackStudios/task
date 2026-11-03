@@ -12,7 +12,7 @@
       # cc-wrapper injects host-only hardening flags clang rejects for
       # wasm. Without these the C symbols stay as unresolved
       # `(import "env" ...)` entries and the shipped bundle white-screens.
-      # Mirrors devShells.default exactly.
+      # Mirrors the dev shell's (devenv-fleet's `dioxus` module) exactly.
       dxWebEnv = {
         CC_wasm32_unknown_unknown = "${pkgs.llvmPackages_18.clang-unwrapped}/bin/clang";
         AR_wasm32_unknown_unknown = "${pkgs.llvmPackages_18.bintools-unwrapped}/bin/llvm-ar";

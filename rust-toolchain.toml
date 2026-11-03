@@ -1,5 +1,6 @@
 # The fleet's toolchain: rust 1.99.1 stable, the same release architect,
-# studio, keyflow and frame pin, and must match nix/modules/toolchain.nix.
+# studio, keyflow and frame pin, and must match devenv-fleet's (the dev
+# shell's and nix/modules/toolchain.nix's compiler).
 #
 # One compiler across the fleet so kache (the rustc wrapper on the build
 # hosts) reuses a crate built for one repo in the others: its key holds
@@ -8,13 +9,13 @@
 # Architect's skill lists the whole set (architect:
 # skills/architect/references/xtask-tooling.md, "Fleet toolchain").
 #
-# rust-overlay is this repo's own input rather than `dioxus-flake`'s, so
-# a compiler can be taken here without moving nixpkgs or `dx` (which
-# comes from the dedicated `nixpkgs-dx` pin — see nix/modules/dx.nix).
-# Bumping means: `nix flake update rust-overlay` if the release is newer
-# than the lock, then this channel and the version in
-# nix/modules/toolchain.nix, which are two halves of one pin and drift
-# silently if only one moves.
+# The nix compiler is devenv-fleet's `toolchain` (its pins.json: rust
+# version, rust-overlay and nixpkgs revisions), shared by devenv.yaml and
+# flake.nix. Bumping means a devenv-fleet release, then moving both pins
+# here (devenv.yaml's inputs and `devenv update`, flake.nix's
+# `devenv-fleet` tag and `nix flake update devenv-fleet`) and this
+# channel, which are halves of one pin and drift silently if only one
+# moves (`fleet-doctor` and devenv-fleet's scripts/fleet-pins check them).
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy", "rust-src"]
