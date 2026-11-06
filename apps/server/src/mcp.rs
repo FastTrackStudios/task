@@ -3196,7 +3196,7 @@ struct PropertySchemas {
 fn load_property_schemas(org: &crate::OrgAppState) -> Result<PropertySchemas, ToolFailure> {
     use vault_proto::VaultSync as _;
     let mut schemas = PropertySchemas {
-        registry: PropertySchemaRegistry::with_builtins(),
+        registry: task_vault::schema_registry(),
         org: Vec::new(),
         errors: Vec::new(),
     };

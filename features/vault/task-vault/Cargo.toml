@@ -1,0 +1,24 @@
+[package]
+name = "task-vault"
+description = "Task's layer on architect's vault: the `task` and `area` kinds for the property-schema registry and the `.base` formula `transpose_key`. `install()` once at start; `schema_registry()` wherever a registry is built."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+music-key = { workspace = true }
+serde_json = { workspace = true }
+vault-live = { workspace = true }
+
+[dev-dependencies]
+org-proto = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true
+
+[target.'cfg(not(any(target_family = "wasm", no_workspace_hack)))'.dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

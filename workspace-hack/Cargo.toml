@@ -19,13 +19,13 @@ aead = { version = "0.5.2", default-features = false, features = ["alloc", "getr
 ahash = { version = "0.8.12", features = ["serde"] }
 aho-corasick = { version = "1.1.5" }
 arborium = { version = "2.18.1", default-features = false, features = ["lang-bash", "lang-javascript", "lang-json", "lang-markdown", "lang-python", "lang-rust", "lang-typescript"] }
-architect = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["action-list", "atom-turso", "client", "fake", "iroh", "local", "release", "server"] }
-architect-atom = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["turso"] }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["otel"] }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["router"] }
+architect = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["action-list", "atom-turso", "client", "fake", "iroh", "local", "release", "server"] }
+architect-atom = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["turso"] }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["otel"] }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["router"] }
 arrayvec = { version = "0.7.8" }
-auth = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["full"] }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["full"] }
+auth = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["full"] }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["full"] }
 axum = { version = "0.8.9", features = ["macros", "ws"] }
 axum-core = { version = "0.5.6", default-features = false, features = ["tracing"] }
 base16ct = { version = "1.0.0", default-features = false, features = ["alloc"] }
@@ -36,6 +36,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.13.2", default-features = false, features = ["serde"] }
 blake2 = { version = "0.10.6" }
+blake3 = { version = "1.8.7" }
 brotli-decompressor = { version = "5.0.3", default-features = false, features = ["std"] }
 bumpalo = { version = "3.20.3", features = ["boxed", "collections"] }
 bytemuck = { version = "1.25.2", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
@@ -45,8 +46,9 @@ chrono = { version = "0.4.45", features = ["serde"] }
 cipher = { version = "0.4.4", default-features = false, features = ["zeroize"] }
 color = { version = "0.3.3" }
 concurrent-queue = { version = "2.5.0" }
+constant_time_eq = { version = "0.4.2", default-features = false, features = ["std"] }
 crc32fast = { version = "1.5.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["dioxus"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["dioxus"] }
 crossbeam-epoch = { version = "0.9.21" }
 crossbeam-utils = { version = "0.8.23" }
 crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2.2", default-features = false, features = ["getrandom"] }
@@ -76,6 +78,7 @@ euclid = { version = "0.22.14", features = ["serde"] }
 event-listener = { version = "5.4.2" }
 facet = { version = "0.50.0-rc.7", features = ["camino", "chrono", "reflect", "uuid"] }
 facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0", features = ["camino", "chrono", "uuid"] }
+facet-format = { version = "0.50.0-rc.7" }
 facet-path = { version = "0.50.0-rc.7" }
 fastrand = { version = "2.5.0" }
 flate2 = { version = "1.1.10" }
@@ -122,6 +125,7 @@ keyboard-types = { version = "0.8.3", features = ["serde"] }
 libc = { version = "0.2.189" }
 libsqlite3-sys = { version = "0.30.1", features = ["bundled", "unlock_notify"] }
 linebender_resource_handle = { version = "0.1.1" }
+links-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["vox"] }
 litemap-c38e5c1d305a1b54 = { package = "litemap", version = "0.8.3", default-features = false, features = ["alloc"] }
 litemap-ca01ad9e24f5d932 = { package = "litemap", version = "0.7.5", default-features = false, features = ["alloc", "serde"] }
 log = { version = "0.4.34", default-features = false, features = ["std"] }
@@ -210,7 +214,7 @@ thiserror = { version = "2.0.20" }
 time = { version = "0.3.55", features = ["local-offset", "macros", "serde-well-known"] }
 tinystr-c38e5c1d305a1b54 = { package = "tinystr", version = "0.8.5", features = ["zerovec"] }
 tinystr-ca01ad9e24f5d932 = { package = "tinystr", version = "0.7.6", default-features = false, features = ["alloc", "serde", "zerovec"] }
-tokio = { version = "1.53.1", features = ["full", "test-util"] }
+tokio = { version = "1.53.1", features = ["full"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["early-data", "logging", "ring", "tls12"] }
 tokio-stream = { version = "0.1.19", features = ["fs", "net", "sync"] }
 tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
@@ -231,6 +235,7 @@ typenum = { version = "1.20.1", default-features = false, features = ["const-gen
 unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.26.1", features = ["js", "serde", "v1", "v3", "v4", "v5", "v6", "v7", "v8"] }
+vault-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["vox"] }
 vox = { version = "0.10.0-rc.7", default-features = false, features = ["runtime", "transport-websocket-tls"] }
 web-sys = { version = "0.3.104", features = ["AbortSignal", "AnalyserNode", "AnimationEvent", "AudioContext", "AudioDestinationNode", "BinaryType", "Clipboard", "ClipboardEvent", "CloseEvent", "Comment", "CompositionEvent", "Crypto", "CssStyleDeclaration", "CustomEvent", "DataTransfer", "DataTransferItem", "DataTransferItemList", "Document", "DomRect", "DomTokenList", "DragEvent", "ErrorEvent", "File", "FileList", "FileReader", "FocusEvent", "FormData", "Headers", "History", "HtmlAudioElement", "HtmlFormElement", "HtmlHeadElement", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement", "InputEvent", "IntersectionObserverEntry", "KeyboardEvent", "Location", "MediaElementAudioSourceNode", "MediaQueryList", "MessageEvent", "Navigator", "NodeList", "Performance", "PointerEvent", "QueuingStrategy", "ReadableByteStreamController", "ReadableStream", "ReadableStreamByobReader", "ReadableStreamByobRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "ReadableStreamGetReaderOptions", "ReadableStreamReadResult", "ReadableStreamReaderMode", "ReadableStreamType", "ReadableWritablePair", "Request", "RequestInit", "ResizeObserverEntry", "ResizeObserverSize", "Response", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition", "ScrollRestoration", "ScrollToOptions", "Selection", "Storage", "StreamPipeOptions", "Text", "Touch", "TouchEvent", "TouchList", "TransformStream", "TransformStreamDefaultController", "Transformer", "TransitionEvent", "UnderlyingSink", "UnderlyingSource", "WebSocket", "WheelEvent", "Window", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter", "console"] }
 web-time = { version = "1.1.0", default-features = false, features = ["serde"] }
@@ -315,13 +320,16 @@ zerocopy = { version = "0.8.57", default-features = false, features = ["derive",
 [target.x86_64-unknown-linux-gnu.dependencies]
 aes-gcm = { version = "0.10.3" }
 ahash = { version = "0.8.12", default-features = false, features = ["no-rng"] }
+allocator-api2 = { version = "0.2.21" }
+arrayvec = { version = "0.7.8", default-features = false, features = ["serde"] }
 bitflags = { version = "2.13.2", default-features = false, features = ["std"] }
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11", features = ["autofocus"] }
 block-buffer = { version = "0.12.1", default-features = false, features = ["zeroize"] }
 bytemuck = { version = "1.25.2", default-features = false, features = ["wasm_simd"] }
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -329,6 +337,7 @@ dioxus-core = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1
 dioxus-html = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41" }
 env_filter = { version = "2.0.0", default-features = false, features = ["regex", "std"] }
 env_logger = { version = "0.11.11" }
+euclid = { version = "0.22.14", default-features = false, features = ["libm"] }
 facet = { version = "0.50.0-rc.7", default-features = false, features = ["indexmap"] }
 facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0", default-features = false, features = ["indexmap"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib", "zlib-rs"] }
@@ -348,8 +357,9 @@ icu_normalizer = { version = "2.4.0", default-features = false, features = ["com
 image = { version = "0.25.6" }
 inout = { version = "0.1.4", default-features = false, features = ["block-padding"] }
 ipnet = { version = "2.12.2", default-features = false, features = ["serde"] }
-itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12.1" }
 itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5" }
+jiff = { version = "0.2.37" }
+jiff-core = { version = "0.1.1", default-features = false, features = ["std", "tz-fat"] }
 lexical-core = { version = "1.0.6", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 lexical-util = { version = "1.0.7", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 libc = { version = "0.2.189", default-features = false, features = ["extra_traits"] }
@@ -358,7 +368,6 @@ lock_api = { version = "0.4.14", features = ["arc_lock"] }
 log = { version = "0.4.34", default-features = false, features = ["kv_unstable"] }
 memchr = { version = "2.8.3", default-features = false, features = ["use_std"] }
 memmap2 = { version = "0.9.11", default-features = false, features = ["stable_deref_trait"] }
-miniz_oxide = { version = "0.8.9", features = ["simd"] }
 mio = { version = "1.2.3", features = ["net", "os-ext"] }
 naga = { version = "30.0.1", features = ["glsl-out", "hlsl-out", "spv-out", "wgsl-in", "wgsl-out"] }
 native-tls = { version = "0.2.18", features = ["alpn"] }
@@ -366,12 +375,13 @@ noq = { version = "1.2.0", default-features = false, features = ["runtime-tokio"
 noq-udp = { version = "1.2.0" }
 parking_lot = { version = "0.12.5", features = ["arc_lock", "send_guard"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0", features = ["macros"] }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["charset", "cookies", "form", "json", "multipart", "native-tls"] }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.28", features = ["macos-system-configuration"] }
 rustix = { version = "1.1.5", features = ["io_uring", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
 scopeguard = { version = "1.2.0" }
-seize = { version = "0.5.1" }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc", "float_roundtrip", "unbounded_depth"] }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11.0" }
@@ -381,17 +391,17 @@ string_cache = { version = "0.8.9" }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3.0.6", features = ["extra-traits", "full"] }
 time = { version = "0.3.55", default-features = false, features = ["serde-human-readable"] }
 tinyvec = { version = "1.13.3", features = ["rustc_1_57", "std"] }
-tokio = { version = "1.53.1", default-features = false, features = ["tracing"] }
+tokio = { version = "1.53.1", default-features = false, features = ["test-util", "tracing"] }
 tokio-rustls = { version = "0.26.4", features = ["aws-lc-rs"] }
 tokio-websockets = { version = "0.13.3", default-features = false, features = ["client", "getrandom", "rand", "ring", "rustls-bring-your-own-connector", "server", "sha1_smol"] }
 tower-http = { version = "0.6.11", default-features = false, features = ["decompression-gzip", "limit", "set-header"] }
 tungstenite = { version = "0.29.0", features = ["native-tls"] }
 ucd-trie = { version = "0.1.7" }
 yoke-c38e5c1d305a1b54 = { package = "yoke", version = "0.8.4" }
-zlib-rs = { version = "0.6.8" }
 zvariant = { version = "5.15.1", features = ["enumflags2", "uuid"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
+allocator-api2 = { version = "0.2.21", default-features = false, features = ["alloc"] }
 base64-2b5c6dc72f624058 = { package = "base64", version = "0.23.1", default-features = false, features = ["std"] }
 bitflags = { version = "2.13.2", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
@@ -410,7 +420,6 @@ either = { version = "1.18.0" }
 half = { version = "2.7.1" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17.1" }
 http = { version = "1.5.0", default-features = false, features = ["std"] }
-itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12.1", default-features = false, features = ["use_alloc"] }
 itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5", default-features = false, features = ["use_alloc"] }
 lexical-core = { version = "1.0.6", default-features = false, features = ["format", "parse-floats", "parse-integers", "power-of-two", "std", "write-floats", "write-integers"] }
 lexical-parse-float = { version = "1.0.6", default-features = false, features = ["format", "power-of-two", "std"] }
@@ -422,10 +431,11 @@ libc = { version = "0.2.189" }
 linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std"] }
 lock_api = { version = "0.4.14" }
 manganis-core = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["dioxus"] }
-miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 naga = { version = "30.0.1", default-features = false, features = ["glsl-out", "wgsl-in", "wgsl-out"] }
 num-traits = { version = "0.2.19" }
 parking_lot = { version = "0.12.5" }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0" }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 regex-automata = { version = "0.4.18" }
 rustc-hash = { version = "1.1.0" }
 rustix = { version = "1.1.5", features = ["fs"] }
@@ -446,7 +456,10 @@ zvariant = { version = "5.15.1", features = ["enumflags2"] }
 
 [target.aarch64-apple-darwin.dependencies]
 aes-gcm = { version = "0.10.3" }
+allocator-api2 = { version = "0.2.21" }
+arrayvec = { version = "0.7.8", default-features = false, features = ["serde"] }
 bitflags = { version = "2.13.2", default-features = false, features = ["std"] }
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11", features = ["autofocus"] }
 block-buffer = { version = "0.12.1", default-features = false, features = ["zeroize"] }
 block2 = { version = "0.6.2" }
 bytemuck = { version = "1.25.2", default-features = false, features = ["wasm_simd"] }
@@ -455,7 +468,7 @@ bzip2-sys = { version = "0.1.13", default-features = false, features = ["static"
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -465,6 +478,7 @@ dispatch2 = { version = "0.3.1" }
 env_filter = { version = "2.0.0", default-features = false, features = ["regex", "std"] }
 env_logger = { version = "0.11.11" }
 errno = { version = "0.3.14" }
+euclid = { version = "0.22.14", default-features = false, features = ["libm"] }
 facet = { version = "0.50.0-rc.7", default-features = false, features = ["indexmap"] }
 facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0", default-features = false, features = ["indexmap"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib", "zlib-rs"] }
@@ -485,6 +499,8 @@ image = { version = "0.25.6" }
 inout = { version = "0.1.4", default-features = false, features = ["block-padding"] }
 ipnet = { version = "2.12.2", default-features = false, features = ["serde"] }
 itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5" }
+jiff = { version = "0.2.37" }
+jiff-core = { version = "0.1.1", default-features = false, features = ["std", "tz-fat"] }
 lexical-core = { version = "1.0.6", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 lexical-util = { version = "1.0.7", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 libc = { version = "0.2.189", default-features = false, features = ["extra_traits"] }
@@ -492,7 +508,6 @@ lock_api = { version = "0.4.14", features = ["arc_lock"] }
 log = { version = "0.4.34", default-features = false, features = ["kv_unstable"] }
 memchr = { version = "2.8.3", default-features = false, features = ["use_std"] }
 memmap2 = { version = "0.9.11", default-features = false, features = ["stable_deref_trait"] }
-miniz_oxide = { version = "0.8.9", features = ["simd"] }
 mio = { version = "1.2.3", features = ["net", "os-ext"] }
 naga = { version = "30.0.1", features = ["glsl-out", "msl-out", "wgsl-in", "wgsl-out"] }
 native-tls = { version = "0.2.18", features = ["alpn"] }
@@ -504,13 +519,14 @@ objc2-foundation = { version = "0.3.2" }
 objc2-security = { version = "0.3.2", default-features = false, features = ["Authorization", "SecBase", "objc2"] }
 parking_lot = { version = "0.12.5", features = ["arc_lock", "send_guard"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0", features = ["macros"] }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["charset", "cookies", "form", "json", "multipart", "native-tls"] }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.28", features = ["macos-system-configuration"] }
 rustix = { version = "1.1.5", features = ["io_uring", "pipe", "process", "stdio", "system", "termios", "time"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
 scopeguard = { version = "1.2.0" }
-seize = { version = "0.5.1" }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc", "float_roundtrip", "unbounded_depth"] }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11.0" }
@@ -519,16 +535,16 @@ spin-93f6ce9d446188ac = { package = "spin", version = "0.10.1" }
 string_cache = { version = "0.8.9" }
 time = { version = "0.3.55", default-features = false, features = ["serde-human-readable"] }
 tinyvec = { version = "1.13.3", features = ["rustc_1_57", "std"] }
-tokio = { version = "1.53.1", default-features = false, features = ["tracing"] }
+tokio = { version = "1.53.1", default-features = false, features = ["test-util", "tracing"] }
 tokio-rustls = { version = "0.26.4", features = ["aws-lc-rs"] }
 tokio-websockets = { version = "0.13.3", default-features = false, features = ["client", "getrandom", "rand", "ring", "rustls-bring-your-own-connector", "server", "sha1_smol"] }
 tower-http = { version = "0.6.11", default-features = false, features = ["decompression-gzip", "limit", "set-header"] }
 tungstenite = { version = "0.29.0", features = ["native-tls"] }
 ucd-trie = { version = "0.1.7" }
 yoke-c38e5c1d305a1b54 = { package = "yoke", version = "0.8.4" }
-zlib-rs = { version = "0.6.8" }
 
 [target.aarch64-apple-darwin.build-dependencies]
+allocator-api2 = { version = "0.2.21", default-features = false, features = ["alloc"] }
 base64-2b5c6dc72f624058 = { package = "base64", version = "0.23.1", default-features = false, features = ["std"] }
 bitflags = { version = "2.13.2", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
@@ -557,12 +573,13 @@ lexical-write-integer = { version = "1.0.6", default-features = false, features 
 libc = { version = "0.2.189", features = ["extra_traits"] }
 lock_api = { version = "0.4.14" }
 manganis-core = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["dioxus"] }
-miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 naga = { version = "30.0.1", default-features = false, features = ["glsl-out", "wgsl-in", "wgsl-out"] }
 num-traits = { version = "0.2.19" }
 objc2 = { version = "0.6.5", features = ["exception"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSProcessInfo", "std"] }
 parking_lot = { version = "0.12.5" }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0" }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 regex-automata = { version = "0.4.18" }
 rustc-hash = { version = "1.1.0" }
 rustix = { version = "1.1.5", features = ["fs"] }
@@ -582,8 +599,11 @@ zeroize = { version = "1.9.0" }
 
 [target.x86_64-apple-darwin.dependencies]
 aes-gcm = { version = "0.10.3" }
+allocator-api2 = { version = "0.2.21" }
 anstyle = { version = "1.0.14" }
+arrayvec = { version = "0.7.8", default-features = false, features = ["serde"] }
 bitflags = { version = "2.13.2", default-features = false, features = ["std"] }
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11", features = ["autofocus"] }
 block-buffer = { version = "0.12.1", default-features = false, features = ["zeroize"] }
 block2 = { version = "0.6.2" }
 bytemuck = { version = "1.25.2", default-features = false, features = ["wasm_simd"] }
@@ -592,7 +612,7 @@ bzip2-sys = { version = "0.1.13", default-features = false, features = ["static"
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -602,6 +622,7 @@ dispatch2 = { version = "0.3.1" }
 env_filter = { version = "2.0.0", default-features = false, features = ["regex", "std"] }
 env_logger = { version = "0.11.11" }
 errno = { version = "0.3.14" }
+euclid = { version = "0.22.14", default-features = false, features = ["libm"] }
 facet = { version = "0.50.0-rc.7", default-features = false, features = ["indexmap"] }
 facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0", default-features = false, features = ["indexmap"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib", "zlib-rs"] }
@@ -620,6 +641,8 @@ image = { version = "0.25.6" }
 inout = { version = "0.1.4", default-features = false, features = ["block-padding"] }
 ipnet = { version = "2.12.2", default-features = false, features = ["serde"] }
 itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5" }
+jiff = { version = "0.2.37" }
+jiff-core = { version = "0.1.1", default-features = false, features = ["std", "tz-fat"] }
 lexical-core = { version = "1.0.6", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 lexical-util = { version = "1.0.7", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 libc = { version = "0.2.189", default-features = false, features = ["extra_traits"] }
@@ -637,12 +660,13 @@ objc2-foundation = { version = "0.3.2" }
 objc2-security = { version = "0.3.2", default-features = false, features = ["Authorization", "SecBase", "objc2"] }
 parking_lot = { version = "0.12.5", features = ["arc_lock", "send_guard"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0", features = ["macros"] }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["charset", "cookies", "form", "json", "multipart", "native-tls"] }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.28", features = ["macos-system-configuration"] }
 rustix = { version = "1.1.5", features = ["io_uring", "pipe", "process", "stdio", "system", "termios", "time"] }
 scopeguard = { version = "1.2.0" }
-seize = { version = "0.5.1" }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc", "float_roundtrip", "unbounded_depth"] }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11.0" }
@@ -651,14 +675,13 @@ spin-93f6ce9d446188ac = { package = "spin", version = "0.10.1" }
 string_cache = { version = "0.8.9" }
 time = { version = "0.3.55", default-features = false, features = ["serde-human-readable"] }
 tinyvec = { version = "1.13.3", features = ["rustc_1_57", "std"] }
-tokio = { version = "1.53.1", default-features = false, features = ["tracing"] }
+tokio = { version = "1.53.1", default-features = false, features = ["test-util", "tracing"] }
 tokio-rustls = { version = "0.26.4", features = ["aws-lc-rs"] }
 tokio-websockets = { version = "0.13.3", default-features = false, features = ["client", "getrandom", "rand", "ring", "rustls-bring-your-own-connector", "server", "sha1_smol"] }
 tower-http = { version = "0.6.11", default-features = false, features = ["decompression-gzip", "limit", "set-header"] }
 tungstenite = { version = "0.29.0", features = ["native-tls"] }
 ucd-trie = { version = "0.1.7" }
 yoke-c38e5c1d305a1b54 = { package = "yoke", version = "0.8.4" }
-zlib-rs = { version = "0.6.8" }
 
 [target.x86_64-apple-darwin.build-dependencies]
 anstyle = { version = "1.0.14", default-features = false, features = ["std"] }
@@ -682,6 +705,8 @@ num-traits = { version = "0.2.19" }
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSProcessInfo", "std"] }
 parking_lot = { version = "0.12.5" }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0" }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 regex-automata = { version = "0.4.18" }
 rustc-hash = { version = "1.1.0" }
 rustix = { version = "1.1.5", features = ["fs"] }
@@ -691,8 +716,11 @@ ucd-trie = { version = "0.1.7", default-features = false, features = ["std"] }
 
 [target.aarch64-apple-ios.dependencies]
 aes-gcm = { version = "0.10.3" }
+allocator-api2 = { version = "0.2.21" }
 anstyle = { version = "1.0.14" }
+arrayvec = { version = "0.7.8", default-features = false, features = ["serde"] }
 bitflags = { version = "2.13.2", default-features = false, features = ["std"] }
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", tag = "fts-upstream-2026-11", features = ["autofocus"] }
 block-buffer = { version = "0.12.1", default-features = false, features = ["zeroize"] }
 bytemuck = { version = "1.25.2", default-features = false, features = ["wasm_simd"] }
 bzip2 = { version = "0.5.2", features = ["static"] }
@@ -700,7 +728,7 @@ bzip2-sys = { version = "0.1.13", default-features = false, features = ["static"
 camino = { version = "1.2.6", default-features = false, features = ["serde1"] }
 cipher = { version = "0.4.4", default-features = false, features = ["block-padding"] }
 constant_time_eq = { version = "0.4.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", default-features = false, features = ["turso"] }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false, features = ["turso"] }
 derive_more-f595c2ba2a3f28df = { package = "derive_more", version = "2.1.1", default-features = false, features = ["is_variant"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11.3", default-features = false, features = ["zeroize"] }
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1b70602ef387f0c80f171d84527b41", default-features = false, features = ["fullstack", "server"] }
@@ -709,6 +737,7 @@ dioxus-html = { git = "https://github.com/DioxusLabs/dioxus", rev = "430cfb563f1
 env_filter = { version = "2.0.0", default-features = false, features = ["regex", "std"] }
 env_logger = { version = "0.11.11" }
 errno = { version = "0.3.14" }
+euclid = { version = "0.22.14", default-features = false, features = ["libm"] }
 facet = { version = "0.50.0-rc.7", default-features = false, features = ["indexmap"] }
 facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0", default-features = false, features = ["indexmap"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib", "zlib-rs"] }
@@ -727,6 +756,8 @@ image = { version = "0.25.6" }
 inout = { version = "0.1.4", default-features = false, features = ["block-padding"] }
 ipnet = { version = "2.12.2", default-features = false, features = ["serde"] }
 itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5" }
+jiff = { version = "0.2.37" }
+jiff-core = { version = "0.1.1", default-features = false, features = ["std", "tz-fat"] }
 lexical-core = { version = "1.0.6", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 lexical-util = { version = "1.0.7", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
 libc = { version = "0.2.189", default-features = false, features = ["extra_traits"] }
@@ -744,13 +775,14 @@ objc2-foundation = { version = "0.3.2" }
 objc2-security = { version = "0.3.2", default-features = false, features = ["Authorization", "SecBase", "objc2"] }
 parking_lot = { version = "0.12.5", features = ["arc_lock", "send_guard"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0", features = ["macros"] }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["charset", "cookies", "form", "json", "multipart", "native-tls"] }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.28", features = ["macos-system-configuration"] }
 rustix = { version = "1.1.5", features = ["io_uring", "pipe", "process", "stdio", "system", "termios", "time"] }
 scopeguard = { version = "1.2.0" }
 security-framework-sys = { version = "2.17.0", features = ["OSX_10_10", "OSX_10_11", "OSX_10_12", "OSX_10_9"] }
-seize = { version = "0.5.1" }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc", "float_roundtrip", "unbounded_depth"] }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11.0" }
@@ -759,14 +791,13 @@ spin-93f6ce9d446188ac = { package = "spin", version = "0.10.1" }
 string_cache = { version = "0.8.9" }
 time = { version = "0.3.55", default-features = false, features = ["serde-human-readable"] }
 tinyvec = { version = "1.13.3", features = ["rustc_1_57", "std"] }
-tokio = { version = "1.53.1", default-features = false, features = ["tracing"] }
+tokio = { version = "1.53.1", default-features = false, features = ["test-util", "tracing"] }
 tokio-rustls = { version = "0.26.4", features = ["aws-lc-rs"] }
 tokio-websockets = { version = "0.13.3", default-features = false, features = ["client", "getrandom", "rand", "ring", "rustls-bring-your-own-connector", "server", "sha1_smol"] }
 tower-http = { version = "0.6.11", default-features = false, features = ["decompression-gzip", "limit", "set-header"] }
 tungstenite = { version = "0.29.0", features = ["native-tls"] }
 ucd-trie = { version = "0.1.7" }
 yoke-c38e5c1d305a1b54 = { package = "yoke", version = "0.8.4" }
-zlib-rs = { version = "0.6.8" }
 
 [target.aarch64-apple-ios.build-dependencies]
 anstyle = { version = "1.0.14", default-features = false, features = ["std"] }
@@ -790,6 +821,8 @@ num-traits = { version = "0.2.19" }
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSProcessInfo", "std"] }
 parking_lot = { version = "0.12.5" }
+phf-582f2526e08bb6a0 = { package = "phf", version = "0.14.0" }
+phf_shared-582f2526e08bb6a0 = { package = "phf_shared", version = "0.14.0" }
 regex-automata = { version = "0.4.18" }
 rustc-hash = { version = "1.1.0" }
 rustix = { version = "1.1.5", features = ["fs"] }

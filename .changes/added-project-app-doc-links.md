@@ -1,7 +1,5 @@
 ---
 "task-server" = "minor"
-"links-proto" = "minor"
-"links" = "minor"
 "task-cli" = "minor"
 ---
 

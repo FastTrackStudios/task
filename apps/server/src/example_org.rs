@@ -3834,7 +3834,7 @@ mod declared_tests {
     /// note satisfies it, and `Sessions.base` is there to list it.
     #[test]
     fn the_seed_declares_a_session_schema_its_notes_satisfy() {
-        use vault::property_schema::{PropertySchemaRegistry, schema_from_frontmatter};
+        use vault::property_schema::schema_from_frontmatter;
         let fm = |path: &str| -> serde_json::Map<String, serde_json::Value> {
             let text = STUDIO
                 .get_file(format!("acme-audio/Vault/{path}"))
@@ -3848,7 +3848,7 @@ mod declared_tests {
         };
         let schema = schema_from_frontmatter(&fm("Schemas/session.md")).expect("schema parses");
         assert_eq!(schema.kind, "session");
-        let mut registry = PropertySchemaRegistry::with_builtins();
+        let mut registry = task_vault::schema_registry();
         registry.insert(schema);
         let note = fm("Records/sessions/tracking-day-washed.md");
         assert_eq!(note["kind"], "session");
@@ -3907,6 +3907,8 @@ mod declared_tests {
     /// the rehearsal and the show that link to the gig.
     #[test]
     fn the_gig_recipe_seed_runs_as_bases() {
+        // The setlist's `effective_key` is Task's `transpose_key`.
+        task_vault::install();
         const GIG: &str = "Gigs/example-album-release";
         let notes = committed_vault_notes("acme-audio");
         let rows = vault::obsidian::rows_from_markdown(

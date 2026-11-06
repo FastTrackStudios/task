@@ -1,6 +1,6 @@
 //! Auto-sync note `[[wikilinks]]` → typed links, driven by vault change
 //! events. Keeps the knowledge graph live as notes are saved — the
-//! always-on counterpart to the `links` crate's `sync_vault_links`
+//! always-on counterpart to the `scripture` crate's `sync_vault_links`
 //! example (which also handles video clips). Verse refs become
 //! `note → verse` links; wikilinks that resolve to another vault page
 //! become `note → note` links.

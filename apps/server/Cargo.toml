@@ -13,6 +13,8 @@ publish = false
 # `CrdtDoc` opened over `crdt-seaorm`.
 
 [dependencies]
+# Task's `task` and `area` kinds and `transpose_key` on the vault (`task_vault`).
+task-vault = { workspace = true }
 # `examples/studio` compiled into the binary — see src/example_org.rs on
 # why the demo fixture travels with the binary rather than as a path.
 include_dir = "0.7"

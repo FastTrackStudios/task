@@ -132,9 +132,8 @@ members = [
     "features/inventory/inventory-proto",
     "features/inventory/inventory-ui",
     "features/label/label-proto",
-    "features/links/links",
-    "features/links/links-proto",
     "features/links/links-ui",
+    "features/vault/task-vault",
     "features/locations/locations",
     "features/locations/locations-proto",
     "features/locations/locations-ui",
@@ -178,8 +177,6 @@ members = [
     "features/ssg/ssg-build",
     "features/ssg/ssg-ui",
     "features/ssg/ssg-vault",
-    "features/tag/tag",
-    "features/tag/tag-proto",
     "features/task/task",
     "features/task/task-proto",
     "features/task/task-ui",
@@ -189,14 +186,6 @@ members = [
     "features/threads/threads-ui",
     "features/timer/timer",
     "features/timer/timer-proto",
-    "features/vault/vault",
-    "features/vault/vault-collab",
-    "features/vault/vault-entity",
-    "features/vault/vault-live",
-    "features/vault/vault-obsidian",
-    "features/vault/vault-proto",
-    "features/vault/vault-doc",
-    "features/vault/vault-sync-client",
     "features/view/view",
     "features/view/view-calendar",
     "features/view/view-gantt",
@@ -303,15 +292,17 @@ files-sync = { path = "features/files/files-sync" }
 files-transcode = { path = "features/files/files-transcode" }
 files-ui = { path = "features/files/files-ui" }
 files-webdav = { path = "features/files/files-webdav" }
-# features/vault — file-backed vault layer + CRDT reconciliation
-vault = { path = "features/vault/vault" }
-vault-collab = { path = "features/vault/vault-collab" }
-vault-entity = { path = "features/vault/vault-entity" }
-vault-live = { path = "features/vault/vault-live" }
-vault-obsidian = { path = "features/vault/vault-obsidian" }
-vault-proto = { path = "features/vault/vault-proto", default-features = false }
-vault-doc = { path = "features/vault/vault-doc" }
-vault-sync-client = { path = "features/vault/vault-sync-client" }
+# The vault, links and tags: architect's since #333, and projects with #344
+# (Task's `task` and `area` kinds and `transpose_key` are `features/vault/task-vault`)
+vault = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+vault-collab = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+vault-entity = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+vault-live = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+vault-obsidian = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+vault-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false }
+vault-doc = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+vault-sync-client = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+task-vault = { path = "features/vault/task-vault" }
 # features/wiki — LLM-wiki (proto / live backend / graph / search)
 wiki-archive = { path = "features/wiki/wiki-archive" }
 wiki-extract = { path = "features/wiki/wiki-extract" }
@@ -369,8 +360,8 @@ inventory = { path = "features/inventory/inventory" }
 inventory-ui = { path = "features/inventory/inventory-ui" }
 inventory-proto = { path = "features/inventory/inventory-proto", default-features = false }
 label-proto = { path = "features/label/label-proto" }
-links = { path = "features/links/links" }
-links-proto = { path = "features/links/links-proto", default-features = false }
+links = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+links-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", default-features = false }
 links-ui = { path = "features/links/links-ui" }
 locations = { path = "features/locations/locations" }
 locations-ui = { path = "features/locations/locations-ui" }
@@ -412,8 +403,8 @@ scripture-proto = { path = "features/scripture/scripture-proto", default-feature
 scripture-ui = { path = "features/scripture/scripture-ui" }
 share-proto = { path = "features/share/share-proto" }
 sharing-guest = { path = "features/sharing/sharing-guest" }
-tag = { path = "features/tag/tag" }
-tag-proto = { path = "features/tag/tag-proto" }
+tag = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+tag-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 task = { path = "features/task/task", default-features = false }
 task-proto = { path = "features/task/task-proto", default-features = false }
 task-ui = { path = "features/task/task-ui" }
@@ -483,31 +474,31 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
+architect = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b", features = ["iroh", "dispatch-tokio"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 # The Action List as an MCP server (named tools): Task's MCP lane runs its
 # pilot tools through it (`apps/server/src/actions/`).
-architect-mcp = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
+architect-mcp = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 # The primitives architect-ui is built on — the same git source and
 # tag, so cargo unifies them. Task renders its own toasts from these
 # (`crates/ui/src/toasts.rs`) to show toast action buttons.
 dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", tag = "fts-upstream-2026-11", default-features = false }
-auth = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
+auth = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 # `crdt::docs`'s SeaORM catalog + persistence: each org's app docs.
-crdt-seaorm = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
+crdt-seaorm = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 # The keymap engine (key trie, input processor, which-key) behind the
 # app-wide shortcuts (`crates/ui/src/shortcuts.rs`).
-architect-input = { git = "https://github.com/FastTrackStudios/architect", rev = "5e43e3531aeeda8416cccc7e0e3604ba19bf2e21" }
+architect-input = { git = "https://github.com/FastTrackStudios/architect", rev = "e431eee4c86b1ad8c530b82a35449a538d5e4c6b" }
 # The device database engine (offline.md) — Turso's LOCAL engine only;
 # its sync is never used. Default features off: `mimalloc` would install
 # a global allocator from inside a library.

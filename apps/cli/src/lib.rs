@@ -555,6 +555,8 @@ pub async fn main() {
     // Install ring once, before anything can open a TLS socket.
     // Err just means a provider is already installed — fine.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // Task's `transpose_key` on every base, before one is evaluated.
+    task_vault::install();
     // Best-effort .env load before clap reads env. Missing file is
     // not an error — we just fall through to the hard-coded default.
     let _ = dotenvy::dotenv();

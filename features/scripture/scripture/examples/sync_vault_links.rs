@@ -12,7 +12,7 @@
 //!
 //! Idempotent: replaces prior links stamped `vault-link-sync`.
 //!
-//! Run: cargo run -p links --example sync_vault_links -- [ORG_ROOT]
+//! Run: cargo run -p scripture --example sync_vault_links -- [ORG_ROOT]
 
 use std::collections::HashSet;
 use std::path::PathBuf;

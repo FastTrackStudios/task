@@ -726,6 +726,8 @@ impl AppState {
         data_root: org_proto::DataRoot,
         slug_filter: Option<&str>,
     ) -> eyre::Result<Self> {
+        // Task's `transpose_key` on every base, before one is evaluated.
+        task_vault::install();
         data_root
             .ensure()
             .map_err(|e| eyre::eyre!("ensure data root: {e}"))?;

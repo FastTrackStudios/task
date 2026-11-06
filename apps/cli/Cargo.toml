@@ -18,6 +18,8 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+# Task's `task` and `area` kinds and `transpose_key` on the vault (`task_vault`).
+task-vault = { workspace = true }
 # The release version, recorded by main (crates/release-version).
 task-release-version.workspace = true
 vox = { workspace = true, features = ["transport-websocket", "transport-websocket-tls"] }

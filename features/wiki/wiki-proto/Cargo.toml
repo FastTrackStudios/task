@@ -28,7 +28,7 @@ org-proto = { path = "../../org/org-proto", default-features = false }
 # payload types is how two lanes come to disagree about what a hash is.
 # vault-proto is a leaf — nothing there depends on wiki — so this adds no
 # cycle.
-vault-proto = { path = "../../vault/vault-proto", default-features = false }
+vault-proto = { workspace = true, default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
